@@ -1,0 +1,10 @@
+# Default to ignoring everything
+*
+
+# Allow build artifacts
+!dist/
+
+# Allow specific examples
+!examples/
+examples/*
+!examples/interop/

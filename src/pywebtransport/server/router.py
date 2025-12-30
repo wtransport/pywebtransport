@@ -34,10 +34,10 @@ class RequestRouter:
 
         for pattern, pattern_handler in self._pattern_routes:
             match = pattern.fullmatch(path)
-            if match:
+            if match is not None:
                 return (pattern_handler, match.groupdict())
 
-        if self._default_handler:
+        if self._default_handler is not None:
             return (self._default_handler, {})
 
         return None

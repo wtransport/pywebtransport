@@ -43,7 +43,7 @@ class TestSubclassExceptions:
             (ProtocolError, {"frame_type": 0x41}, "protocol"),
             (SerializationError, {}, "serialization"),
             (ServerError, {"bind_address": ("0.0.0.0", 443)}, "server"),
-            (SessionError, {"session_id": "abc"}, "session"),
+            (SessionError, {"session_id": 100}, "session"),
             (StreamError, {"stream_id": 5}, "stream"),
             (TimeoutError, {"operation": "read"}, "timeout"),
         ],

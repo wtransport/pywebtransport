@@ -15,7 +15,7 @@ __all__: list[str] = []
 _FIELDS_CACHE: dict[type[Any], tuple[Any, ...]] = {}
 
 
-def _get_cached_fields(cls: type[Any]) -> tuple[Any, ...]:
+def _get_cached_fields(*, cls: type[Any]) -> tuple[Any, ...]:
     if cls in _FIELDS_CACHE:
         return _FIELDS_CACHE[cls]
 
@@ -105,7 +105,7 @@ class BaseDataclassSerializer:
             raise SerializationError(message="Maximum recursion depth exceeded during dataclass unpacking.")
 
         constructor_args = {}
-        for field in _get_cached_fields(cls):
+        for field in _get_cached_fields(cls=cls):
             if field.name in data:
                 field_value = data[field.name]
                 constructor_args[field.name] = self.convert_to_type(

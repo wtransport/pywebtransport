@@ -13,14 +13,14 @@ from pywebtransport import constants
 from pywebtransport._protocol.events import (
     CapsuleReceived,
     CloseQuicConnection,
-    CompleteUserFuture,
     ConnectStreamClosed,
     CreateQuicStream,
     DatagramReceived,
     Effect,
     EmitSessionEvent,
     EmitStreamEvent,
-    FailUserFuture,
+    NotifyRequestDone,
+    NotifyRequestFailed,
     ResetQuicStream,
     SendH3Capsule,
     SendH3Datagram,
@@ -68,14 +68,16 @@ class SessionProcessor:
 
         if self._is_client:
             effects.append(
-                FailUserFuture(future=event.future, exception=ProtocolError(message="Client cannot accept sessions"))
+                NotifyRequestFailed(
+                    request_id=event.request_id, exception=ProtocolError(message="Client cannot accept sessions")
+                )
             )
             return effects
 
-        if not session_data:
+        if session_data is None:
             effects.append(
-                FailUserFuture(
-                    future=event.future,
+                NotifyRequestFailed(
+                    request_id=event.request_id,
                     exception=SessionError(message=f"Session {session_id} not found for acceptance"),
                 )
             )
@@ -83,8 +85,8 @@ class SessionProcessor:
 
         if session_data.state != SessionState.CONNECTING:
             effects.append(
-                FailUserFuture(
-                    future=event.future,
+                NotifyRequestFailed(
+                    request_id=event.request_id,
                     exception=SessionError(
                         message=f"Session {session_id} is not in connecting state ({session_data.state})"
                     ),
@@ -95,9 +97,7 @@ class SessionProcessor:
         session_data.state = SessionState.CONNECTED
         session_data.ready_at = get_timestamp()
 
-        effects.append(
-            SendH3Headers(stream_id=session_data.control_stream_id, status=http.HTTPStatus.OK, end_stream=False)
-        )
+        effects.append(SendH3Headers(stream_id=session_data.session_id, status=http.HTTPStatus.OK, end_stream=False))
         effects.append(
             EmitSessionEvent(
                 session_id=session_id,
@@ -105,7 +105,7 @@ class SessionProcessor:
                 data={"session_id": session_id, "ready_at": session_data.ready_at},
             )
         )
-        effects.append(CompleteUserFuture(future=event.future))
+        effects.append(NotifyRequestDone(request_id=event.request_id, result=None))
         logger.info("Accepted session %s", session_id)
         return effects
 
@@ -113,12 +113,12 @@ class SessionProcessor:
         """Handle a session-level CapsuleReceived event."""
         effects: list[Effect] = []
         stream_id = event.stream_id
-        session_id = state.stream_to_session_map.get(stream_id)
 
-        if not session_id or session_id not in state.sessions:
+        if stream_id not in state.sessions:
             logger.debug("Received capsule on unknown or closed session stream %d", stream_id)
             return []
 
+        session_id = stream_id
         session_data = state.sessions[session_id]
 
         if session_data.state == SessionState.CLOSED:
@@ -180,16 +180,15 @@ class SessionProcessor:
                         if self._is_client:
                             while (
                                 session_data.local_streams_bidi_opened < session_data.peer_max_streams_bidi
-                                and session_data.pending_bidi_stream_futures
+                                and session_data.pending_bidi_stream_requests
                             ):
-                                pending_future = session_data.pending_bidi_stream_futures.popleft()
-                                if not pending_future.done():
-                                    session_data.local_streams_bidi_opened += 1
-                                    effects.append(
-                                        CreateQuicStream(
-                                            session_id=session_id, is_unidirectional=False, create_future=pending_future
-                                        )
+                                request_id = session_data.pending_bidi_stream_requests.popleft()
+                                session_data.local_streams_bidi_opened += 1
+                                effects.append(
+                                    CreateQuicStream(
+                                        request_id=request_id, session_id=session_id, is_unidirectional=False
                                     )
+                                )
 
                     elif new_limit < session_data.peer_max_streams_bidi:
                         return self._close_session_with_error(
@@ -221,16 +220,15 @@ class SessionProcessor:
                         if self._is_client:
                             while (
                                 session_data.local_streams_uni_opened < session_data.peer_max_streams_uni
-                                and session_data.pending_uni_stream_futures
+                                and session_data.pending_uni_stream_requests
                             ):
-                                pending_future = session_data.pending_uni_stream_futures.popleft()
-                                if not pending_future.done():
-                                    session_data.local_streams_uni_opened += 1
-                                    effects.append(
-                                        CreateQuicStream(
-                                            session_id=session_id, is_unidirectional=True, create_future=pending_future
-                                        )
+                                request_id = session_data.pending_uni_stream_requests.popleft()
+                                session_data.local_streams_uni_opened += 1
+                                effects.append(
+                                    CreateQuicStream(
+                                        request_id=request_id, session_id=session_id, is_unidirectional=True
                                     )
+                                )
 
                     elif new_limit < session_data.peer_max_streams_uni:
                         return self._close_session_with_error(
@@ -243,10 +241,8 @@ class SessionProcessor:
 
                 case constants.WT_DATA_BLOCKED_TYPE:
                     logger.debug("Session %s received WT_DATA_BLOCKED from peer", session_id)
-                    if getattr(self._config, "flow_control_window_auto_scale", False):
-                        target_window = getattr(
-                            self._config, "flow_control_window_size", constants.DEFAULT_FLOW_CONTROL_WINDOW_SIZE
-                        )
+                    if self._config.flow_control_window_auto_scale:
+                        target_window = self._config.flow_control_window_size
                         new_limit = session_data.peer_data_sent + target_window
                         if new_limit > session_data.local_max_data:
                             session_data.local_max_data = new_limit
@@ -254,9 +250,10 @@ class SessionProcessor:
                             resp_buf.push_uint_var(new_limit)
                             effects.append(
                                 SendH3Capsule(
-                                    stream_id=session_data.control_stream_id,
+                                    stream_id=session_data.session_id,
                                     capsule_type=constants.WT_MAX_DATA_TYPE,
                                     capsule_data=resp_buf.data,
+                                    end_stream=False,
                                 )
                             )
                     else:
@@ -272,17 +269,13 @@ class SessionProcessor:
                     is_uni = event.capsule_type == constants.WT_STREAMS_BLOCKED_UNI_TYPE
                     logger.debug("Session %s received WT_STREAMS_BLOCKED (uni=%s) from peer", session_id, is_uni)
 
-                    if getattr(self._config, "flow_control_window_auto_scale", False):
+                    if self._config.flow_control_window_auto_scale:
                         new_limit = 0
                         current_limit = 0
                         capsule_type = 0
 
                         if is_uni:
-                            target_window = getattr(
-                                self._config,
-                                "stream_flow_control_increment_uni",
-                                constants.DEFAULT_STREAM_FLOW_CONTROL_INCREMENT_UNI,
-                            )
+                            target_window = self._config.stream_flow_control_increment_uni
                             current_usage = session_data.peer_streams_uni_opened
                             current_limit = session_data.local_max_streams_uni
                             new_limit = current_usage + target_window
@@ -290,11 +283,7 @@ class SessionProcessor:
                             if new_limit > current_limit:
                                 session_data.local_max_streams_uni = new_limit
                         else:
-                            target_window = getattr(
-                                self._config,
-                                "stream_flow_control_increment_bidi",
-                                constants.DEFAULT_STREAM_FLOW_CONTROL_INCREMENT_BIDI,
-                            )
+                            target_window = self._config.stream_flow_control_increment_bidi
                             current_usage = session_data.peer_streams_bidi_opened
                             current_limit = session_data.local_max_streams_bidi
                             new_limit = current_usage + target_window
@@ -307,9 +296,10 @@ class SessionProcessor:
                             resp_buf.push_uint_var(new_limit)
                             effects.append(
                                 SendH3Capsule(
-                                    stream_id=session_data.control_stream_id,
+                                    stream_id=session_data.session_id,
                                     capsule_type=capsule_type,
                                     capsule_data=resp_buf.data,
+                                    end_stream=False,
                                 )
                             )
                     else:
@@ -396,8 +386,8 @@ class SessionProcessor:
         session_id = event.session_id
         session_data = state.sessions.get(session_id)
 
-        if not session_data or session_data.state == SessionState.CLOSED:
-            effects.append(CompleteUserFuture(future=event.future))
+        if session_data is None or session_data.state == SessionState.CLOSED:
+            effects.append(NotifyRequestDone(request_id=event.request_id, result=None))
             return effects
 
         session_data.state = SessionState.CLOSED
@@ -407,7 +397,7 @@ class SessionProcessor:
 
         effects.extend(self._reset_all_session_streams(session_id=session_id, session_data=session_data, state=state))
 
-        reason_str = event.reason or ""
+        reason_str = event.reason if event.reason is not None else ""
         reason_bytes = reason_str.encode("utf-8")
         if len(reason_bytes) > constants.MAX_CLOSE_REASON_BYTES:
             reason_bytes = reason_bytes[: constants.MAX_CLOSE_REASON_BYTES]
@@ -419,12 +409,12 @@ class SessionProcessor:
 
         effects.append(
             SendH3Capsule(
-                stream_id=session_data.control_stream_id,
+                stream_id=session_data.session_id,
                 capsule_type=constants.CLOSE_WEBTRANSPORT_SESSION_TYPE,
                 capsule_data=capsule_payload,
+                end_stream=True,
             )
         )
-        effects.append(SendQuicData(stream_id=session_data.control_stream_id, data=b"", end_stream=True))
         effects.append(
             EmitSessionEvent(
                 session_id=session_id,
@@ -432,18 +422,19 @@ class SessionProcessor:
                 data={"session_id": session_id, "code": event.error_code, "reason": event.reason},
             )
         )
-        effects.append(CompleteUserFuture(future=event.future))
+        effects.append(NotifyRequestDone(request_id=event.request_id, result=None))
         logger.info("Closing session %s by user request", session_id)
         return effects
 
     def handle_connect_stream_closed(self, *, event: ConnectStreamClosed, state: ProtocolState) -> list[Effect]:
         """Handle the clean closure (FIN) of a CONNECT stream."""
-        session_id = state.stream_to_session_map.get(event.stream_id)
-        if not session_id:
+        session_id = event.stream_id
+
+        if session_id not in state.sessions:
             return []
 
-        session_data = state.sessions.get(session_id)
-        if not session_data or session_data.state == SessionState.CLOSED:
+        session_data = state.sessions[session_id]
+        if session_data.state == SessionState.CLOSED:
             return []
 
         logger.info("Session %s cleanly closed by peer (CONNECT stream FIN)", session_id)
@@ -462,10 +453,10 @@ class SessionProcessor:
         session_id = event.session_id
         session_data = state.sessions.get(session_id)
 
-        if not session_data:
+        if session_data is None:
             effects.append(
-                FailUserFuture(
-                    future=event.future,
+                NotifyRequestFailed(
+                    request_id=event.request_id,
                     exception=SessionError(message=f"Session {session_id} not found for stream creation"),
                 )
             )
@@ -473,8 +464,8 @@ class SessionProcessor:
 
         if session_data.state not in (SessionState.CONNECTED, SessionState.DRAINING):
             effects.append(
-                FailUserFuture(
-                    future=event.future,
+                NotifyRequestFailed(
+                    request_id=event.request_id,
                     exception=SessionError(
                         message=f"Session {session_id} is not connected or draining ({session_data.state})"
                     ),
@@ -500,14 +491,15 @@ class SessionProcessor:
                         session_data.local_streams_uni_opened,
                         session_data.peer_max_streams_uni,
                     )
-                    session_data.pending_uni_stream_futures.append(event.future)
+                    session_data.pending_uni_stream_requests.append(event.request_id)
                     buf = QuicBuffer(capacity=8)
                     buf.push_uint_var(session_data.peer_max_streams_uni)
                     return [
                         SendH3Capsule(
-                            stream_id=session_data.control_stream_id,
+                            stream_id=session_data.session_id,
                             capsule_type=constants.WT_STREAMS_BLOCKED_UNI_TYPE,
                             capsule_data=buf.data,
+                            end_stream=False,
                         )
                     ]
                 case (True, False):
@@ -517,27 +509,28 @@ class SessionProcessor:
                         session_data.local_streams_bidi_opened,
                         session_data.peer_max_streams_bidi,
                     )
-                    session_data.pending_bidi_stream_futures.append(event.future)
+                    session_data.pending_bidi_stream_requests.append(event.request_id)
                     buf = QuicBuffer(capacity=8)
                     buf.push_uint_var(session_data.peer_max_streams_bidi)
                     return [
                         SendH3Capsule(
-                            stream_id=session_data.control_stream_id,
+                            stream_id=session_data.session_id,
                             capsule_type=constants.WT_STREAMS_BLOCKED_BIDI_TYPE,
                             capsule_data=buf.data,
+                            end_stream=False,
                         )
                     ]
                 case (False, True):
                     error = FlowControlError(
                         message="Unidirectional stream limit reached", error_code=ErrorCodes.STREAM_LIMIT_ERROR
                     )
-                    effects.append(FailUserFuture(future=event.future, exception=error))
+                    effects.append(NotifyRequestFailed(request_id=event.request_id, exception=error))
                     return effects
                 case (False, False):
                     error = FlowControlError(
                         message="Bidirectional stream limit reached", error_code=ErrorCodes.STREAM_LIMIT_ERROR
                     )
-                    effects.append(FailUserFuture(future=event.future, exception=error))
+                    effects.append(NotifyRequestFailed(request_id=event.request_id, exception=error))
                     return effects
 
         if event.is_unidirectional:
@@ -547,7 +540,7 @@ class SessionProcessor:
 
         effects.append(
             CreateQuicStream(
-                session_id=session_id, is_unidirectional=event.is_unidirectional, create_future=event.future
+                request_id=event.request_id, session_id=session_id, is_unidirectional=event.is_unidirectional
             )
         )
         return effects
@@ -555,10 +548,9 @@ class SessionProcessor:
     def handle_datagram_received(self, *, event: DatagramReceived, state: ProtocolState) -> list[Effect]:
         """Handle a DatagramReceived event for a session."""
         effects: list[Effect] = []
-        control_stream_id = event.stream_id
-        session_id = state.stream_to_session_map.get(control_stream_id)
+        session_id = event.stream_id
 
-        if session_id and session_id in state.sessions:
+        if session_id in state.sessions:
             session_data = state.sessions[session_id]
             if session_data.state in (SessionState.CONNECTED, SessionState.DRAINING):
                 session_data.datagrams_received += 1
@@ -577,21 +569,21 @@ class SessionProcessor:
                 logger.warning(
                     "Global early event buffer full (%d), dropping datagram for session %d",
                     state.early_event_count,
-                    control_stream_id,
+                    session_id,
                 )
                 return []
 
-            session_buffer = state.early_event_buffer.get(control_stream_id, [])
+            session_buffer = state.early_event_buffer.get(session_id, [])
             if len(session_buffer) >= self._config.max_pending_events_per_session:
                 logger.warning(
                     "Per-session early event buffer full (%d) for session %d, dropping datagram",
                     len(session_buffer),
-                    control_stream_id,
+                    session_id,
                 )
                 return []
 
-            logger.debug("Buffering early datagram for unknown session %d", control_stream_id)
-            state.early_event_buffer.setdefault(control_stream_id, []).append((get_timestamp(), event))
+            logger.debug("Buffering early datagram for unknown session %d", session_id)
+            state.early_event_buffer.setdefault(session_id, []).append((get_timestamp(), event))
             state.early_event_count += 1
 
         return effects
@@ -599,10 +591,11 @@ class SessionProcessor:
     def handle_get_session_diagnostics(self, *, event: UserGetSessionDiagnostics, state: ProtocolState) -> list[Effect]:
         """Handle the UserGetSessionDiagnostics event."""
         session_data = state.sessions.get(event.session_id)
-        if not session_data:
+        if session_data is None:
             return [
-                FailUserFuture(
-                    future=event.future, exception=SessionError(f"Session {event.session_id} not found for diagnostics")
+                NotifyRequestFailed(
+                    request_id=event.request_id,
+                    exception=SessionError(f"Session {event.session_id} not found for diagnostics"),
                 )
             ]
 
@@ -610,16 +603,18 @@ class SessionProcessor:
         diag_data["active_streams"] = list(session_data.active_streams)
         diag_data["blocked_streams"] = list(session_data.blocked_streams)
 
-        return [CompleteUserFuture(future=event.future, value=diag_data)]
+        return [NotifyRequestDone(request_id=event.request_id, result=diag_data)]
 
     def handle_grant_data_credit(self, *, event: UserGrantDataCredit, state: ProtocolState) -> list[Effect]:
         """Handle the UserGrantDataCredit event."""
         effects: list[Effect] = []
         session_data = state.sessions.get(event.session_id)
 
-        if not session_data:
+        if session_data is None:
             effects.append(
-                FailUserFuture(future=event.future, exception=SessionError(f"Session {event.session_id} not found."))
+                NotifyRequestFailed(
+                    request_id=event.request_id, exception=SessionError(f"Session {event.session_id} not found.")
+                )
             )
             return effects
 
@@ -629,7 +624,7 @@ class SessionProcessor:
                 event.max_data,
                 session_data.local_max_data,
             )
-            effects.append(CompleteUserFuture(future=event.future))
+            effects.append(NotifyRequestDone(request_id=event.request_id, result=None))
             return effects
 
         session_data.local_max_data = event.max_data
@@ -637,10 +632,13 @@ class SessionProcessor:
         buf.push_uint_var(event.max_data)
         effects.append(
             SendH3Capsule(
-                stream_id=session_data.control_stream_id, capsule_type=constants.WT_MAX_DATA_TYPE, capsule_data=buf.data
+                stream_id=session_data.session_id,
+                capsule_type=constants.WT_MAX_DATA_TYPE,
+                capsule_data=buf.data,
+                end_stream=False,
             )
         )
-        effects.append(CompleteUserFuture(future=event.future))
+        effects.append(NotifyRequestDone(request_id=event.request_id, result=None))
         return effects
 
     def handle_grant_streams_credit(self, *, event: UserGrantStreamsCredit, state: ProtocolState) -> list[Effect]:
@@ -648,9 +646,11 @@ class SessionProcessor:
         effects: list[Effect] = []
         session_data = state.sessions.get(event.session_id)
 
-        if not session_data:
+        if session_data is None:
             effects.append(
-                FailUserFuture(future=event.future, exception=SessionError(f"Session {event.session_id} not found."))
+                NotifyRequestFailed(
+                    request_id=event.request_id, exception=SessionError(f"Session {event.session_id} not found.")
+                )
             )
             return effects
 
@@ -662,7 +662,7 @@ class SessionProcessor:
                     event.max_streams,
                     session_data.local_max_streams_uni,
                 )
-                effects.append(CompleteUserFuture(future=event.future))
+                effects.append(NotifyRequestDone(request_id=event.request_id, result=None))
                 return effects
             session_data.local_max_streams_uni = event.max_streams
             capsule_type = constants.WT_MAX_STREAMS_UNI_TYPE
@@ -673,7 +673,7 @@ class SessionProcessor:
                     event.max_streams,
                     session_data.local_max_streams_bidi,
                 )
-                effects.append(CompleteUserFuture(future=event.future))
+                effects.append(NotifyRequestDone(request_id=event.request_id, result=None))
                 return effects
             session_data.local_max_streams_bidi = event.max_streams
             capsule_type = constants.WT_MAX_STREAMS_BIDI_TYPE
@@ -681,9 +681,11 @@ class SessionProcessor:
         buf = QuicBuffer(capacity=8)
         buf.push_uint_var(event.max_streams)
         effects.append(
-            SendH3Capsule(stream_id=session_data.control_stream_id, capsule_type=capsule_type, capsule_data=buf.data)
+            SendH3Capsule(
+                stream_id=session_data.session_id, capsule_type=capsule_type, capsule_data=buf.data, end_stream=False
+            )
         )
-        effects.append(CompleteUserFuture(future=event.future))
+        effects.append(NotifyRequestDone(request_id=event.request_id, result=None))
         return effects
 
     def handle_reject_session(self, *, event: UserRejectSession, state: ProtocolState) -> list[Effect]:
@@ -694,22 +696,25 @@ class SessionProcessor:
 
         if self._is_client:
             effects.append(
-                FailUserFuture(future=event.future, exception=ProtocolError(message="Client cannot reject sessions"))
+                NotifyRequestFailed(
+                    request_id=event.request_id, exception=ProtocolError(message="Client cannot reject sessions")
+                )
             )
             return effects
 
-        if not session_data:
+        if session_data is None:
             effects.append(
-                FailUserFuture(
-                    future=event.future, exception=SessionError(message=f"Session {session_id} not found for rejection")
+                NotifyRequestFailed(
+                    request_id=event.request_id,
+                    exception=SessionError(message=f"Session {session_id} not found for rejection"),
                 )
             )
             return effects
 
         if session_data.state != SessionState.CONNECTING:
             effects.append(
-                FailUserFuture(
-                    future=event.future,
+                NotifyRequestFailed(
+                    request_id=event.request_id,
                     exception=SessionError(
                         message=f"Session {session_id} is not in connecting state ({session_data.state})"
                     ),
@@ -721,9 +726,7 @@ class SessionProcessor:
         session_data.closed_at = get_timestamp()
         session_data.close_reason = f"Rejected by application with status {event.status_code}"
 
-        effects.append(
-            SendH3Headers(stream_id=session_data.control_stream_id, status=event.status_code, end_stream=True)
-        )
+        effects.append(SendH3Headers(stream_id=session_data.session_id, status=event.status_code, end_stream=True))
         effects.append(
             EmitSessionEvent(
                 session_id=session_id,
@@ -731,7 +734,7 @@ class SessionProcessor:
                 data={"session_id": session_id, "code": event.status_code, "reason": "Rejected by application"},
             )
         )
-        effects.append(CompleteUserFuture(future=event.future))
+        effects.append(NotifyRequestDone(request_id=event.request_id, result=None))
         logger.info("Rejected session %s with status %d", session_id, event.status_code)
         return effects
 
@@ -741,10 +744,10 @@ class SessionProcessor:
         session_id = event.session_id
         session_data = state.sessions.get(session_id)
 
-        if not session_data:
+        if session_data is None:
             effects.append(
-                FailUserFuture(
-                    future=event.future,
+                NotifyRequestFailed(
+                    request_id=event.request_id,
                     exception=SessionError(message=f"Session {session_id} not found for sending datagram"),
                 )
             )
@@ -752,8 +755,8 @@ class SessionProcessor:
 
         if session_data.state != SessionState.CONNECTED:
             effects.append(
-                FailUserFuture(
-                    future=event.future,
+                NotifyRequestFailed(
+                    request_id=event.request_id,
                     exception=SessionError(message=f"Session {session_id} is not connected ({session_data.state})"),
                 )
             )
@@ -765,11 +768,13 @@ class SessionProcessor:
         else:
             data_len = len(event.data)
 
-        if data_len > state.max_datagram_size:
+        if data_len > state.remote_max_datagram_frame_size:
             effects.append(
-                FailUserFuture(
-                    future=event.future,
-                    exception=ValueError(f"Datagram size {data_len} exceeds maximum {state.max_datagram_size}"),
+                NotifyRequestFailed(
+                    request_id=event.request_id,
+                    exception=ValueError(
+                        f"Datagram size {data_len} exceeds maximum {state.remote_max_datagram_frame_size}"
+                    ),
                 )
             )
             return effects
@@ -777,8 +782,8 @@ class SessionProcessor:
         session_data.datagrams_sent += 1
         session_data.datagram_bytes_sent += data_len
 
-        effects.append(SendH3Datagram(stream_id=session_data.control_stream_id, data=event.data))
-        effects.append(CompleteUserFuture(future=event.future))
+        effects.append(SendH3Datagram(stream_id=session_data.session_id, data=event.data))
+        effects.append(NotifyRequestDone(request_id=event.request_id, result=None))
         return effects
 
     def _close_session_with_error(
@@ -796,7 +801,7 @@ class SessionProcessor:
         session_data.close_code = error_code
         session_data.close_reason = reason
         effects: list[Effect] = [
-            ResetQuicStream(stream_id=session_data.control_stream_id, error_code=error_code),
+            ResetQuicStream(stream_id=session_data.session_id, error_code=error_code),
             EmitSessionEvent(
                 session_id=session_id,
                 event_type=EventType.SESSION_CLOSED,
@@ -806,11 +811,11 @@ class SessionProcessor:
         effects.extend(self._reset_all_session_streams(session_id=session_id, session_data=session_data, state=state))
         return effects
 
-    def _drain_session_write_buffers(self, *, session_id: str, state: ProtocolState) -> list[Effect]:
+    def _drain_session_write_buffers(self, *, session_id: int, state: ProtocolState) -> list[Effect]:
         """Drain buffered stream writes after receiving session flow credit."""
         effects: list[Effect] = []
         session_data = state.sessions.get(session_id)
-        if not session_data:
+        if session_data is None:
             return []
 
         available_credit = session_data.peer_max_data - session_data.local_data_sent
@@ -824,7 +829,7 @@ class SessionProcessor:
                 break
 
             stream_data = state.streams.get(stream_id)
-            if not stream_data:
+            if stream_data is None:
                 session_data.blocked_streams.discard(stream_id)
                 continue
 
@@ -841,7 +846,7 @@ class SessionProcessor:
 
             while stream_data.write_buffer and available_credit > 0:
                 try:
-                    (buffered_data, buffered_future, buffered_end_stream) = stream_data.write_buffer.popleft()
+                    (buffered_data, request_id, buffered_end_stream) = stream_data.write_buffer.popleft()
                 except (IndexError, TypeError, ValueError):
                     logger.error("Internal state error: Stream %d write_buffer is malformed.", stream_id)
                     break
@@ -863,8 +868,8 @@ class SessionProcessor:
 
                 stream_data.write_buffer_size -= send_amount
 
-                if len(remaining_view) > 0:
-                    stream_data.write_buffer.appendleft((remaining_view, buffered_future, buffered_end_stream))
+                if remaining_view:
+                    stream_data.write_buffer.appendleft((remaining_view, request_id, buffered_end_stream))
                     break
                 else:
                     if is_final_chunk:
@@ -883,8 +888,7 @@ class SessionProcessor:
                                 stream_data.state = StreamState.HALF_CLOSED_LOCAL
                         logger.debug("Stream %d send side closed (from buffer drain)", stream_id)
 
-                    if not buffered_future.done():
-                        effects.append(CompleteUserFuture(future=buffered_future))
+                    effects.append(NotifyRequestDone(request_id=request_id, result=None))
 
             if not stream_data.write_buffer:
                 session_data.blocked_streams.discard(stream_id)
@@ -892,20 +896,18 @@ class SessionProcessor:
         return effects
 
     def _reset_all_session_streams(
-        self, *, session_id: str, session_data: SessionStateData, state: ProtocolState
+        self, *, session_id: int, session_data: SessionStateData, state: ProtocolState
     ) -> list[Effect]:
         """Generate effects to reset all streams associated with a session."""
         effects: list[Effect] = []
 
         session_error = SessionError(message=f"Session {session_id} closed during stream creation")
-        while session_data.pending_bidi_stream_futures:
-            fut = session_data.pending_bidi_stream_futures.popleft()
-            if not fut.done():
-                effects.append(FailUserFuture(future=fut, exception=session_error))
-        while session_data.pending_uni_stream_futures:
-            fut = session_data.pending_uni_stream_futures.popleft()
-            if not fut.done():
-                effects.append(FailUserFuture(future=fut, exception=session_error))
+        while session_data.pending_bidi_stream_requests:
+            req_id = session_data.pending_bidi_stream_requests.popleft()
+            effects.append(NotifyRequestFailed(request_id=req_id, exception=session_error))
+        while session_data.pending_uni_stream_requests:
+            req_id = session_data.pending_uni_stream_requests.popleft()
+            effects.append(NotifyRequestFailed(request_id=req_id, exception=session_error))
 
         stream_error = StreamError(message=f"Session {session_id} terminated", error_code=ErrorCodes.WT_SESSION_GONE)
 
@@ -913,18 +915,16 @@ class SessionProcessor:
 
         for stream_id in streams_to_reset:
             stream_data = state.streams.get(stream_id)
-            if not stream_data or stream_data.state == StreamState.CLOSED:
+            if stream_data is None or stream_data.state == StreamState.CLOSED:
                 continue
 
             while stream_data.pending_read_requests:
-                read_fut = stream_data.pending_read_requests.popleft()
-                if not read_fut.done():
-                    effects.append(FailUserFuture(future=read_fut, exception=stream_error))
+                req_id, _ = stream_data.pending_read_requests.popleft()
+                effects.append(NotifyRequestFailed(request_id=req_id, exception=stream_error))
 
             while stream_data.write_buffer:
-                _data, write_fut, _end = stream_data.write_buffer.popleft()
-                if not write_fut.done():
-                    effects.append(FailUserFuture(future=write_fut, exception=stream_error))
+                _data, req_id, _end = stream_data.write_buffer.popleft()
+                effects.append(NotifyRequestFailed(request_id=req_id, exception=stream_error))
 
             if stream_data.state not in (StreamState.RESET_SENT, StreamState.CLOSED):
                 effects.append(ResetQuicStream(stream_id=stream_id, error_code=ErrorCodes.WT_SESSION_GONE))

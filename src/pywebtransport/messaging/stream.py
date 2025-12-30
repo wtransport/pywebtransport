@@ -40,7 +40,7 @@ class StructuredStream:
         self._registry = registry
         self._max_message_size = max_message_size
         self._class_to_id = {v: k for k, v in registry.items()}
-        self._write_lock: asyncio.Lock | None = None
+        self._write_lock = asyncio.Lock()
 
     @property
     def is_closed(self) -> bool:
@@ -49,7 +49,7 @@ class StructuredStream:
 
     @property
     def stream_id(self) -> int:
-        """Get the underlying stream's ID."""
+        """Get the underlying stream ID."""
         return self._stream.stream_id
 
     async def close(self) -> None:
@@ -57,7 +57,7 @@ class StructuredStream:
         await self._stream.close()
 
     async def receive_obj(self) -> Any:
-        """Receive, deserialize, and return a Python object from the stream."""
+        """Receive and deserialize a Python object from the stream."""
         try:
             header_bytes = await self._stream.readexactly(n=self._HEADER_SIZE)
         except asyncio.IncompleteReadError as e:
@@ -87,9 +87,7 @@ class StructuredStream:
             payload = await self._stream.readexactly(n=payload_len)
         except asyncio.IncompleteReadError as e:
             raise StreamError(
-                message=(
-                    f"Stream closed prematurely while reading payload of size {payload_len} for type ID {type_id}."
-                ),
+                message=f"Stream closed prematurely while reading payload of size {payload_len} for type ID {type_id}.",
                 error_code=ErrorCodes.H3_MESSAGE_ERROR,
                 stream_id=self.stream_id,
             ) from e
@@ -106,13 +104,10 @@ class StructuredStream:
         payload = self._serializer.serialize(obj=obj)
         payload_len = len(payload)
         header = struct.pack(self._HEADER_FORMAT, type_id, payload_len)
-
-        if self._write_lock is None:
-            self._write_lock = asyncio.Lock()
+        full_packet = header + payload
 
         async with self._write_lock:
-            await self._stream.write(data=header)
-            await self._stream.write(data=payload)
+            await self._stream.write(data=full_packet)
 
     def __aiter__(self) -> StructuredStream:
         """Return self as the asynchronous iterator."""

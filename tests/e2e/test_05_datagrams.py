@@ -1,5 +1,3 @@
-"""E2E test for WebTransport datagram functionality."""
-
 import asyncio
 import logging
 import ssl
@@ -26,16 +24,8 @@ logger = logging.getLogger("test_datagrams")
 
 
 async def test_basic_datagram() -> bool:
-    """Test sending a single datagram and receiving its echo."""
     logger.info("--- Test 05A: Basic Datagram Echo ---")
-    config = ClientConfig(
-        verify_mode=ssl.CERT_NONE,
-        connect_timeout=10.0,
-        read_timeout=5.0,
-        initial_max_data=1024 * 1024,
-        initial_max_streams_bidi=100,
-        initial_max_streams_uni=100,
-    )
+    config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
@@ -70,16 +60,9 @@ async def test_basic_datagram() -> bool:
 
 
 async def test_multiple_datagrams() -> bool:
-    """Test sending and receiving multiple datagrams sequentially."""
     logger.info("--- Test 05B: Multiple Datagrams ---")
     num_datagrams = 10
-    config = ClientConfig(
-        verify_mode=ssl.CERT_NONE,
-        connect_timeout=10.0,
-        initial_max_data=1024 * 1024,
-        initial_max_streams_bidi=100,
-        initial_max_streams_uni=100,
-    )
+    config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
@@ -89,7 +72,6 @@ async def test_multiple_datagrams() -> bool:
             received_events: list[bytes] = []
 
             async def receiver() -> None:
-                """Task to receive datagrams concurrently."""
                 try:
                     for _ in range(num_datagrams):
                         event = await session.events.wait_for(event_type=EventType.DATAGRAM_RECEIVED, timeout=5.0)
@@ -136,16 +118,8 @@ async def test_multiple_datagrams() -> bool:
 
 
 async def test_datagram_sizes() -> bool:
-    """Test sending datagrams of various sizes, including oversized ones."""
     logger.info("--- Test 05C: Datagram Size Limits ---")
-    config = ClientConfig(
-        verify_mode=ssl.CERT_NONE,
-        connect_timeout=10.0,
-        initial_max_data=1024 * 1024,
-        initial_max_streams_bidi=100,
-        initial_max_streams_uni=100,
-        max_datagram_size=1200,
-    )
+    config = ClientConfig(verify_mode=ssl.CERT_NONE, max_datagram_size=1200)
 
     try:
         async with WebTransportClient(config=config) as client:
@@ -156,15 +130,17 @@ async def test_datagram_sizes() -> bool:
                 logger.error("FAILURE: Connection lost unexpectedly.")
                 return False
 
-            max_size = connection._engine._state.max_datagram_size
-            logger.info("Max datagram size from engine state: %s bytes.", max_size)
+            diags = await connection.diagnostics()
+            local_max = diags.max_datagram_size
+            remote_max = diags.remote_max_datagram_frame_size
+            logger.info("Max datagram size from diagnostics: local=%s, remote=%s", local_max, remote_max)
 
-            if max_size != 1200:
-                logger.warning("Engine state max_datagram_size (%s) mismatch config (%s)", max_size, 1200)
+            if local_max != 1200:
+                logger.warning("Engine state max_datagram_size (%s) mismatch config (%s)", local_max, 1200)
 
             logger.info("Testing oversized datagram...")
             try:
-                oversized_data = b"X" * (max_size + 1)
+                oversized_data = b"X" * (remote_max + 1)
                 await session.send_datagram(data=oversized_data)
                 logger.error("FAILURE: Sending oversized datagram should have raised an exception.")
                 return False
@@ -184,16 +160,9 @@ async def test_datagram_sizes() -> bool:
 
 
 async def test_datagram_burst() -> bool:
-    """Test a burst of datagrams sent concurrently."""
     logger.info("--- Test 05G: Datagram Burst ---")
     burst_size = 50
-    config = ClientConfig(
-        verify_mode=ssl.CERT_NONE,
-        connect_timeout=10.0,
-        initial_max_data=1024 * 1024,
-        initial_max_streams_bidi=100,
-        initial_max_streams_uni=100,
-    )
+    config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
@@ -214,7 +183,6 @@ async def test_datagram_burst() -> bool:
 
 
 async def main() -> int:
-    """Run the main entry point for the datagrams test suite."""
     logger.info("--- Starting Test 05: Datagrams ---")
 
     tests: list[tuple[str, Callable[[], Awaitable[bool]]]] = [

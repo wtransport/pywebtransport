@@ -35,14 +35,7 @@ async def test_sequential_streams() -> bool:
     """Test creating and using multiple streams sequentially in one session."""
     logger.info("--- Test 03A: Sequential Multiple Streams ---")
     num_streams = 3
-    config = ClientConfig(
-        verify_mode=ssl.CERT_NONE,
-        connect_timeout=10.0,
-        read_timeout=5.0,
-        initial_max_data=1024 * 1024,
-        initial_max_streams_bidi=100,
-        initial_max_streams_uni=100,
-    )
+    config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
@@ -54,7 +47,7 @@ async def test_sequential_streams() -> bool:
                 logger.info("Creating and testing stream %d/%d...", stream_num, num_streams)
                 stream = await session.create_bidirectional_stream()
                 test_msg = f"Sequential stream {stream_num}".encode()
-                await stream.write_all(data=test_msg)
+                await stream.write_all(data=test_msg, end_stream=True)
                 response = await stream.read_all()
 
                 expected = b"ECHO: " + test_msg
@@ -77,14 +70,7 @@ async def test_concurrent_streams() -> bool:
     """Test handling multiple streams concurrently using asyncio tasks."""
     logger.info("--- Test 03B: Concurrent Streams ---")
     num_streams = 10
-    config = ClientConfig(
-        verify_mode=ssl.CERT_NONE,
-        connect_timeout=10.0,
-        read_timeout=10.0,
-        initial_max_data=1024 * 1024,
-        initial_max_streams_bidi=100,
-        initial_max_streams_uni=100,
-    )
+    config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     async def stream_task(*, session: WebTransportSession, task_id: int) -> bool:
         """Define the work for a single concurrent stream test."""
@@ -92,7 +78,7 @@ async def test_concurrent_streams() -> bool:
             stream = await session.create_bidirectional_stream()
             logger.debug("Task %d: Stream created (ID=%s)", task_id, stream.stream_id)
             test_msg = f"Concurrent stream {task_id}".encode()
-            await stream.write_all(data=test_msg)
+            await stream.write_all(data=test_msg, end_stream=True)
             response = await stream.read_all()
 
             expected = b"ECHO: " + test_msg
@@ -135,14 +121,7 @@ async def test_concurrent_streams() -> bool:
 async def test_stream_lifecycle() -> bool:
     """Test the full lifecycle management of a single stream."""
     logger.info("--- Test 03C: Stream Lifecycle Management ---")
-    config = ClientConfig(
-        verify_mode=ssl.CERT_NONE,
-        connect_timeout=10.0,
-        read_timeout=5.0,
-        initial_max_data=1024 * 1024,
-        initial_max_streams_bidi=100,
-        initial_max_streams_uni=100,
-    )
+    config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
@@ -150,7 +129,7 @@ async def test_stream_lifecycle() -> bool:
             stream = await session.create_bidirectional_stream()
             logger.info("Stream created: %s", stream.stream_id)
 
-            await stream.write_all(data=b"Lifecycle test")
+            await stream.write_all(data=b"Lifecycle test", end_stream=True)
             await stream.read_all()
             logger.info("Data exchanged.")
 
@@ -173,14 +152,7 @@ async def test_stream_stress() -> bool:
     """Perform a stress test by rapidly creating and using streams."""
     logger.info("--- Test 03D: Stream Stress Test ---")
     num_iterations = 20
-    config = ClientConfig(
-        verify_mode=ssl.CERT_NONE,
-        connect_timeout=10.0,
-        read_timeout=5.0,
-        initial_max_data=1024 * 1024,
-        initial_max_streams_bidi=100,
-        initial_max_streams_uni=100,
-    )
+    config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
@@ -191,7 +163,7 @@ async def test_stream_stress() -> bool:
             for i in range(num_iterations):
                 stream = await session.create_bidirectional_stream()
                 test_msg = f"Stress test {i + 1}".encode()
-                await stream.write_all(data=test_msg)
+                await stream.write_all(data=test_msg, end_stream=True)
                 response = await stream.read_all()
                 expected = b"ECHO: " + test_msg
                 if response != expected:

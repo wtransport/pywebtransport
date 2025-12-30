@@ -8,7 +8,7 @@ The test configuration detailed below serves as the reference environment for al
 
 | Component            | Specification                             |
 | :------------------- | :---------------------------------------- |
-| **Library Version**  | `PyWebTransport v0.10.0` (Ref: `HEAD`)    |
+| **Library Version**  | `PyWebTransport v0.11.0` (Ref: `HEAD`)    |
 | **Python Runtime**   | CPython 3.12.12                           |
 | **Event Loop**       | `uvloop` v0.22.1+                         |
 | **Cryptography**     | OpenSSL 3.0.17                            |
@@ -39,9 +39,9 @@ This section details the sustained data transfer rate over reliable WebTransport
 
 | Scenario     | Result (MB/s) |
 | :----------- | :------------ |
-| **Upload**   | `42.36`       |
-| **Download** | `7.95`        |
-| **Duplex**   | `11.15`       |
+| **Upload**   | `140.64`      |
+| **Download** | `6.49`        |
+| **Duplex**   | `8.95`        |
 
 ## 4. Latency & RTT
 
@@ -49,10 +49,10 @@ This section measures the Round-Trip Time (RTT) for application-layer interactio
 
 | Metric                          | Min        | Median (p50) | Max        |
 | :------------------------------ | :--------- | :----------- | :--------- |
-| **Handshake** (Connect → Ready) | `14.49` ms | `24.85` ms   | `29.85` ms |
-| **Request-Response** (64B)      | `28.81` ms | `29.97` ms   | `59.21` ms |
-| **Request-Response** (1KB)      | `29.07` ms | `30.04` ms   | `34.01` ms |
-| **Datagram RTT**                | `26.24` ms | `27.55` ms   | `30.31` ms |
+| **Handshake** (Connect → Ready) | `15.80` ms | `24.24` ms   | `28.00` ms |
+| **Request-Response** (64B)      | `25.68` ms | `27.90` ms   | `57.23` ms |
+| **Request-Response** (1KB)      | `26.86` ms | `28.19` ms   | `32.29` ms |
+| **Datagram RTT**                | `25.44` ms | `26.70` ms   | `31.99` ms |
 
 ## 5. Multiplexing Efficiency
 
@@ -60,8 +60,8 @@ This section evaluates connection scalability when handling concurrent flows on 
 
 | Metric                   | Result         | Description                                                                     |
 | :----------------------- | :------------- | :------------------------------------------------------------------------------ |
-| **Aggregate Throughput** | `36.39` MB/s   | The test manages 1,000 concurrent streams. Each stream carries a 64 KB payload. |
-| **Connection Rate**      | `41.48` conn/s | Connections are established and torn down sequentially.                         |
+| **Aggregate Throughput** | `72.06` MB/s   | The test manages 1,000 concurrent streams. Each stream carries a 64 KB payload. |
+| **Connection Rate**      | `41.26` conn/s | Connections are established and torn down sequentially.                         |
 
 ## 6. Datagram Performance
 
@@ -69,7 +69,7 @@ This section measures the packet processing rate for unreliable datagrams (HTTP/
 
 | Metric        | Result       | Description                                                          |
 | :------------ | :----------- | :------------------------------------------------------------------- |
-| **Send Rate** | `14,088` PPS | Tests utilize a 64-byte payload transmitted in a non-blocking burst. |
+| **Send Rate** | `11,294` PPS | Tests utilize a 64-byte payload transmitted in a non-blocking burst. |
 
 ## 7. Resource Utilization
 
@@ -77,4 +77,4 @@ This section measures the system memory footprint per connection in a steady, id
 
 | Metric                         | Result        |
 | :----------------------------- | :------------ |
-| **Memory per Idle Connection** | `~ 141.66` KB |
+| **Memory per Idle Connection** | `~ 134.85` KB |

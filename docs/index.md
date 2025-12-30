@@ -81,10 +81,11 @@ Datagrams offer low-latency, unreliable, and out-of-order messaging, ideal for r
 
 ## Interoperability
 
-- **[Public Endpoint](https://interop.pywebtransport.org)**: `https://interop.pywebtransport.org`
-  - **/echo**: Bidirectional stream and datagram reflection.
-  - **/status**: Global server health and aggregate metrics.
-  - **/stats**: Current session statistics and negotiated parameters.
+[https://interop.wtransport.org](https://interop.wtransport.org)
+
+- **/echo**: Bidirectional stream and datagram reflection.
+- **/status**: Global server health and aggregate metrics.
+- **/stats**: Current session statistics and negotiated parameters.
 
 ## API Reference
 
@@ -92,9 +93,9 @@ Datagrams offer low-latency, unreliable, and out-of-order messaging, ideal for r
 
 ## Community
 
-- **GitHub** - [Source code and issues](https://github.com/lemonsterfy/pywebtransport)
+- **GitHub** - [Source code and issues](https://github.com/wtransport/pywebtransport)
 - **PyPI** - [Package distribution](https://pypi.org/project/pywebtransport/)
 
 ## License
 
-PyWebTransport is released under the Apache License 2.0. See [LICENSE](https://github.com/lemonsterfy/pywebtransport/blob/main/LICENSE) for details.
+PyWebTransport is released under the Apache License 2.0. See [LICENSE](https://github.com/wtransport/pywebtransport/blob/main/LICENSE) for details.

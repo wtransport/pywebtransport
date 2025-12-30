@@ -23,13 +23,7 @@ logging.basicConfig(level=logging.CRITICAL)
 
 @pytest.fixture(scope="module")
 def client_config() -> ClientConfig:
-    return ClientConfig(
-        verify_mode=ssl.CERT_NONE,
-        connect_timeout=5.0,
-        initial_max_data=1048576,
-        initial_max_streams_bidi=100,
-        initial_max_streams_uni=100,
-    )
+    return ClientConfig(verify_mode=ssl.CERT_NONE)
 
 
 class TestLatency:
@@ -63,7 +57,7 @@ class TestLatency:
             async with WebTransportClient(config=client_config) as client:
                 session = await client.connect(url=url)
                 stream = await session.create_bidirectional_stream()
-                await stream.write_all(data=payload)
+                await stream.write_all(data=payload, end_stream=True)
                 await stream.read_all()
                 await session.close()
 

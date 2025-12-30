@@ -11,6 +11,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(No planned changes for the next release yet.)_
 
+## [0.11.0] - 2025-12-30
+
+Version 0.11.0 marks the completion of the transition to a deterministic **Sans-I/O** architecture and serves as the **final pure-Python release** of the library. This release purifies the protocol engine by eliminating all runtime-couplings, implementing a strict **Request ID** pattern for asynchronous lifecycle management, and standardizing structured concurrency. These structural changes establish a strictly typed codebase with enforced concurrency safety mechanisms and optimized memory layout through integer-based identifiers. Additionally, this release formalizes the project's transition to the **WTransport** organization, unifying governance, asset ownership, and contribution policies.
+
+### Added
+
+- **Interoperability Artifact**: Introduced a standardized OCI container image for the interoperability server. This artifact provides a deterministic reference execution environment specifically designed for protocol compliance verification and cross-implementation integration testing, ensuring consistent behavior across disparate infrastructure.
+- **Binary Header Support**: Implemented transparent QPACK byte passthrough for HTTP/3 headers, expanding the `Headers` type definition to `dict[str | bytes, str | bytes]` to support raw binary data without forced encoding/decoding.
+- **Connection Factory**: Introduced `WebTransportConnection.connect()` as the canonical static factory method, centralizing initialization logic and decoupling high-level clients from low-level adapter instantiation.
+- **IPv6 Normalization**: Integrated `urllib.parse` for robust URL parsing, ensuring syntactically correct handling of IPv6 literal addresses in connection strings.
+- **Diagnostic Metrics**: Extended `SessionDiagnostics` with `active_streams` and `blocked_streams` fields to provide granular observability into flow control states.
+- **Type Introspection**: Implemented automatic `Enum` target inference within `Union` type hints during configuration deserialization.
+
+### Changed
+
+- **Sans-I/O Purification**: Completed the refactoring of the `_protocol` package into a pure synchronous state machine by removing all traces of `asyncio.Future`, `Task`, and `sleep`.
+- **Request ID Pattern**: Replaced direct `Future` passing within the protocol layer with a deterministic **Request ID** mechanism managed via `PendingRequestManager`, decoupling the runtime from protocol logic.
+- **Structured Concurrency**: Migrated `ServerApp`, `ClientFleet`, `Middleware`, and `ReconnectingClient` to utilize `asyncio.TaskGroup`, ensuring deterministic resource cleanup and exception propagation.
+- **Stream Composition**: Refactored `WebTransportStream` to employ a composition pattern (encapsulating reader/writer instances) rather than multiple inheritance, resolving MRO ambiguities.
+- **Configuration Architecture**: Transformed `ClientConfig` and `ServerConfig` into pure data classes, delegating side-effect initialization (e.g., User-Agent injection) to the client entry point.
+- **API Strictness**: Enforced mandatory keyword-only arguments (`*`) across internal and public interfaces to prevent positional argument ambiguity.
+- **Middleware Decoupling**: Updated `Middleware` and `RateLimiter` to rely on `SessionProtocol` interfaces rather than concrete `WebTransportSession` implementations, eliminating reflection-based property access.
+- **Test Coverage**: Expanded the validation scope across all testing suites, increasing overall code coverage to **99%**.
+
+### Removed
+
+- **UUID Dependency**: Removed the `event_id` field and UUID generation logic from the `Event` class to improve serialization performance.
+- **Legacy Factory Functions**: Removed standalone `create_connection` functions in the adapter layer in favor of the strict `create_quic_endpoint` tuple return pattern.
+- **Implicit Boolean Evaluation**: Removed reliance on implicit object truthiness (e.g., `if conn:`) in favor of explicit identity checks (`if conn is not None:`) to enforce strict type safety.
+
+### Fixed
+
+- **H3 Capsule Framing**: Rectified binary framing logic for HTTP/3 Capsules to ensure strict byte-level compliance with RFC 9297, specifically regarding control stream signaling.
+- **Datagram Alignment**: Fixed header alignment validation in datagram serialization to adhere to remote peer limits rather than local constraints.
+- **Type Regression**: Resolved `TypeError` in `ConnectionProcessor` and `SessionProcessor` related to tuple unpacking during termination sequences.
+
+### Performance
+
+- **Identifier Unification**: Standardized `SessionId` and `StreamId` as integer types directly mapping to QUIC identifiers. Removed UUID generation and hashing to eliminate instantiation overhead in high-frequency events.
+- **Write Atomicity**: Optimized `StructuredStream` to coalesce header and payload serialization into a single atomic write operation, reducing system call overhead and improving packetization.
+- **Task Optimization**: Implemented idempotent state checks in `ConnectionManager` (`if connection.is_closed: return`) to prevent redundant task scheduling during mass disconnections.
+- **Flow Control Algorithm**: Refactored flow control auto-tuning to use a pressure-sensitive algorithm based on immediate buffer availability.
+
+### Security
+
+- **Concurrency Throttling**: Added `max_concurrent_handshakes` parameter to `ClientFleet`, utilizing `asyncio.Semaphore` to mitigate thundering herd effects during mass client initialization.
+- **Handshake Rigor**: Hardened the connection state machine to strictly require both `TransportHandshakeCompleted` and `SettingsReceived` events before transitioning to `CONNECTED`, preventing premature data transmission.
+- **Backpressure Enforcement**: Pushed read buffer limits down to the `StreamProcessor` level with `max_stream_read_buffer` defenses to prevent memory exhaustion attacks.
+- **Resource Safety**: Implemented `try...finally` blocks and idempotent checks in `ServerApp` shutdown routines to guarantee socket resource release under all exception states.
+
+### Meta
+
+- **Governance Transition**: Transferred project ownership, repository namespace, and PyPI distribution from `lemonsterfy` to the **WTransport** organization.
+- **Identity Unification**: Standardized the release automation identity to **WTransport Bot** (replacing `PyWebTransport Bot`) and enforced GPG signing with a dedicated infrastructure key.
+- **CI/CD Infrastructure**: Migrated CI pipelines to **Group Runners** and **Group Access Tokens** to enforce strict isolation and "Infrastructure as Code" security standards.
+- **Attribution**: Updated LICENSE and NOTICE files to reflect "The WTransport Authors" as the copyright holder and added an `AUTHORS` file.
+- **Contribution Policy**: Enforced Developer Certificate of Origin (DCO) sign-off requirements for all contributions to ensure legal compliance.
+- **Infrastructure Migration**: Relocated documentation to `python.wtransport.org` and the interoperability test server to `interop.wtransport.org`.
+- **Package Metadata**: Updated distribution metadata to reference `admin@wtransport.org` and the new organizational resources.
+- **Security Reporting**: Enabled GitHub Private Vulnerability Reporting and established `security@wtransport.org` as the canonical contact point.
+- **Funding**: Added `FUNDING.yml` configuration integrating OpenCollective support channel (`wtransport`).
+
 ## [0.10.1] - 2025-12-14
 
 This is a maintenance release that hardens the network transport layer, strengthens supply chain security, and synchronizes the documentation infrastructure. It resolves a socket compatibility issue for client-side connections and enforces strict GPG signing for all release artifacts.
@@ -588,25 +650,26 @@ This is a major release focused on enhancing runtime safety and modernizing the 
 - cryptography (>=45.0.4,<46.0.0) for SSL/TLS operations
 - typing-extensions (>=4.14.0,<5.0.0) for Python <3.10 support
 
-[Unreleased]: https://github.com/lemonsterfy/pywebtransport/compare/v0.10.1...HEAD
-[0.10.1]: https://github.com/lemonsterfy/pywebtransport/compare/v0.10.0...v0.10.1
-[0.10.0]: https://github.com/lemonsterfy/pywebtransport/compare/v0.9.1...v0.10.0
-[0.9.1]: https://github.com/lemonsterfy/pywebtransport/compare/v0.9.0...v0.9.1
-[0.9.0]: https://github.com/lemonsterfy/pywebtransport/compare/v0.8.1...v0.9.0
-[0.8.1]: https://github.com/lemonsterfy/pywebtransport/compare/v0.8.0...v0.8.1
-[0.8.0]: https://github.com/lemonsterfy/pywebtransport/compare/v0.7.1...v0.8.0
-[0.7.1]: https://github.com/lemonsterfy/pywebtransport/compare/v0.7.0...v0.7.1
-[0.7.0]: https://github.com/lemonsterfy/pywebtransport/compare/v0.6.1...v0.7.0
-[0.6.1]: https://github.com/lemonsterfy/pywebtransport/compare/v0.6.0...v0.6.1
-[0.6.0]: https://github.com/lemonsterfy/pywebtransport/compare/v0.5.1...v0.6.0
-[0.5.1]: https://github.com/lemonsterfy/pywebtransport/compare/v0.5.0...v0.5.1
-[0.5.0]: https://github.com/lemonsterfy/pywebtransport/compare/v0.4.1...v0.5.0
-[0.4.1]: https://github.com/lemonsterfy/pywebtransport/compare/v0.4.0...v0.4.1
-[0.4.0]: https://github.com/lemonsterfy/pywebtransport/compare/v0.3.1...v0.4.0
-[0.3.1]: https://github.com/lemonsterfy/pywebtransport/compare/v0.3.0...v0.3.1
-[0.3.0]: https://github.com/lemonsterfy/pywebtransport/compare/v0.2.1...v0.3.0
-[0.2.1]: https://github.com/lemonsterfy/pywebtransport/compare/v0.2.0...v0.2.1
-[0.2.0]: https://github.com/lemonsterfy/pywebtransport/compare/v0.1.2...v0.2.0
-[0.1.2]: https://github.com/lemonsterfy/pywebtransport/compare/v0.1.1...v0.1.2
-[0.1.1]: https://github.com/lemonsterfy/pywebtransport/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/lemonsterfy/pywebtransport/releases/tag/v0.1.0
+[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/wtransport/pywebtransport/compare/v0.10.1...v0.11.0
+[0.10.1]: https://github.com/wtransport/pywebtransport/compare/v0.10.0...v0.10.1
+[0.10.0]: https://github.com/wtransport/pywebtransport/compare/v0.9.1...v0.10.0
+[0.9.1]: https://github.com/wtransport/pywebtransport/compare/v0.9.0...v0.9.1
+[0.9.0]: https://github.com/wtransport/pywebtransport/compare/v0.8.1...v0.9.0
+[0.8.1]: https://github.com/wtransport/pywebtransport/compare/v0.8.0...v0.8.1
+[0.8.0]: https://github.com/wtransport/pywebtransport/compare/v0.7.1...v0.8.0
+[0.7.1]: https://github.com/wtransport/pywebtransport/compare/v0.7.0...v0.7.1
+[0.7.0]: https://github.com/wtransport/pywebtransport/compare/v0.6.1...v0.7.0
+[0.6.1]: https://github.com/wtransport/pywebtransport/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/wtransport/pywebtransport/compare/v0.5.1...v0.6.0
+[0.5.1]: https://github.com/wtransport/pywebtransport/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/wtransport/pywebtransport/compare/v0.4.1...v0.5.0
+[0.4.1]: https://github.com/wtransport/pywebtransport/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/wtransport/pywebtransport/compare/v0.3.1...v0.4.0
+[0.3.1]: https://github.com/wtransport/pywebtransport/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/wtransport/pywebtransport/compare/v0.2.1...v0.3.0
+[0.2.1]: https://github.com/wtransport/pywebtransport/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/wtransport/pywebtransport/compare/v0.1.2...v0.2.0
+[0.1.2]: https://github.com/wtransport/pywebtransport/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/wtransport/pywebtransport/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/wtransport/pywebtransport/releases/tag/v0.1.0

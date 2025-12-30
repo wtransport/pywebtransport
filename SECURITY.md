@@ -16,7 +16,7 @@ We take the security of PyWebTransport seriously. If you believe you have found 
 
 Instead, please report them via email to:
 
-**Email**: lemonsterfy@gmail.com  
+**Email**: security@wtransport.org  
 **Subject**: [SECURITY] PyWebTransport Security Report
 
 ### What to Include
@@ -112,9 +112,9 @@ We currently do not offer a formal bug bounty program, but we greatly appreciate
 
 For any security-related questions or concerns:
 
-- **Security Reports**: lemonsterfy@gmail.com
+- **Security Reports**: security@wtransport.org
 - **General Security Questions**: GitHub Discussions
-- **Project Maintainer**: lemonsterfy
+- **Project Maintainer**: The WTransport Authors
 
 ---
 

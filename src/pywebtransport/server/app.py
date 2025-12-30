@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import http
+import weakref
 from collections.abc import Callable
 from types import TracebackType
-from typing import Any, Self, TypeVar
+from typing import Any, Self
 
 from pywebtransport._protocol.events import UserAcceptSession, UserCloseSession, UserRejectSession
 from pywebtransport.config import ServerConfig
 from pywebtransport.connection import WebTransportConnection
 from pywebtransport.constants import ErrorCodes
 from pywebtransport.events import Event
-from pywebtransport.exceptions import ConnectionError
+from pywebtransport.exceptions import ConnectionError, ServerError
 from pywebtransport.server.middleware import (
     MiddlewareManager,
     MiddlewareProtocol,
@@ -26,9 +27,7 @@ from pywebtransport.session import WebTransportSession
 from pywebtransport.types import EventType
 from pywebtransport.utils import get_logger
 
-__all__: list[str] = ["ServerApp"]
-
-F = TypeVar("F", bound=Callable[..., Any])
+__all__ = ["ServerApp"]
 
 logger = get_logger(name=__name__)
 
@@ -44,7 +43,8 @@ class ServerApp:
         self._stateful_middleware: list[StatefulMiddlewareProtocol] = []
         self._startup_handlers: list[Callable[[], Any]] = []
         self._shutdown_handlers: list[Callable[[], Any]] = []
-        self._active_handler_tasks: set[asyncio.Task[Any]] = set()
+        self._tg: asyncio.TaskGroup | None = None
+        self._handler_tasks: weakref.WeakSet[asyncio.Task[Any]] = weakref.WeakSet()
         self._server.on(event_type=EventType.SESSION_REQUEST, handler=self._handle_session_request)
 
     @property
@@ -55,6 +55,8 @@ class ServerApp:
     async def __aenter__(self) -> Self:
         """Enter the async context and run startup procedures."""
         await self._server.__aenter__()
+        self._tg = asyncio.TaskGroup()
+        await self._tg.__aenter__()
         await self.startup()
         logger.info("ServerApp started.")
         return self
@@ -63,9 +65,13 @@ class ServerApp:
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
     ) -> None:
         """Exit the async context and run shutdown procedures."""
-        await self.shutdown()
-        await self._server.close()
-        logger.info("ServerApp stopped.")
+        try:
+            await self.shutdown()
+            if self._tg is not None:
+                await self._tg.__aexit__(exc_type, exc_val, exc_tb)
+        finally:
+            await self._server.close()
+            logger.info("ServerApp stopped.")
 
     def run(self, *, host: str | None = None, port: int | None = None, **kwargs: Any) -> None:
         """Run the server application in a new asyncio event loop."""
@@ -83,6 +89,14 @@ class ServerApp:
 
     async def serve(self, *, host: str | None = None, port: int | None = None, **kwargs: Any) -> None:
         """Start the server and serve forever."""
+        if self._tg is None:
+            raise ServerError(
+                message=(
+                    "ServerApp has not been activated. It must be used as an "
+                    "asynchronous context manager (`async with ...`)."
+                )
+            )
+
         final_host = host if host is not None else self.server.config.bind_host
         final_port = port if port is not None else self.server.config.bind_port
         await self._server.listen(host=final_host, port=final_port)
@@ -99,13 +113,12 @@ class ServerApp:
         for middleware in reversed(self._stateful_middleware):
             await middleware.__aexit__(None, None, None)
 
-        if self._active_handler_tasks:
-            logger.info("Cancelling %d active handler tasks...", len(self._active_handler_tasks))
-            tasks_to_cancel = list(self._active_handler_tasks)
-            for task in tasks_to_cancel:
-                task.cancel()
-            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
-            logger.info("All active handler tasks processed.")
+        if self._handler_tasks:
+            logger.info("Cancelling %d active handler tasks...", len(self._handler_tasks))
+            for task in self._handler_tasks:
+                if not task.done():
+                    task.cancel()
+            logger.info("Active handler tasks cancelled, awaiting termination in TaskGroup.")
 
     async def startup(self) -> None:
         """Run startup handlers and enter stateful middleware."""
@@ -129,12 +142,12 @@ class ServerApp:
         self.add_middleware(middleware=middleware_func)
         return middleware_func
 
-    def on_shutdown(self, handler: F) -> F:
+    def on_shutdown[F: Callable[..., Any]](self, handler: F) -> F:
         """Register a handler to run on application shutdown."""
         self._shutdown_handlers.append(handler)
         return handler
 
-    def on_startup(self, handler: F) -> F:
+    def on_startup[F: Callable[..., Any]](self, handler: F) -> F:
         """Register a handler to run on application startup."""
         self._startup_handlers.append(handler)
         return handler
@@ -161,51 +174,47 @@ class ServerApp:
         """Find the route handler and create a background task to run it."""
         route_result = self._router.route_request(session=session)
 
-        ref = getattr(session, "_connection", None)
-        connection = ref() if callable(ref) else None
+        connection = session._connection()
 
-        if not connection:
+        if connection is None:
             logger.error("Cannot dispatch handler, connection is missing.")
             return
 
-        loop = asyncio.get_running_loop()
-
-        if not route_result:
+        if route_result is None:
             logger.warning(
                 "No route found for session %s (path: %s). Rejecting with %s.",
                 session.session_id,
                 session.path,
                 http.HTTPStatus.NOT_FOUND,
             )
-            fut = loop.create_future()
-            event = UserRejectSession(session_id=session.session_id, status_code=http.HTTPStatus.NOT_FOUND, future=fut)
-            await connection._send_event_to_engine(event=event)
+            request_id, future = connection._protocol.create_request()
+            event = UserRejectSession(
+                request_id=request_id, session_id=session.session_id, status_code=http.HTTPStatus.NOT_FOUND
+            )
+            connection._protocol.send_event(event=event)
+            await future
             return
 
         handler, params = route_result
         logger.info("Routing session request for path '%s' to handler '%s'", session.path, handler.__name__)
 
         try:
-            accept_fut = loop.create_future()
-            accept_event = UserAcceptSession(session_id=session.session_id, future=accept_fut)
-            await connection._send_event_to_engine(event=accept_event)
+            accept_req_id, accept_fut = connection._protocol.create_request()
+            accept_event = UserAcceptSession(request_id=accept_req_id, session_id=session.session_id)
+            connection._protocol.send_event(event=accept_event)
             await accept_fut
         except Exception as e:
             logger.error("Failed to accept session %s: %s", session.session_id, e, exc_info=True)
             return
 
-        handler_task = asyncio.create_task(
-            coro=self._run_handler_safely(handler=handler, session=session, params=params)
-        )
-        self._active_handler_tasks.add(handler_task)
-
-        def _task_done_callback(task: asyncio.Task[Any]) -> None:
-            self._active_handler_tasks.discard(task)
-            if not task.cancelled() and (exc := task.exception()):
-                logger.error("Handler task for session completed with error: %s", exc, exc_info=exc)
-
-        handler_task.add_done_callback(_task_done_callback)
-        logger.info("Handler task created and tracked for session %s", session.session_id)
+        if self._tg is not None:
+            handler_task = self._tg.create_task(
+                coro=self._run_handler_safely(handler=handler, session=session, params=params)
+            )
+            self._handler_tasks.add(handler_task)
+            logger.info("Handler task created and tracked for session %s", session.session_id)
+        else:
+            logger.error("TaskGroup not initialized. Handler cannot be dispatched.")
 
     async def _get_session_from_event(self, *, event: Event) -> WebTransportSession | None:
         """Validate event data and retrieve the existing WebTransportSession handle."""
@@ -223,8 +232,7 @@ class ServerApp:
             logger.warning("Invalid 'connection' object in session request")
             return None
 
-        session_conn_ref = getattr(session, "_connection", None)
-        session_conn = session_conn_ref() if callable(session_conn_ref) else None
+        session_conn = session._connection()
 
         if session_conn is not connection:
             logger.error(
@@ -238,7 +246,7 @@ class ServerApp:
 
         logger.info("Processing session request: session_id=%s, path='%s'", session.session_id, session.path)
 
-        if self.server.session_manager:
+        if self.server.session_manager is not None:
             try:
                 await self.server.session_manager.add_session(session=session)
             except Exception as e:
@@ -254,13 +262,12 @@ class ServerApp:
         event_data = event.data if isinstance(event.data, dict) else {}
 
         connection: WebTransportConnection | None = event_data.get("connection")
-        session_id_from_data: str | None = event_data.get("session_id")
-        loop = asyncio.get_running_loop()
+        session_id_from_data: int | None = event_data.get("session_id")
 
         try:
             session = await self._get_session_from_event(event=event)
 
-            if not session:
+            if session is None:
                 return
 
             await self._middleware_manager.process_request(session=session)
@@ -268,30 +275,34 @@ class ServerApp:
 
         except MiddlewareRejected as e:
             logger.warning(
-                "Session request for path '%s' rejected by middleware: %s", session.path if session else "unknown", e
+                "Session request for path '%s' rejected by middleware: %s",
+                session.path if session is not None else "unknown",
+                e,
             )
-            sid = session.session_id if session else session_id_from_data
-            if connection and sid:
-                fut = loop.create_future()
-                reject_event = UserRejectSession(session_id=sid, status_code=e.status_code, future=fut)
-                await connection._send_event_to_engine(event=reject_event)
-            if session and not session.is_closed:
+            sid = session.session_id if session is not None else session_id_from_data
+            if connection is not None and sid is not None:
+                request_id, future = connection._protocol.create_request()
+                reject_event = UserRejectSession(request_id=request_id, session_id=sid, status_code=e.status_code)
+                connection._protocol.send_event(event=reject_event)
+                await future
+            if session is not None and not session.is_closed:
                 await session.close()
 
         except Exception as e:
-            sid = session.session_id if session else session_id_from_data
+            sid = session.session_id if session is not None else session_id_from_data
             logger.error("Error handling session request for session %s: %s", sid, e, exc_info=True)
             try:
-                if connection and sid:
-                    fut = loop.create_future()
+                if connection is not None and sid is not None:
+                    request_id, future = connection._protocol.create_request()
                     close_event = UserCloseSession(
+                        request_id=request_id,
                         session_id=sid,
                         error_code=ErrorCodes.INTERNAL_ERROR,
                         reason="Internal server error handling request",
-                        future=fut,
                     )
-                    await connection._send_event_to_engine(event=close_event)
-                if session and not session.is_closed:
+                    connection._protocol.send_event(event=close_event)
+                    await future
+                if session is not None and not session.is_closed:
                     await session.close()
             except Exception as cleanup_error:
                 logger.error("Error during session request error cleanup: %s", cleanup_error, exc_info=cleanup_error)

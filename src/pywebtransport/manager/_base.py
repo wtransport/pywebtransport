@@ -195,8 +195,7 @@ class BaseResourceManager[ResourceId, ResourceType: ManageableResource](ABC):
             )
 
         async with self._lock:
-            if self._stats["current_count"] != 0:
-                self._stats["total_closed"] += len(resources_to_close)
+            self._stats["total_closed"] += len(resources_to_close)
             self._update_stats_unsafe()
         self._log.info("All managed %ss processed for closure.", self._resource_name)
 
@@ -220,7 +219,7 @@ class BaseResourceManager[ResourceId, ResourceType: ManageableResource](ABC):
                 self._event_handlers.pop(resource_id)
 
             removed_resource = self._resources.pop(resource_id, None)
-            if removed_resource:
+            if removed_resource is not None:
                 self._stats["total_closed"] += 1
                 self._update_stats_unsafe()
                 self._log.debug(

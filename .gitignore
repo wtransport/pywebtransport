@@ -28,6 +28,9 @@ __pycache__/
 *.py[cod]
 *.so
 
+# Rust
+target/
+
 # SSL/TLS certificates
 *.crt
 *.key

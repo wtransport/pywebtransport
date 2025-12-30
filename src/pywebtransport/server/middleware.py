@@ -11,9 +11,8 @@ from types import TracebackType
 from typing import Protocol, Self, runtime_checkable
 
 from pywebtransport.exceptions import ServerError
-from pywebtransport.session import WebTransportSession
 from pywebtransport.types import Headers, SessionProtocol
-from pywebtransport.utils import get_header, get_logger
+from pywebtransport.utils import get_header_as_str, get_logger
 
 __all__: list[str] = [
     "AuthHandlerProtocol",
@@ -43,7 +42,7 @@ class MiddlewareRejected(Exception):
         """Initialize the rejection exception."""
         super().__init__(f"Request rejected with status {status_code}")
         self.status_code = status_code
-        self.headers = headers or {}
+        self.headers = headers if headers is not None else {}
 
 
 @runtime_checkable
@@ -128,14 +127,16 @@ class RateLimiter:
         self._cleanup_interval = cleanup_interval
         self._max_tracked_ips = max_tracked_ips
         self._requests: dict[str, deque[float]] = {}
-        self._lock: asyncio.Lock | None = None
+        self._lock = asyncio.Lock()
+        self._tg: asyncio.TaskGroup | None = None
         self._cleanup_task: asyncio.Task[None] | None = None
         self._is_closing = False
 
     async def __aenter__(self) -> Self:
         """Initialize resources and start the cleanup task."""
-        self._lock = asyncio.Lock()
         self._is_closing = False
+        self._tg = asyncio.TaskGroup()
+        await self._tg.__aenter__()
         self._start_cleanup_task()
         return self
 
@@ -144,19 +145,17 @@ class RateLimiter:
     ) -> None:
         """Stop the background cleanup task and release resources."""
         self._is_closing = True
-        if self._cleanup_task:
+        if self._cleanup_task is not None:
             self._cleanup_task.cancel()
-            try:
-                await self._cleanup_task
-            except asyncio.CancelledError:
-                pass
+
+        if self._tg is not None:
+            await self._tg.__aexit__(exc_type, exc_val, exc_tb)
+
         self._cleanup_task = None
+        self._tg = None
 
     async def _periodic_cleanup(self) -> None:
         """Periodically remove stale IP entries from the tracker."""
-        if self._lock is None:
-            return
-
         while True:
             try:
                 await asyncio.sleep(delay=self._cleanup_interval)
@@ -188,12 +187,12 @@ class RateLimiter:
 
     def _start_cleanup_task(self) -> None:
         """Create and start the periodic cleanup task if not already running."""
-        if self._cleanup_task is None or self._cleanup_task.done():
-            self._cleanup_task = asyncio.create_task(coro=self._periodic_cleanup())
+        if self._tg is not None and (self._cleanup_task is None or self._cleanup_task.done()):
+            self._cleanup_task = self._tg.create_task(coro=self._periodic_cleanup())
 
     async def __call__(self, *, session: SessionProtocol) -> None:
         """Apply rate limiting to an incoming session."""
-        if self._lock is None:
+        if self._tg is None:
             raise ServerError(
                 message=(
                     "RateLimiter has not been activated. It must be used as an "
@@ -202,11 +201,8 @@ class RateLimiter:
             )
 
         client_ip = "unknown"
-        if isinstance(session, WebTransportSession):
-            ref = getattr(session, "_connection", None)
-            connection = ref() if callable(ref) else None
-            if connection and hasattr(connection, "remote_address") and connection.remote_address:
-                client_ip = connection.remote_address[0]
+        if session.remote_address is not None:
+            client_ip = session.remote_address[0]
 
         current_time = time.perf_counter()
 
@@ -254,8 +250,8 @@ def create_cors_middleware(*, allowed_origins: list[str]) -> MiddlewareProtocol:
     """Create a CORS middleware to validate the Origin header."""
 
     async def cors_middleware(*, session: SessionProtocol) -> None:
-        origin = get_header(headers=session.headers, key="origin")
-        if not origin:
+        origin = get_header_as_str(headers=session.headers, key="origin")
+        if origin is None or not origin:
             logger.warning("CORS check failed: 'Origin' header missing.")
             raise MiddlewareRejected(status_code=http.HTTPStatus.FORBIDDEN)
 
@@ -277,12 +273,9 @@ def create_logging_middleware() -> MiddlewareProtocol:
 
     async def middleware(*, session: SessionProtocol) -> None:
         remote_address_str = "unknown"
-        if isinstance(session, WebTransportSession):
-            ref = getattr(session, "_connection", None)
-            connection = ref() if callable(ref) else None
-            if connection and hasattr(connection, "remote_address") and connection.remote_address:
-                addr = connection.remote_address
-                remote_address_str = f"{addr[0]}:{addr[1]}"
+        if session.remote_address is not None:
+            addr = session.remote_address
+            remote_address_str = f"{addr[0]}:{addr[1]}"
 
         logger.info("Session request: path='%s' from=%s", session.path, remote_address_str)
 

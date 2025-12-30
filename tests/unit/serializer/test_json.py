@@ -10,7 +10,16 @@ from typing import Any
 import pytest
 
 from pywebtransport.exceptions import SerializationError
-from pywebtransport.serializer.json import JSONSerializer
+from pywebtransport.serializer import JSONSerializer
+
+
+@dataclass(kw_only=True)
+class BinaryData:
+    content: bytes
+
+
+class NonSerializable:
+    pass
 
 
 @dataclass(kw_only=True)
@@ -19,18 +28,9 @@ class SimpleData:
     name: str
 
 
-@dataclass(kw_only=True)
-class BinaryData:
-    content: bytes
-
-
 class Status(Enum):
     ACTIVE = "active"
     INACTIVE = "inactive"
-
-
-class NonSerializable:
-    pass
 
 
 class TestJSONSerializer:
@@ -66,6 +66,11 @@ class TestJSONSerializer:
 
         assert result == "invalid-base64!"
 
+    @pytest.mark.parametrize("invalid_data", [b"{'id': 1, 'name': 'test'}", b'{"id": 1, "name": "test"', b"not json"])
+    def test_deserialize_invalid_json_raises_error(self, serializer: JSONSerializer, invalid_data: bytes) -> None:
+        with pytest.raises(SerializationError, match="Data is not valid JSON"):
+            serializer.deserialize(data=invalid_data)
+
     def test_deserialize_memoryview_input(self, serializer: JSONSerializer) -> None:
         data = b'{"id": 1, "name": "test"}'
         mv = memoryview(data)
@@ -73,11 +78,6 @@ class TestJSONSerializer:
         result = serializer.deserialize(data=mv, obj_type=SimpleData)
 
         assert result == SimpleData(id=1, name="test")
-
-    @pytest.mark.parametrize("invalid_data", [b"{'id': 1, 'name': 'test'}", b'{"id": 1, "name": "test"', b"not json"])
-    def test_deserialize_invalid_json_raises_error(self, serializer: JSONSerializer, invalid_data: bytes) -> None:
-        with pytest.raises(SerializationError, match="Data is not valid JSON"):
-            serializer.deserialize(data=invalid_data)
 
     def test_deserialize_to_dataclass(self, serializer: JSONSerializer) -> None:
         data = b'{"id": 1, "name": "test"}'
@@ -123,6 +123,20 @@ class TestJSONSerializer:
 
         assert result["value"] == "1.5"
 
+    def test_serialize_custom_default_handler(self) -> None:
+        def custom_default(o: Any) -> Any:
+            if isinstance(o, complex):
+                return f"complex({o.real}, {o.imag})"
+            raise TypeError(f"Unknown type {type(o)}")
+
+        serializer = JSONSerializer(dump_kwargs={"default": custom_default})
+        data = complex(1, 2)
+        expected = b'"complex(1.0, 2.0)"'
+
+        result = serializer.serialize(obj=data)
+
+        assert result == expected
+
     def test_serialize_dataclass(self, serializer: JSONSerializer) -> None:
         instance = SimpleData(id=1, name="test")
         expected = b'{"id": 1, "name": "test"}'
@@ -142,7 +156,13 @@ class TestJSONSerializer:
     def test_serialize_extended_types(self, serializer: JSONSerializer) -> None:
         test_uuid = uuid.uuid4()
         test_time = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        data = {"bytes": b"test", "uuid": test_uuid, "enum": Status.ACTIVE, "set": {1, 2}, "datetime": test_time}
+        data = {
+            "bytes": b"test",
+            "uuid": test_uuid,
+            "enum": Status.ACTIVE,
+            "set": {1, 2},
+            "datetime": test_time,
+        }
 
         json_bytes = serializer.serialize(obj=data)
         result = serializer.deserialize(data=json_bytes)
@@ -159,17 +179,3 @@ class TestJSONSerializer:
 
         assert "is not JSON serializable" in str(exc_info.value)
         assert isinstance(exc_info.value.__cause__, TypeError)
-
-    def test_serialize_custom_default_handler(self) -> None:
-        def custom_default(o: Any) -> Any:
-            if isinstance(o, complex):
-                return f"complex({o.real}, {o.imag})"
-            raise TypeError(f"Unknown type {type(o)}")
-
-        serializer = JSONSerializer(dump_kwargs={"default": custom_default})
-        data = complex(1, 2)
-        expected = b'"complex(1.0, 2.0)"'
-
-        result = serializer.serialize(obj=data)
-
-        assert result == expected

@@ -14,15 +14,15 @@ from pytest_asyncio import fixture as asyncio_fixture
 from pytest_mock import MockerFixture
 
 from pywebtransport import ServerError, WebTransportSession
-from pywebtransport.server.middleware import (
+from pywebtransport.server import (
     MiddlewareManager,
     MiddlewareRejected,
-    RateLimiter,
     create_auth_middleware,
     create_cors_middleware,
     create_logging_middleware,
     create_rate_limit_middleware,
 )
+from pywebtransport.server.middleware import RateLimiter
 
 
 class TestMiddlewareFactories:
@@ -32,10 +32,7 @@ class TestMiddlewareFactories:
         session = mocker.Mock(spec=WebTransportSession)
         session.path = "/test"
         session.headers = {"origin": "https://example.com", "x-auth": "good-token"}
-
-        mock_conn = mocker.Mock()
-        mock_conn.remote_address = ("1.2.3.4", 12345)
-        session._connection = mocker.Mock(return_value=mock_conn)
+        session.remote_address = ("1.2.3.4", 12345)
         return session
 
     @pytest.mark.asyncio
@@ -102,31 +99,13 @@ class TestMiddlewareFactories:
         assert "Session request: path='/test' from=1.2.3.4:12345" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_create_logging_middleware_empty_remote_address(
-        self, mocker: MockerFixture, caplog: LogCaptureFixture
-    ) -> None:
-        caplog.set_level(logging.INFO)
-        session = mocker.Mock(spec=WebTransportSession)
-        session.path = "/no-addr"
-        mock_conn = mocker.Mock()
-        mock_conn.remote_address = ()
-        session._connection = mocker.Mock(return_value=mock_conn)
-        logging_middleware = create_logging_middleware()
-
-        await logging_middleware(session=session)
-
-        assert "from=unknown" in caplog.text
-
-    @pytest.mark.asyncio
     async def test_create_logging_middleware_no_remote_address(
         self, mocker: MockerFixture, caplog: LogCaptureFixture
     ) -> None:
         caplog.set_level(logging.INFO)
         session = mocker.Mock(spec=WebTransportSession)
         session.path = "/no-addr"
-        mock_conn = mocker.Mock()
-        mock_conn.remote_address = None
-        session._connection = mocker.Mock(return_value=mock_conn)
+        session.remote_address = None
         logging_middleware = create_logging_middleware()
 
         await logging_middleware(session=session)
@@ -146,6 +125,7 @@ class TestMiddlewareFactories:
         generic_session = MagicMock()
         generic_session.path = "/generic"
         generic_session.headers = {}
+        generic_session.remote_address = None
 
         logging_middleware = create_logging_middleware()
         await logging_middleware(session=generic_session)
@@ -227,19 +207,17 @@ class TestMiddlewareManager:
 @pytest.mark.asyncio
 class TestRateLimiter:
 
+    @pytest.fixture
+    def mock_session(self, mocker: MockerFixture) -> Any:
+        session = mocker.Mock(spec=WebTransportSession)
+        session.remote_address = ("1.2.3.4", 12345)
+        return session
+
     @asyncio_fixture
     async def rate_limiter(self) -> AsyncGenerator[RateLimiter, None]:
         limiter = RateLimiter(max_requests=2, window_seconds=10)
         async with limiter as activated_limiter:
             yield activated_limiter
-
-    @pytest.fixture
-    def mock_session(self, mocker: MockerFixture) -> Any:
-        session = mocker.Mock(spec=WebTransportSession)
-        mock_conn = mocker.Mock()
-        mock_conn.remote_address = ("1.2.3.4", 12345)
-        session._connection = mocker.Mock(return_value=mock_conn)
-        return session
 
     async def test_aexit_no_cleanup_task(self) -> None:
         limiter = RateLimiter()
@@ -248,28 +226,6 @@ class TestRateLimiter:
         await limiter.__aexit__(None, None, None)
 
         assert limiter._is_closing
-
-    async def test_call_empty_remote_address(self, mocker: MockerFixture, rate_limiter: RateLimiter) -> None:
-        session = mocker.Mock(spec=WebTransportSession)
-        mock_conn = mocker.Mock()
-        mock_conn.remote_address = ()
-        session._connection = mocker.Mock(return_value=mock_conn)
-
-        await rate_limiter(session=session)
-
-    async def test_call_no_connection(self, mocker: MockerFixture, rate_limiter: RateLimiter) -> None:
-        session = mocker.Mock(spec=WebTransportSession)
-        session._connection = mocker.Mock(return_value=None)
-
-        await rate_limiter(session=session)
-
-    async def test_call_no_remote_address(self, mocker: MockerFixture, rate_limiter: RateLimiter) -> None:
-        session = mocker.Mock(spec=WebTransportSession)
-        mock_conn = mocker.Mock()
-        mock_conn.remote_address = None
-        session._connection = mocker.Mock(return_value=mock_conn)
-
-        await rate_limiter(session=session)
 
     async def test_call_existing_ip(self, mock_session: Any, rate_limiter: RateLimiter) -> None:
         assert rate_limiter._lock is not None
@@ -281,6 +237,12 @@ class TestRateLimiter:
         async with rate_limiter._lock:
             assert len(rate_limiter._requests["1.2.3.4"]) == 1
 
+    async def test_call_no_remote_address(self, mocker: MockerFixture, rate_limiter: RateLimiter) -> None:
+        session = mocker.Mock(spec=WebTransportSession)
+        session.remote_address = None
+
+        await rate_limiter(session=session)
+
     async def test_ip_limit_flush(self, mocker: MockerFixture, caplog: LogCaptureFixture) -> None:
         caplog.set_level(logging.WARNING)
         mocker.patch("time.perf_counter", return_value=100.0)
@@ -291,9 +253,7 @@ class TestRateLimiter:
             rl._requests["2.2.2.2"] = deque([100.0])
 
             session = mocker.Mock(spec=WebTransportSession)
-            mock_conn = mocker.Mock()
-            mock_conn.remote_address = ("3.3.3.3", 12345)
-            session._connection = mocker.Mock(return_value=mock_conn)
+            session.remote_address = ("3.3.3.3", 12345)
 
             await rl(session=session)
 
@@ -356,13 +316,6 @@ class TestRateLimiter:
 
         cast(MagicMock, rate_limiter._lock).__aenter__.assert_not_called()
 
-    async def test_periodic_cleanup_no_lock(self, caplog: LogCaptureFixture) -> None:
-        limiter = RateLimiter()
-
-        await limiter._periodic_cleanup()
-
-        assert limiter._lock is None
-
     async def test_periodic_cleanup_no_stale_ips(self, mocker: MockerFixture) -> None:
         mocker.patch("asyncio.sleep", side_effect=[None, asyncio.CancelledError])
         mock_time = mocker.patch("time.perf_counter")
@@ -422,26 +375,29 @@ class TestRateLimiter:
         await rate_limiter(session=mock_session)
 
     async def test_start_cleanup_task_idempotent(self, mocker: MockerFixture) -> None:
-        dummy_coroutine_obj = mocker.MagicMock(name="dummy_coroutine_obj")
-        sync_mock_callable = mocker.MagicMock(return_value=dummy_coroutine_obj)
-
-        mocker.patch("pywebtransport.server.middleware.RateLimiter._periodic_cleanup", new=sync_mock_callable)
-        mock_create_task = mocker.patch("asyncio.create_task")
         rate_limiter = RateLimiter()
+        rate_limiter._start_cleanup_task()
+        assert rate_limiter._cleanup_task is None
+
+        mock_cleanup = mocker.Mock(return_value="dummy_coro")
+        mocker.patch.object(rate_limiter, "_periodic_cleanup", new=mock_cleanup)
+
+        mock_tg = mocker.Mock()
+        mock_task = mocker.Mock()
+        mock_tg.create_task.return_value = mock_task
+        rate_limiter._tg = mock_tg
 
         rate_limiter._start_cleanup_task()
-        sync_mock_callable.assert_called_once()
-        mock_create_task.assert_called_once_with(coro=dummy_coroutine_obj)
 
-        task = mock_create_task.return_value
-        task.done.return_value = False
+        mock_cleanup.assert_called_once()
+        mock_tg.create_task.assert_called_once_with(coro="dummy_coro")
+
+        mock_task.done.return_value = False
         rate_limiter._start_cleanup_task()
 
-        sync_mock_callable.assert_called_once()
-        mock_create_task.assert_called_once()
+        assert mock_tg.create_task.call_count == 1
 
-        task.done.return_value = True
+        mock_task.done.return_value = True
         rate_limiter._start_cleanup_task()
 
-        assert sync_mock_callable.call_count == 2
-        assert mock_create_task.call_count == 2
+        assert mock_tg.create_task.call_count == 2

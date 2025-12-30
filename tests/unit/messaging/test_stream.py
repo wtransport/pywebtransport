@@ -3,15 +3,14 @@
 import asyncio
 import struct
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, call
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pytest_mock import MockerFixture
 
-from pywebtransport import ConfigurationError, StreamError, WebTransportStream
-from pywebtransport.constants import DEFAULT_MAX_MESSAGE_SIZE, ErrorCodes
+from pywebtransport import ConfigurationError, ErrorCodes, StreamError, StructuredStream, WebTransportStream
+from pywebtransport.constants import DEFAULT_MAX_MESSAGE_SIZE
 from pywebtransport.exceptions import SerializationError
-from pywebtransport.messaging.stream import StructuredStream
 from pywebtransport.types import Serializer
 
 
@@ -104,7 +103,7 @@ class TestStructuredStream:
         assert structured_stream._registry is registry
         assert structured_stream._class_to_id == expected_class_to_id
         assert structured_stream._max_message_size == DEFAULT_MAX_MESSAGE_SIZE
-        assert structured_stream._write_lock is None
+        assert isinstance(structured_stream._write_lock, asyncio.Lock)
 
     def test_init_with_duplicate_registry_types_raises_error(
         self, mock_stream: AsyncMock, mock_serializer: MagicMock
@@ -226,8 +225,7 @@ class TestStructuredStream:
 
         await asyncio.gather(structured_stream.send_obj(obj=obj), structured_stream.send_obj(obj=obj))
 
-        assert structured_stream._write_lock is not None
-        assert mock_stream.write.await_count == 4
+        assert mock_stream.write.await_count == 2
 
     @pytest.mark.asyncio
     async def test_send_obj_successful(
@@ -242,9 +240,9 @@ class TestStructuredStream:
 
         mock_serializer.serialize.assert_called_once_with(obj=obj_to_send)
         header = struct.pack("!HI", type_id, len(serialized_payload))
+        full_packet = header + serialized_payload
 
-        assert mock_stream.write.await_count == 2
-        mock_stream.write.assert_has_awaits([call(data=header), call(data=serialized_payload)])
+        mock_stream.write.assert_awaited_once_with(data=full_packet)
 
     @pytest.mark.asyncio
     async def test_send_obj_unregistered_raises_error(

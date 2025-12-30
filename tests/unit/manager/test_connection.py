@@ -9,7 +9,7 @@ from pytest_mock import MockerFixture
 
 from pywebtransport.connection import WebTransportConnection
 from pywebtransport.events import EventEmitter
-from pywebtransport.manager.connection import ConnectionManager
+from pywebtransport.manager import ConnectionManager
 from pywebtransport.types import ConnectionState
 
 
@@ -37,6 +37,14 @@ class TestConnectionManager:
             assert conn_id == "conn-1"
             assert len(manager) == 1
             assert await manager.get_resource(resource_id="conn-1") is mock_connection
+
+    @pytest.mark.asyncio
+    async def test_close_resource_idempotency(self, manager: ConnectionManager, mock_connection: MagicMock) -> None:
+        mock_connection.is_closed = True
+
+        await manager._close_resource(resource=mock_connection)
+
+        mock_connection.close.assert_not_called()
 
     def test_get_resource_id(self, manager: ConnectionManager, mock_connection: MagicMock) -> None:
         assert manager._get_resource_id(resource=mock_connection) == "conn-1"
@@ -146,6 +154,13 @@ class TestConnectionManager:
     @pytest.mark.asyncio
     async def test_remove_connection_no_lock(self, manager: ConnectionManager) -> None:
         assert await manager.remove_connection(connection_id="c1") is None
+
+    def test_schedule_close_idempotency(self, manager: ConnectionManager, mock_connection: MagicMock) -> None:
+        mock_connection.is_closed = True
+
+        manager._schedule_close(connection=mock_connection)
+
+        mock_connection.close.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_shutdown_waits_for_closing_tasks(

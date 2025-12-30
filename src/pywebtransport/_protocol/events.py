@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Generic, TypeVar
+from typing import Any
 
-from pywebtransport.types import Buffer, ErrorCode, EventType, Future, Headers, SessionId, StreamId
+from pywebtransport.types import Buffer, ErrorCode, EventType, Headers, RequestId, SessionId, StreamId
 
 __all__: list[str] = []
-
-T = TypeVar("T")
 
 
 @dataclass(kw_only=True, frozen=True, slots=True)
@@ -21,19 +19,18 @@ class ProtocolEvent:
 class InternalBindH3Session(ProtocolEvent):
     """Internal command to bind a created H3 session to the state."""
 
-    session_id: SessionId
-    control_stream_id: StreamId
-    future: Future[SessionId]
+    request_id: RequestId
+    stream_id: StreamId
 
 
 @dataclass(kw_only=True, frozen=True, slots=True)
 class InternalBindQuicStream(ProtocolEvent):
     """Internal command to bind a created QUIC stream to the state."""
 
+    request_id: RequestId
     stream_id: StreamId
     session_id: SessionId
     is_unidirectional: bool
-    future: Future[StreamId]
 
 
 @dataclass(kw_only=True, frozen=True, slots=True)
@@ -50,19 +47,18 @@ class InternalCleanupResources(ProtocolEvent):
 class InternalFailH3Session(ProtocolEvent):
     """Internal command to handle a failed H3 session creation attempt."""
 
-    session_id: SessionId
+    request_id: RequestId
     exception: Exception
-    future: Future[SessionId]
 
 
 @dataclass(kw_only=True, frozen=True, slots=True)
 class InternalFailQuicStream(ProtocolEvent):
     """Internal command to handle a failed QUIC stream creation attempt."""
 
+    request_id: RequestId
     session_id: SessionId
     is_unidirectional: bool
     exception: Exception
-    future: Future[StreamId]
 
 
 @dataclass(kw_only=True, frozen=True, slots=True)
@@ -177,16 +173,16 @@ class WebTransportStreamDataReceived(H3Event):
     """Represent semantic data received on an established WebTransport stream."""
 
     data: Buffer
-    control_stream_id: StreamId
+    session_id: SessionId
     stream_id: StreamId
     stream_ended: bool
 
 
 @dataclass(kw_only=True, frozen=True, slots=True)
-class UserEvent(ProtocolEvent, Generic[T]):
+class UserEvent[T](ProtocolEvent):
     """Base class for commands originating from the user-facing API."""
 
-    future: Future[T]
+    request_id: RequestId
 
 
 @dataclass(kw_only=True, frozen=True, slots=True)
@@ -340,30 +336,21 @@ class CloseQuicConnection(Effect):
 
 
 @dataclass(kw_only=True, frozen=True, slots=True)
-class CompleteUserFuture(Effect):
-    """Effect to complete a user's future."""
-
-    future: Future[Any]
-    value: Any = None
-
-
-@dataclass(kw_only=True, frozen=True, slots=True)
 class CreateH3Session(Effect):
     """Effect instructing Engine to initiate H3 session creation."""
 
-    session_id: SessionId
+    request_id: RequestId
     path: str
     headers: Headers
-    create_future: Future[Any]
 
 
 @dataclass(kw_only=True, frozen=True, slots=True)
 class CreateQuicStream(Effect):
     """Effect instructing Adapter to create a new QUIC stream."""
 
+    request_id: RequestId
     session_id: SessionId
     is_unidirectional: bool
-    create_future: Future[Any]
 
 
 @dataclass(kw_only=True, frozen=True, slots=True)
@@ -393,20 +380,35 @@ class EmitStreamEvent(Effect):
 
 
 @dataclass(kw_only=True, frozen=True, slots=True)
-class FailUserFuture(Effect):
-    """Effect to fail a user's future with an exception."""
-
-    future: Future[Any]
-    exception: Exception
-
-
-@dataclass(kw_only=True, frozen=True, slots=True)
 class LogH3Frame(Effect):
     """Effect instructing Adapter to log an H3-level frame."""
 
     category: str
     event: str
     data: dict[str, Any]
+
+
+@dataclass(kw_only=True, frozen=True, slots=True)
+class NotifyRequestDone(Effect):
+    """Effect to notify that a user request has completed successfully."""
+
+    request_id: RequestId
+    result: Any
+
+
+@dataclass(kw_only=True, frozen=True, slots=True)
+class NotifyRequestFailed(Effect):
+    """Effect to notify that a user request has failed."""
+
+    request_id: RequestId
+    exception: Exception
+
+
+@dataclass(kw_only=True, frozen=True, slots=True)
+class ProcessProtocolEvent(Effect):
+    """Effect instructing the Adapter to re-process a protocol event."""
+
+    event: ProtocolEvent
 
 
 @dataclass(kw_only=True, frozen=True, slots=True)
@@ -429,6 +431,7 @@ class SendH3Capsule(Effect):
     stream_id: StreamId
     capsule_type: int
     capsule_data: Buffer
+    end_stream: bool = False
 
 
 @dataclass(kw_only=True, frozen=True, slots=True)

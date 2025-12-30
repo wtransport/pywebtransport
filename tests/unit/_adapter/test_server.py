@@ -22,24 +22,26 @@ class TestCreateServer:
 
     @pytest.fixture
     def mock_create_quic_config(self, mocker: MockerFixture) -> MagicMock:
-        return cast(MagicMock, mocker.patch("pywebtransport._adapter.server.create_quic_configuration"))
+        return cast(MagicMock, mocker.patch(target="pywebtransport._adapter.server.create_quic_configuration"))
 
     @pytest.fixture
     def mock_quic_serve(self, mocker: MockerFixture) -> MagicMock:
-        return cast(MagicMock, mocker.patch("pywebtransport._adapter.server.quic_serve", new_callable=mocker.AsyncMock))
-
-    @pytest.fixture
-    def valid_cert_paths(self, tmp_path: Path) -> tuple[Path, Path]:
-        cert = tmp_path / "cert.pem"
-        key = tmp_path / "key.pem"
-        cert.touch()
-        key.touch()
-        return cert, key
+        return cast(
+            MagicMock, mocker.patch(target="pywebtransport._adapter.server.quic_serve", new_callable=mocker.AsyncMock)
+        )
 
     @pytest.fixture
     def server_config(self, valid_cert_paths: tuple[Path, Path]) -> ServerConfig:
         cert, key = valid_cert_paths
         return ServerConfig(certfile=str(cert), keyfile=str(key))
+
+    @pytest.fixture
+    def valid_cert_paths(self, tmp_path: Path) -> tuple[Path, Path]:
+        cert = tmp_path / "ca.pem"
+        key = tmp_path / "key.pem"
+        cert.touch()
+        key.touch()
+        return cert, key
 
     async def test_create_server_protocol_factory(
         self,
@@ -49,12 +51,12 @@ class TestCreateServer:
         mock_create_quic_config: MagicMock,
         mocker: MockerFixture,
     ) -> None:
-        mocker.patch("pywebtransport._adapter.base.WebTransportCommonProtocol.__init__", return_value=None)
+        mocker.patch(target="pywebtransport._adapter.base.WebTransportCommonProtocol.__init__", return_value=None)
 
         await create_server(host="127.0.0.1", port=4433, config=server_config, connection_creator=connection_creator)
 
         factory = mock_quic_serve.call_args.kwargs["create_protocol"]
-        protocol = factory(quic=MagicMock())
+        protocol = factory(quic=MagicMock(), stream_handler=MagicMock())
 
         assert isinstance(protocol, WebTransportServerProtocol)
         assert protocol._server_config == server_config
@@ -111,16 +113,24 @@ class TestWebTransportServerProtocol:
     @pytest.fixture
     def mock_loop(self, mocker: MockerFixture) -> MagicMock:
         loop = mocker.Mock(spec=asyncio.AbstractEventLoop)
-        mocker.patch("asyncio.get_running_loop", return_value=loop)
+        mocker.patch(target="asyncio.get_running_loop", return_value=loop)
         return cast(MagicMock, loop)
 
     @pytest.fixture
     def mock_quic(self, mocker: MockerFixture) -> MagicMock:
-        return cast(MagicMock, mocker.Mock(spec=QuicConnection))
+        quic = mocker.Mock(spec=QuicConnection)
+        quic.host_cid = b"test_cid"
+        quic.configuration = mocker.Mock()
+        quic.configuration.is_client = False
+        return cast(MagicMock, quic)
 
     @pytest.fixture
     def mock_server_config(self, mocker: MockerFixture) -> MagicMock:
-        return cast(MagicMock, mocker.Mock(spec=ServerConfig))
+        config = mocker.Mock(spec=ServerConfig)
+        config.max_event_queue_size = 100
+        config.resource_cleanup_interval = 1.0
+        config.pending_event_ttl = 1.0
+        return cast(MagicMock, config)
 
     @pytest.fixture
     def protocol(
@@ -131,16 +141,14 @@ class TestWebTransportServerProtocol:
         mock_loop: MagicMock,
     ) -> WebTransportServerProtocol:
         return WebTransportServerProtocol(
-            quic=mock_quic,
-            server_config=mock_server_config,
-            connection_creator=mock_connection_creator,
-            loop=mock_loop,
+            quic=mock_quic, server_config=mock_server_config, connection_creator=mock_connection_creator, loop=mock_loop
         )
 
     def test_connection_made(
         self, protocol: WebTransportServerProtocol, mock_connection_creator: MagicMock, mocker: MockerFixture
     ) -> None:
         mock_transport = mocker.Mock(spec=asyncio.DatagramTransport)
+        mock_transport.is_closing.return_value = False
 
         protocol.connection_made(transport=mock_transport)
 

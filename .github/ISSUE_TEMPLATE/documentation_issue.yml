@@ -10,7 +10,7 @@ body:
     attributes:
       label: "Affected URL"
       description: "Please provide the URL of the documentation page that has an issue."
-      placeholder: "e.g., https://docs.pywebtransport.org/en/latest/api-reference/session.html"
+      placeholder: "e.g., https://python.wtransport.org/en/latest/api-reference/session/"
     validations:
       required: true
 

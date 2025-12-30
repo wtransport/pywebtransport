@@ -28,13 +28,7 @@ logger = logging.getLogger("test_advanced_features")
 async def test_session_statistics() -> bool:
     """Test the retrieval and correctness of session-level statistics."""
     logger.info("--- Test 07A: Session Statistics ---")
-    config = ClientConfig(
-        verify_mode=ssl.CERT_NONE,
-        connect_timeout=10.0,
-        initial_max_data=1024 * 1024,
-        initial_max_streams_bidi=100,
-        initial_max_streams_uni=100,
-    )
+    config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
@@ -43,7 +37,7 @@ async def test_session_statistics() -> bool:
 
             for i in range(3):
                 stream = await session.create_bidirectional_stream()
-                await stream.write_all(data=f"Stats test {i + 1}".encode())
+                await stream.write_all(data=f"Stats test {i + 1}".encode(), end_stream=True)
                 await stream.read_all()
 
             for i in range(5):
@@ -72,13 +66,7 @@ async def test_session_statistics() -> bool:
 async def test_connection_info() -> bool:
     """Test the retrieval of underlying connection information."""
     logger.info("--- Test 07B: Connection Information ---")
-    config = ClientConfig(
-        verify_mode=ssl.CERT_NONE,
-        connect_timeout=10.0,
-        initial_max_data=1024 * 1024,
-        initial_max_streams_bidi=100,
-        initial_max_streams_uni=100,
-    )
+    config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
@@ -107,13 +95,7 @@ async def test_connection_info() -> bool:
 async def test_client_statistics() -> bool:
     """Test the retrieval of client-wide statistics across multiple connections."""
     logger.info("--- Test 07C: Client-Wide Statistics ---")
-    config = ClientConfig(
-        verify_mode=ssl.CERT_NONE,
-        connect_timeout=10.0,
-        initial_max_data=1024 * 1024,
-        initial_max_streams_bidi=100,
-        initial_max_streams_uni=100,
-    )
+    config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
@@ -143,13 +125,7 @@ async def test_client_statistics() -> bool:
 async def test_stream_management_diagnostics() -> bool:
     """Test advanced stream management features via diagnostics."""
     logger.info("--- Test 07D: Stream Management (Diagnostics) ---")
-    config = ClientConfig(
-        verify_mode=ssl.CERT_NONE,
-        connect_timeout=10.0,
-        initial_max_data=1024 * 1024,
-        initial_max_streams_bidi=100,
-        initial_max_streams_uni=100,
-    )
+    config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
@@ -186,13 +162,7 @@ async def test_stream_management_diagnostics() -> bool:
 async def test_datagram_statistics() -> bool:
     """Test retrieval of detailed statistics for the datagram transport."""
     logger.info("--- Test 07E: Datagram Statistics ---")
-    config = ClientConfig(
-        verify_mode=ssl.CERT_NONE,
-        connect_timeout=10.0,
-        initial_max_data=1024 * 1024,
-        initial_max_streams_bidi=100,
-        initial_max_streams_uni=100,
-    )
+    config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
@@ -225,13 +195,7 @@ async def test_datagram_statistics() -> bool:
 async def test_performance_monitoring() -> bool:
     """Test a simple performance monitoring loop over multiple transfers."""
     logger.info("--- Test 07F: Performance Monitoring ---")
-    config = ClientConfig(
-        verify_mode=ssl.CERT_NONE,
-        connect_timeout=10.0,
-        initial_max_data=1024 * 1024,
-        initial_max_streams_bidi=100,
-        initial_max_streams_uni=100,
-    )
+    config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
@@ -243,7 +207,7 @@ async def test_performance_monitoring() -> bool:
                 for _ in range(3):
                     stream = await session.create_bidirectional_stream()
                     start_time = time.time()
-                    await stream.write_all(data=b"x" * size)
+                    await stream.write_all(data=b"x" * size, end_stream=True)
                     await stream.read(max_bytes=size + 10)
                     latencies.append(time.time() - start_time)
                     await stream.close()
@@ -261,13 +225,7 @@ async def test_performance_monitoring() -> bool:
 async def test_session_lifecycle_events() -> bool:
     """Test the basic session lifecycle event flow."""
     logger.info("--- Test 07G: Session Lifecycle Events ---")
-    config = ClientConfig(
-        verify_mode=ssl.CERT_NONE,
-        connect_timeout=10.0,
-        initial_max_data=1024 * 1024,
-        initial_max_streams_bidi=100,
-        initial_max_streams_uni=100,
-    )
+    config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         events_received = []
@@ -292,10 +250,7 @@ async def test_session_lifecycle_events() -> bool:
 async def test_server_diagnostics() -> bool:
     """Test retrieving the server's diagnostics API."""
     logger.info("--- Test 07H: Server-Side Diagnostics ---")
-    config = ClientConfig(
-        verify_mode=ssl.CERT_NONE,
-        connect_timeout=10.0,
-    )
+    config = ClientConfig(verify_mode=ssl.CERT_NONE)
     try:
         async with WebTransportClient(config=config) as client:
             session = await client.connect(url=SERVER_URL + "diagnostics")

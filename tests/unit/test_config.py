@@ -1,11 +1,12 @@
 """Unit tests for the pywebtransport.config module."""
 
 import ssl
-from typing import Any
+from typing import Any, Union, get_type_hints
+from unittest.mock import patch
 
 import pytest
 
-from pywebtransport import ClientConfig, ConfigurationError, ServerConfig, __version__
+from pywebtransport import ClientConfig, ConfigurationError, Headers, ServerConfig
 from pywebtransport.constants import (
     DEFAULT_ALPN_PROTOCOLS,
     DEFAULT_CONNECT_TIMEOUT,
@@ -34,9 +35,8 @@ class TestClientConfig:
 
         assert config.connect_timeout == DEFAULT_CONNECT_TIMEOUT
         assert config.verify_mode == ssl.CERT_REQUIRED
-        assert config.user_agent == f"PyWebTransport/{__version__}"
-        if isinstance(config.headers, dict):
-            assert config.headers["user-agent"] == f"PyWebTransport/{__version__}"
+        assert config.user_agent is None
+        assert config.headers == {}
         assert config.congestion_control_algorithm == "cubic"
         assert config.flow_control_window_size == DEFAULT_FLOW_CONTROL_WINDOW_SIZE
         assert config.initial_max_data == DEFAULT_INITIAL_MAX_DATA
@@ -50,37 +50,42 @@ class TestClientConfig:
         assert config.max_connection_retries == 5
         assert not hasattr(config, "unknown_field")
 
+    def test_from_dict_missing_type_hint(self) -> None:
+        def mock_get_type_hints(obj: Any) -> dict[str, Any]:
+            hints = get_type_hints(obj)
+            if "max_connection_retries" in hints:
+                del hints["max_connection_retries"]
+            return hints
+
+        with patch("pywebtransport.config.get_type_hints", side_effect=mock_get_type_hints):
+            config = ClientConfig.from_dict(config_dict={"max_connection_retries": 5})
+            assert config.max_connection_retries == 5
+
+    def test_from_dict_multi_union_ignored(self) -> None:
+        def mock_get_type_hints(obj: Any) -> dict[str, Any]:
+            hints = get_type_hints(obj)
+            hints["max_connections"] = Union[int, str]
+            return hints
+
+        with patch("pywebtransport.config.get_type_hints", side_effect=mock_get_type_hints):
+            config = ClientConfig.from_dict(config_dict={"max_connections": 5})
+            assert config.max_connections == 5
+
+    def test_headers_remain_as_provided(self) -> None:
+        headers: Headers = {"X-Custom": "Value", "User-Agent": "Custom/1.0"}
+        config = ClientConfig(headers=headers)
+
+        assert config.headers == headers
+        assert isinstance(config.headers, dict)
+        assert config.headers["X-Custom"] == "Value"
+        assert config.user_agent is None
+
     def test_initialization_with_none_timeout(self) -> None:
         config = ClientConfig(read_timeout=None)
 
         assert config.read_timeout is None
 
-    def test_post_init_normalizes_headers_dict(self) -> None:
-        config = ClientConfig(headers={"X-Custom": "Value"})
-
-        assert isinstance(config.headers, dict)
-        assert config.headers["x-custom"] == "Value"
-
-    def test_post_init_normalizes_headers_list(self) -> None:
-        config = ClientConfig(headers=[("X-Custom", "Value")])
-
-        assert isinstance(config.headers, list)
-        assert ("x-custom", "Value") in config.headers
-        assert ("user-agent", f"PyWebTransport/{__version__}") in config.headers
-
-    def test_post_init_preserves_user_agent_dict(self) -> None:
-        config = ClientConfig(headers={"user-agent": "custom-agent/1.0"})
-
-        assert config.user_agent == f"PyWebTransport/{__version__}"
-        assert isinstance(config.headers, dict)
-        assert config.headers["user-agent"] == "custom-agent/1.0"
-
-    def test_post_init_preserves_user_agent_list(self) -> None:
-        config = ClientConfig(headers=[("user-agent", "custom-agent/1.0")])
-
-        assert isinstance(config.headers, list)
-        assert ("user-agent", "custom-agent/1.0") in config.headers
-        assert len(config.headers) == 1
+        config.validate()
 
     def test_to_dict_method(self) -> None:
         config = ClientConfig(verify_mode=ssl.CERT_OPTIONAL)
@@ -133,9 +138,10 @@ class TestClientConfig:
         base_config = ClientConfig().to_dict()
         base_config["verify_mode"] = ssl.CERT_REQUIRED
         test_config = {**base_config, **invalid_attrs}
+        config = ClientConfig(**test_config)
 
         with pytest.raises(ConfigurationError, match=error_match):
-            ClientConfig(**test_config)
+            config.validate()
 
     @pytest.mark.parametrize(
         "invalid_attrs, error_match",
@@ -150,9 +156,10 @@ class TestClientConfig:
         base_config = ClientConfig().to_dict()
         base_config["verify_mode"] = ssl.CERT_REQUIRED
         test_config = {**base_config, **invalid_attrs}
+        config = ClientConfig(**test_config)
 
         with pytest.raises(ConfigurationError, match=error_match):
-            ClientConfig(**test_config)
+            config.validate()
 
 
 class TestServerConfig:
@@ -160,7 +167,7 @@ class TestServerConfig:
     def test_default_initialization(self) -> None:
         config = ServerConfig(certfile="dummy.crt", keyfile="dummy.key")
 
-        assert config.bind_host == "localhost"
+        assert config.bind_host == "::"
         assert config.max_connections == DEFAULT_SERVER_MAX_CONNECTIONS
         assert config.congestion_control_algorithm == "cubic"
         assert config.flow_control_window_size == DEFAULT_FLOW_CONTROL_WINDOW_SIZE
@@ -174,11 +181,21 @@ class TestServerConfig:
 
         assert config.bind_port == 8080
 
-    def test_from_dict_invalid_port_raises_error(self) -> None:
-        config_dict = {"bind_port": "invalid", "certfile": "dummy.crt", "keyfile": "dummy.key"}
+    def test_from_dict_enum_conversion_failure_ignored(self) -> None:
+        config_dict = {"bind_port": 8080, "certfile": "c", "keyfile": "k", "verify_mode": "INVALID_MODE"}
+        config = ServerConfig.from_dict(config_dict=config_dict)
 
-        with pytest.raises(ConfigurationError, match="Port must be an integer"):
-            ServerConfig.from_dict(config_dict=config_dict)
+        assert config.verify_mode == "INVALID_MODE"  # type: ignore[comparison-overlap]
+
+        with pytest.raises(ConfigurationError, match="unknown SSL verify mode"):
+            config.validate()
+
+    def test_from_dict_enum_conversion_success(self) -> None:
+        config_dict = {"bind_port": 8080, "certfile": "c", "keyfile": "k", "verify_mode": "CERT_NONE"}
+        config = ServerConfig.from_dict(config_dict=config_dict)
+
+        assert config.verify_mode == ssl.CERT_NONE
+        assert isinstance(config.verify_mode, ssl.VerifyMode)
 
     def test_from_dict_filtering_extra_keys(self) -> None:
         config_dict = {
@@ -193,13 +210,42 @@ class TestServerConfig:
         assert config.max_connections == 500
         assert not hasattr(config, "unknown_field")
 
+    def test_from_dict_invalid_port_raises_error(self) -> None:
+        config_dict = {"bind_port": "invalid", "certfile": "dummy.crt", "keyfile": "dummy.key"}
+        config = ServerConfig.from_dict(config_dict=config_dict)
+
+        with pytest.raises(ConfigurationError, match="Port must be an integer"):
+            config.validate()
+
+    def test_from_dict_union_enum_resolution(self) -> None:
+        def mock_get_type_hints(obj: Any) -> dict[str, Any]:
+            hints = get_type_hints(obj)
+            hints["verify_mode"] = Union[ssl.VerifyMode, str]
+            hints["bind_host"] = Union[int, str]
+            hints["keyfile"] = Union[int, ssl.VerifyMode]
+            return hints
+
+        with patch("pywebtransport.config.get_type_hints", side_effect=mock_get_type_hints):
+            config1 = ServerConfig.from_dict(config_dict={"verify_mode": "CERT_NONE", "certfile": "c", "keyfile": "k"})
+            assert config1.verify_mode == ssl.CERT_NONE
+
+            config2 = ServerConfig.from_dict(config_dict={"bind_host": "localhost", "certfile": "c", "keyfile": "k"})
+            assert config2.bind_host == "localhost"
+
+            config3 = ServerConfig.from_dict(config_dict={"keyfile": "CERT_OPTIONAL", "certfile": "c"})
+            assert config3.keyfile == ssl.CERT_OPTIONAL  # type: ignore[comparison-overlap]
+
     def test_initialization_fails_without_bind_host(self) -> None:
+        config = ServerConfig(bind_host="", certfile="c", keyfile="k")
+
         with pytest.raises(ConfigurationError, match="cannot be empty"):
-            ServerConfig(bind_host="", certfile="c", keyfile="k")
+            config.validate()
 
     def test_initialization_fails_without_certs(self) -> None:
+        config = ServerConfig(certfile=None, keyfile=None)
+
         with pytest.raises(ConfigurationError, match="Server requires both certificate and key files"):
-            ServerConfig(certfile="", keyfile="")
+            config.validate()
 
     def test_to_dict_method(self) -> None:
         config = ServerConfig(verify_mode=ssl.CERT_REQUIRED, certfile="d.crt", keyfile="d.key")
@@ -255,6 +301,7 @@ class TestServerConfig:
         base_config = ServerConfig(certfile="dummy.crt", keyfile="dummy.key").to_dict()
         base_config["verify_mode"] = ssl.CERT_NONE
         test_config = {**base_config, **invalid_attrs}
+        config = ServerConfig(**test_config)
 
         with pytest.raises(ConfigurationError, match=error_match):
-            ServerConfig(**test_config)
+            config.validate()

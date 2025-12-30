@@ -5,7 +5,7 @@ from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-import pytest_asyncio
+from pytest_asyncio import fixture as asyncio_fixture
 
 from pywebtransport import ConfigurationError, Event, SessionError, StructuredDatagramTransport, TimeoutError
 from pywebtransport.exceptions import SerializationError
@@ -34,7 +34,7 @@ class TestStructuredDatagramTransport:
     def registry(self) -> dict[int, type[Any]]:
         return {1: int, 2: str}
 
-    @pytest_asyncio.fixture
+    @asyncio_fixture
     async def transport(
         self, mock_session: Mock, mock_serializer: Mock, registry: dict[int, type[Any]]
     ) -> StructuredDatagramTransport:
@@ -122,11 +122,17 @@ class TestStructuredDatagramTransport:
         self, mock_session: Mock, mock_serializer: Mock, registry: dict[int, type[Any]]
     ) -> None:
         transport = StructuredDatagramTransport(session=mock_session, serializer=mock_serializer, registry=registry)
-        transport.initialize()
-        handler = mock_session.events.on.call_args.kwargs["handler"]
+        mock_weakref = Mock(return_value=None)
 
-        with patch("weakref.ref", side_effect=[lambda: None]):
-            await handler(Event(type=EventType.DATAGRAM_RECEIVED, data={"data": b"dummy"}))
+        with patch("weakref.ref", return_value=mock_weakref):
+            transport.initialize()
+
+        handler = mock_session.events.on.call_args.kwargs["handler"]
+        event = Event(type=EventType.DATAGRAM_RECEIVED, data={"data": b"dummy"})
+
+        with patch.object(transport, "_on_datagram_received", new_callable=AsyncMock) as mock_method:
+            await handler(event)
+            mock_method.assert_not_called()
 
     def test_init_raises_configuration_error_on_duplicate_types(
         self, mock_session: Mock, mock_serializer: Mock
@@ -247,6 +253,25 @@ class TestStructuredDatagramTransport:
             await transport._on_datagram_received(event=event)
             await transport._on_datagram_received(event=event)
             mock_logger.warning.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_on_datagram_received_queue_full_session_collected(
+        self, mock_session: Mock, mock_serializer: Mock, registry: dict[int, type[Any]]
+    ) -> None:
+        transport = StructuredDatagramTransport(session=mock_session, serializer=mock_serializer, registry=registry)
+        transport.initialize(queue_size=1)
+        header = struct.pack("!H", 1)
+        payload = b"123"
+        event = Event(type=EventType.DATAGRAM_RECEIVED, data={"data": header + payload})
+
+        with patch("pywebtransport.messaging.datagram.logger") as mock_logger:
+            await transport._on_datagram_received(event=event)
+            with patch.object(transport, "_session", return_value=None):
+                await transport._on_datagram_received(event=event)
+
+            assert mock_logger.warning.call_count == 1
+            args, _ = mock_logger.warning.call_args
+            assert "unknown" in args
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

@@ -28,6 +28,12 @@ class MockResource:
         return self.closed
 
 
+class FalsyResource(MockResource):
+
+    def __bool__(self) -> bool:
+        return False
+
+
 class ConcreteResourceManager(BaseResourceManager[str, MockResource]):
 
     _resource_closed_event_type = EventType.CONNECTION_CLOSED
@@ -124,11 +130,18 @@ class TestBaseResourceManager:
             assert "test_item" in caplog.text
             assert "other" in caplog.text
 
-    async def test_add_resource_closed_inside_lock(
-        self, manager: ConcreteResourceManager, mocker: MockerFixture
-    ) -> None:
-        resource = MockResource("r1")
-        mocker.patch.object(MockResource, "is_closed", new_callable=mocker.PropertyMock).side_effect = [False, True]
+    async def test_add_resource_closed_inside_lock(self, manager: ConcreteResourceManager) -> None:
+        class FlakyClosedResource(MockResource):
+            def __init__(self, resource_id: str) -> None:
+                super().__init__(resource_id)
+                self._access_count = 0
+
+            @property
+            def is_closed(self) -> bool:
+                self._access_count += 1
+                return self._access_count > 1
+
+        resource = FlakyClosedResource("r1")
 
         async with manager:
             with pytest.raises(RuntimeError, match="Cannot add closed test_item"):
@@ -149,6 +162,16 @@ class TestBaseResourceManager:
             assert stats["total_created"] == 1
 
             assert "Resource r1 already managed." in caplog.text
+
+    async def test_add_resource_initially_closed(self, manager: ConcreteResourceManager) -> None:
+        resource = MockResource("r1")
+        await resource.close()
+
+        async with manager:
+            with pytest.raises(RuntimeError, match="Cannot add closed test_item"):
+                await manager.add_resource(resource=resource)
+
+        assert len(manager) == 0
 
     async def test_add_resource_limit_reached(self, manager: ConcreteResourceManager) -> None:
         manager._max_resources = 1
@@ -247,6 +270,20 @@ class TestBaseResourceManager:
 
         assert "r1" not in manager._resources
         assert manager._stats["total_closed"] == 1
+
+    async def test_handle_resource_closed_falsy_resource(self, manager: ConcreteResourceManager) -> None:
+        resource = FalsyResource("r_falsy")
+
+        async with manager:
+            await manager.add_resource(resource=resource)
+            await manager._handle_resource_closed(resource_id="r_falsy")
+
+            assert len(manager) == 0
+            stats = await manager.get_stats()
+            assert stats["total_closed"] == 1
+
+    async def test_handle_resource_closed_no_lock(self, manager: ConcreteResourceManager) -> None:
+        await manager._handle_resource_closed(resource_id="r1")
 
     async def test_handle_resource_closed_resource_not_found(self, manager: ConcreteResourceManager) -> None:
         manager._lock = asyncio.Lock()

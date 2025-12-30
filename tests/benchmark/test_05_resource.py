@@ -23,14 +23,7 @@ logging.basicConfig(level=logging.CRITICAL)
 
 @pytest.fixture(scope="module")
 def client_config() -> ClientConfig:
-    return ClientConfig(
-        verify_mode=ssl.CERT_NONE,
-        connect_timeout=60.0,
-        max_connections=2000,
-        initial_max_data=1048576,
-        initial_max_streams_bidi=100,
-        initial_max_streams_uni=100,
-    )
+    return ClientConfig(verify_mode=ssl.CERT_NONE, connect_timeout=60.0, max_connections=2000)
 
 
 class TestResourceUtilization:

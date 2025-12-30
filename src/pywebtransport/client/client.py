@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
-from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, field
 from types import TracebackType
 from typing import Any, Self
 
-from pywebtransport._adapter.client import create_connection
-from pywebtransport.client.utils import parse_webtransport_url, validate_url
+from pywebtransport.client.utils import normalize_headers, parse_webtransport_url, validate_url
 from pywebtransport.config import ClientConfig
 from pywebtransport.connection import WebTransportConnection
 from pywebtransport.events import EventEmitter
@@ -19,6 +17,7 @@ from pywebtransport.manager.connection import ConnectionManager
 from pywebtransport.session import WebTransportSession
 from pywebtransport.types import URL, ConnectionState, EventType, Headers
 from pywebtransport.utils import format_duration, get_logger, get_timestamp, merge_headers
+from pywebtransport.version import __version__
 
 __all__: list[str] = ["ClientDiagnostics", "ClientStats", "WebTransportClient"]
 
@@ -92,20 +91,14 @@ class ClientStats:
 class WebTransportClient(EventEmitter):
     """A client for establishing WebTransport connections and sessions."""
 
-    def __init__(
-        self,
-        *,
-        config: ClientConfig | None = None,
-        connection_factory: Callable[..., Awaitable[WebTransportConnection]] = create_connection,
-    ) -> None:
+    def __init__(self, *, config: ClientConfig | None = None) -> None:
         """Initialize the WebTransport client."""
-        self._config = config or ClientConfig()
+        self._config = config if config is not None else ClientConfig()
         super().__init__(
             max_queue_size=self._config.max_event_queue_size,
             max_listeners=self._config.max_event_listeners,
             max_history=self._config.max_event_history_size,
         )
-        self._connection_factory = connection_factory
         self._connection_manager = ConnectionManager(max_connections=self._config.max_connections)
         self._default_headers: Headers = []
         self._closed = False
@@ -137,7 +130,7 @@ class WebTransportClient(EventEmitter):
 
     async def close(self) -> None:
         """Close the client and all underlying connections."""
-        if self._close_task and not self._close_task.done():
+        if self._close_task is not None and not self._close_task.done():
             await self._close_task
             return
 
@@ -156,7 +149,7 @@ class WebTransportClient(EventEmitter):
 
         validate_url(url=url)
         host, port, path = parse_webtransport_url(url=url)
-        connect_timeout = timeout or self._config.connect_timeout
+        connect_timeout = timeout if timeout is not None else self._config.connect_timeout
         logger.info("Connecting to %s:%s%s", host, port, path)
         self._stats.connections_attempted += 1
 
@@ -166,10 +159,29 @@ class WebTransportClient(EventEmitter):
 
         try:
             async with asyncio.timeout(delay=connect_timeout):
-                connection_headers = merge_headers(base=self._default_headers, update=headers)
-                conn_config = self._config.update(headers=connection_headers)
+                merged_headers = merge_headers(base=self._default_headers, update=headers)
+                normalized_headers = normalize_headers(headers=merged_headers)
 
-                connection = await self._connection_factory(
+                has_ua = False
+                if isinstance(normalized_headers, dict):
+                    has_ua = "user-agent" in normalized_headers
+                else:
+                    has_ua = any(key == "user-agent" for key, _ in normalized_headers)
+
+                if not has_ua:
+                    default_ua = (
+                        self._config.user_agent
+                        if self._config.user_agent is not None
+                        else f"PyWebTransport/{__version__}"
+                    )
+                    if isinstance(normalized_headers, dict):
+                        normalized_headers["user-agent"] = default_ua
+                    else:
+                        normalized_headers.append(("user-agent", default_ua))
+
+                conn_config = self._config.update(headers=normalized_headers)
+
+                connection = await WebTransportConnection.connect(
                     host=host, port=port, config=conn_config, loop=asyncio.get_running_loop()
                 )
 
@@ -189,7 +201,7 @@ class WebTransportClient(EventEmitter):
                 await self._connection_manager.add_connection(connection=connection)
 
                 logger.debug("Initiating session creation...")
-                session = await connection.create_session(path=path, headers=connection_headers)
+                session = await connection.create_session(path=path, headers=normalized_headers)
                 logger.debug("Session creation successful: %s", session.session_id)
 
                 elapsed = get_timestamp() - start_time
@@ -200,7 +212,11 @@ class WebTransportClient(EventEmitter):
 
         except asyncio.TimeoutError as e:
             self._stats.connections_failed += 1
-            stage = "session negotiation" if connection and connection.is_connected else "QUIC connection establishment"
+            stage = (
+                "session negotiation"
+                if connection is not None and connection.is_connected
+                else "QUIC connection establishment"
+            )
             logger.error(
                 "Connection timeout to %s during %s after %s", url, stage, format_duration(seconds=connect_timeout)
             )
@@ -216,7 +232,7 @@ class WebTransportClient(EventEmitter):
                 raise ConnectionError(message=f"Certificate verification failed for {url}: {e}") from e
             raise ClientError(message=f"Failed to connect to {url}: {e}") from e
         finally:
-            if not success and connection and not connection.is_closed:
+            if not success and connection is not None and not connection.is_closed:
                 await connection.close()
 
     async def diagnostics(self) -> ClientDiagnostics:

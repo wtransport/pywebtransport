@@ -34,7 +34,7 @@ def create_quic_configuration(
         verify_mode=verify_mode,
     )
 
-    if certfile and keyfile:
+    if certfile is not None and keyfile is not None:
         config.load_cert_chain(certfile=certfile, keyfile=keyfile)
 
     return config

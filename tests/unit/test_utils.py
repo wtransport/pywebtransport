@@ -7,13 +7,14 @@ from typing import Any, cast
 import pytest
 from pytest_mock import MockerFixture
 
+from pywebtransport import Headers
 from pywebtransport.utils import (
     Timer,
     ensure_buffer,
     format_duration,
     generate_self_signed_cert,
-    generate_session_id,
     get_header,
+    get_header_as_str,
     get_logger,
     get_timestamp,
     merge_headers,
@@ -37,9 +38,10 @@ class TestCertUtils:
         expected_key_path = tmp_path / "localhost.key"
         assert cert_file == str(expected_cert_path)
         assert key_file == str(expected_key_path)
-        mock_open.assert_any_call(expected_cert_path, "wb")
-        mock_open.assert_any_call(expected_key_path, "wb")
-        mock_chmod.assert_called_once_with(expected_key_path, 0o600)
+
+        mock_open.assert_any_call(file=expected_cert_path, mode="wb")
+        mock_open.assert_any_call(file=expected_key_path, mode="wb")
+        mock_chmod.assert_called_once_with(path=expected_key_path, mode=0o600)
 
 
 class TestDataConversionAndFormatting:
@@ -85,61 +87,95 @@ class TestDataConversionAndFormatting:
 
 class TestHeaderUtils:
 
+    def test_get_header_as_str_decoding(self) -> None:
+        headers: Headers = {b"content-type": b"application/json"}
+
+        result = get_header_as_str(headers=headers, key="content-type")
+
+        assert result == "application/json"
+
+    def test_get_header_as_str_default(self) -> None:
+        headers: Headers = {"host": "example.com"}
+
+        result = get_header_as_str(headers=headers, key="missing", default="default")
+
+        assert result == "default"
+
+    def test_get_header_as_str_existing_string(self) -> None:
+        headers: Headers = {"user-agent": "test-client"}
+
+        result = get_header_as_str(headers=headers, key="user-agent")
+
+        assert result == "test-client"
+
+    def test_get_header_as_str_invalid_utf8(self) -> None:
+        headers: Headers = {b"key": b"\xff\xfe"}
+
+        result = get_header_as_str(headers=headers, key="key", default="fallback")
+
+        assert result == "fallback"
+
+    def test_get_header_dual_mode_dict(self) -> None:
+        headers: Headers = {b"content-length": b"123", "server": "test"}
+
+        val_bytes = get_header(headers=headers, key="content-length")
+        val_str = get_header(headers=headers, key="server")
+
+        assert val_bytes == b"123"
+        assert val_str == "test"
+
+    def test_get_header_dual_mode_list(self) -> None:
+        headers: Headers = [(b"content-length", b"123"), ("server", "test")]
+
+        val_bytes = get_header(headers=headers, key="content-length")
+        val_str = get_header(headers=headers, key="server")
+
+        assert val_bytes == b"123"
+        assert val_str == "test"
+
     def test_get_header_from_dict(self) -> None:
-        headers = {"content-type": "application/json"}
+        headers: Headers = {"content-type": "application/json"}
 
         assert get_header(headers=headers, key="content-type") == "application/json"
         assert get_header(headers=headers, key="Unknown") is None
         assert get_header(headers=headers, key="Unknown", default="default") == "default"
 
     def test_get_header_from_list(self) -> None:
-        headers = [("Content-Type", "application/json")]
+        headers: Headers = [("Content-Type", "application/json")]
 
         assert get_header(headers=headers, key="content-type") == "application/json"
         assert get_header(headers=headers, key="Unknown") is None
 
     def test_merge_headers_dict(self) -> None:
-        base = {"a": "1"}
-        update = {"b": "2"}
+        base: Headers = {"a": "1"}
+        update: Headers = {"b": "2"}
 
         result = merge_headers(base=base, update=update)
 
         assert result == {"a": "1", "b": "2"}
 
     def test_merge_headers_list(self) -> None:
-        base = [("a", "1")]
-        update = [("b", "2")]
+        base: Headers = [("a", "1")]
+        update: Headers = [("b", "2")]
 
         result = merge_headers(base=base, update=update)
 
         assert result == [("a", "1"), ("b", "2")]
 
     def test_merge_headers_mixed(self) -> None:
-        base = {"a": "1"}
-        update = [("b", "2")]
+        base: Headers = {"a": "1"}
+        update: Headers = [("b", "2")]
 
         result = merge_headers(base=base, update=update)
 
         assert result == [("a", "1"), ("b", "2")]
 
     def test_merge_headers_none(self) -> None:
-        base = {"a": "1"}
-        base_list = [("a", "1")]
+        base: Headers = {"a": "1"}
+        base_list: Headers = [("a", "1")]
 
         assert merge_headers(base=base, update=None) == {"a": "1"}
         assert merge_headers(base=base_list, update=None) == [("a", "1")]
-
-
-class TestIdGenerators:
-
-    def test_generate_session_id(self, mocker: MockerFixture) -> None:
-        mock_token = mocker.patch("pywebtransport.utils.secrets.token_urlsafe")
-        mock_token.return_value = "test-id"
-
-        result = generate_session_id()
-
-        assert result == "test-id"
-        mock_token.assert_called_once_with(16)
 
 
 class TestLoggingUtils:
@@ -156,7 +192,8 @@ class TestTimer:
     def test_timer_context_manager(self, mocker: MockerFixture) -> None:
         mocker.patch("time.perf_counter", side_effect=[2000.0, 2002.3, 2002.3])
         mocker.patch("pywebtransport.utils.format_duration", return_value="2.3s")
-        mock_logger = mocker.patch("pywebtransport.utils.get_logger").return_value
+
+        mock_logger = mocker.patch("pywebtransport.utils._timer_logger")
 
         with Timer(name="context-timer") as timer:
             assert timer.start_time == 2000.0
