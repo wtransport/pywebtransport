@@ -9,7 +9,6 @@ from aioquic.quic.connection import QuicConnection
 from pywebtransport._adapter.base import WebTransportCommonProtocol
 from pywebtransport._adapter.utils import create_quic_configuration
 from pywebtransport.config import ClientConfig
-from pywebtransport.connection import WebTransportConnection
 from pywebtransport.utils import get_logger
 
 __all__: list[str] = []
@@ -20,13 +19,30 @@ logger = get_logger(name=__name__)
 class WebTransportClientProtocol(WebTransportCommonProtocol):
     """Adapt aioquic client events and actions for the WebTransportEngine."""
 
-    ...
+    def __init__(
+        self,
+        *,
+        quic: QuicConnection,
+        config: ClientConfig,
+        loop: asyncio.AbstractEventLoop | None = None,
+        max_event_queue_size: int,
+        stream_handler: asyncio.Protocol | None = None,
+    ) -> None:
+        """Initialize the client protocol adapter."""
+        super().__init__(
+            quic=quic,
+            config=config,
+            is_client=True,
+            stream_handler=stream_handler,
+            loop=loop,
+            max_event_queue_size=max_event_queue_size,
+        )
 
 
-async def create_connection(
+async def create_quic_endpoint(
     *, host: str, port: int, config: ClientConfig, loop: asyncio.AbstractEventLoop
-) -> WebTransportConnection:
-    """Establish the underlying QUIC connection and transport."""
+) -> tuple[asyncio.DatagramTransport, WebTransportClientProtocol]:
+    """Establish the underlying QUIC transport and protocol."""
     quic_config = create_quic_configuration(
         alpn_protocols=config.alpn_protocols,
         ca_certs=config.ca_certs,
@@ -44,7 +60,7 @@ async def create_connection(
 
     def protocol_factory() -> WebTransportClientProtocol:
         return WebTransportClientProtocol(
-            quic=quic_connection, loop=loop, max_event_queue_size=config.max_event_queue_size
+            quic=quic_connection, config=config, loop=loop, max_event_queue_size=config.max_event_queue_size
         )
 
     logger.debug("Creating datagram endpoint to %s:%d", host, port)
@@ -53,10 +69,8 @@ async def create_connection(
     )
     logger.debug("Datagram endpoint created.")
 
-    protocol._quic.connect(addr=(host, port), now=loop.time())
-    protocol.transmit()
+    client_protocol = protocol
+    client_protocol._quic.connect(addr=(host, port), now=loop.time())
+    client_protocol.transmit()
 
-    connection = WebTransportConnection(config=config, protocol=protocol, transport=transport, is_client=True)
-    await connection.initialize()
-
-    return connection
+    return transport, client_protocol

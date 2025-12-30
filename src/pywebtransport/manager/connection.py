@@ -51,7 +51,7 @@ class ConnectionManager(BaseResourceManager[ConnectionId, WebTransportConnection
                 self._event_handlers.pop(connection_id)
 
             removed_connection = self._resources.pop(connection_id, None)
-            if removed_connection:
+            if removed_connection is not None:
                 self._stats["total_closed"] += 1
                 self._update_stats_unsafe()
                 self._schedule_close(connection=removed_connection)
@@ -64,7 +64,7 @@ class ConnectionManager(BaseResourceManager[ConnectionId, WebTransportConnection
     async def get_stats(self) -> dict[str, Any]:
         """Get detailed statistics about the managed connections."""
         stats = await super().get_stats()
-        if self._lock:
+        if self._lock is not None:
             async with self._lock:
                 states: defaultdict[str, int] = defaultdict(int)
                 for conn in self._resources.values():
@@ -74,7 +74,8 @@ class ConnectionManager(BaseResourceManager[ConnectionId, WebTransportConnection
 
     async def _close_resource(self, *, resource: WebTransportConnection) -> None:
         """Close a single connection resource."""
-        await resource.close()
+        if not resource.is_closed:
+            await resource.close()
 
     def _get_resource_id(self, *, resource: WebTransportConnection) -> ConnectionId:
         """Get the unique ID from a connection object."""
@@ -91,7 +92,7 @@ class ConnectionManager(BaseResourceManager[ConnectionId, WebTransportConnection
                 self._event_handlers.pop(resource_id)
 
             conn = self._resources.pop(resource_id, None)
-            if conn:
+            if conn is not None:
                 self._stats["total_closed"] += 1
                 self._update_stats_unsafe()
                 self._schedule_close(connection=conn)
@@ -99,6 +100,9 @@ class ConnectionManager(BaseResourceManager[ConnectionId, WebTransportConnection
 
     def _schedule_close(self, *, connection: WebTransportConnection) -> None:
         """Schedule an asynchronous close task for a connection."""
+        if connection.is_closed:
+            return
+
         task = asyncio.create_task(coro=connection.close())
         self._closing_tasks.add(task)
         task.add_done_callback(self._closing_tasks.discard)

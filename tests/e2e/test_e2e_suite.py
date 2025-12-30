@@ -47,7 +47,7 @@ from .test_08_structured_messaging import test_msgpack_messaging as run_08_msgpa
 
 
 async def _is_server_ready() -> bool:
-    config = ClientConfig(verify_mode=ssl.CERT_NONE, connect_timeout=10.0)
+    config = ClientConfig(verify_mode=ssl.CERT_NONE)
     for _ in range(60):
         try:
             async with WebTransportClient(config=config) as client:

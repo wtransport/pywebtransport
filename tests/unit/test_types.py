@@ -137,8 +137,12 @@ class TestRuntimeCheckableProtocols:
                 return "/"
 
             @property
-            def session_id(self) -> str:
-                return "id"
+            def remote_address(self) -> tuple[str, int] | None:
+                return ("127.0.0.1", 443)
+
+            @property
+            def session_id(self) -> int:
+                return 1
 
             @property
             def state(self) -> SessionState:

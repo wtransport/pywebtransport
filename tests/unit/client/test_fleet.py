@@ -1,5 +1,6 @@
 """Unit tests for the pywebtransport.client.fleet module."""
 
+import asyncio
 from collections.abc import AsyncGenerator
 from typing import Any, cast
 from unittest.mock import AsyncMock
@@ -30,78 +31,87 @@ class TestClientFleet:
         for i in range(3):
             client = mocker.create_autospec(WebTransportClient, instance=True, name=f"Client-{i}")
             client.__aenter__ = mocker.AsyncMock(return_value=client)
-            client.close = mocker.AsyncMock()
+            client.__aexit__ = mocker.AsyncMock(return_value=None)
             client.connect = mocker.AsyncMock(return_value=mocker.create_autospec(WebTransportSession))
             clients.append(client)
         return clients
 
     @pytest.mark.asyncio
-    async def test_aenter_and_aexit_success(self, fleet_unactivated: ClientFleet, mock_clients: list[Any]) -> None:
+    async def test_aenter_and_aexit_lifecycle(self, fleet_unactivated: ClientFleet, mock_clients: list[Any]) -> None:
         async with fleet_unactivated:
             assert fleet_unactivated._active
             for client in mock_clients:
                 cast(AsyncMock, client.__aenter__).assert_awaited_once()
 
         for client in mock_clients:
-            cast(AsyncMock, client.close).assert_awaited_once()
-        assert fleet_unactivated.get_client_count() == 3
+            cast(AsyncMock, client.__aexit__).assert_awaited_once()
         assert not fleet_unactivated._active
 
     @pytest.mark.asyncio
-    async def test_aenter_failure_and_cleanup(self, mock_clients: list[Any], caplog: LogCaptureFixture) -> None:
+    async def test_aenter_cleanup_error(self, mock_clients: list[Any], caplog: LogCaptureFixture) -> None:
+        successful_client = mock_clients[0]
+        cast(AsyncMock, successful_client.__aenter__).return_value = successful_client
+        cast(AsyncMock, successful_client.__aexit__).side_effect = IOError("Cleanup fail")
+
         failing_client = mock_clients[1]
-        error = RuntimeError("Activation failed")
-        cast(AsyncMock, failing_client.__aenter__).side_effect = error
-        fleet = ClientFleet(clients=mock_clients)
+        cast(AsyncMock, failing_client.__aenter__).side_effect = RuntimeError("Startup fail")
 
-        with pytest.raises(ExceptionGroup) as exc_info:
-            async with fleet:
-                pass
-
-        assert exc_info.value.exceptions[0] is error
-        assert not fleet._active
-        for client in mock_clients:
-            cast(AsyncMock, client.close).assert_awaited_once()
-        assert "Failed to activate clients in fleet" in caplog.text
-
-    @pytest.mark.asyncio
-    async def test_aenter_failure_during_cleanup(self, mock_clients: list[Any], caplog: LogCaptureFixture) -> None:
-        cast(AsyncMock, mock_clients[1].__aenter__).side_effect = RuntimeError("Activation failed")
-        cast(AsyncMock, mock_clients[2].close).side_effect = IOError("Cleanup failed")
         fleet = ClientFleet(clients=mock_clients)
 
         with pytest.raises(ExceptionGroup):
             async with fleet:
                 pass
 
-        assert "Errors during client fleet startup cleanup" in caplog.text
+        assert "Error during fleet cleanup after activation failure" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_close_all_idempotency_when_inactive(self, fleet_unactivated: ClientFleet) -> None:
-        await fleet_unactivated.close_all()
+    async def test_aenter_rollback_logic(self, mock_clients: list[Any], mocker: MockerFixture) -> None:
+        successful_client = mock_clients[0]
+        failing_client = mock_clients[1]
+        started_event = asyncio.Event()
 
-        assert not fleet_unactivated._active
+        async def success_side_effect() -> Any:
+            started_event.set()
+            return successful_client
+
+        async def fail_side_effect() -> None:
+            await started_event.wait()
+            raise RuntimeError("Activation failed")
+
+        cast(AsyncMock, successful_client.__aenter__).side_effect = success_side_effect
+        cast(AsyncMock, failing_client.__aenter__).side_effect = fail_side_effect
+
+        fleet = ClientFleet(clients=mock_clients)
+
+        with pytest.raises(ExceptionGroup):
+            async with fleet:
+                pass
+
+        cast(AsyncMock, successful_client.__aexit__).assert_awaited_once()
+        cast(AsyncMock, failing_client.__aexit__).assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_close_all_with_failures(
-        self, fleet: ClientFleet, mock_clients: list[Any], caplog: LogCaptureFixture
+    async def test_aexit_logs_errors(
+        self, fleet_unactivated: ClientFleet, mock_clients: list[Any], caplog: LogCaptureFixture
     ) -> None:
-        cast(AsyncMock, mock_clients[0].close).side_effect = IOError("Close failed")
+        cast(AsyncMock, mock_clients[0].__aexit__).side_effect = IOError("Close failed")
 
-        await fleet.close_all()
+        async with fleet_unactivated:
+            pass
 
-        for client in mock_clients:
-            cast(AsyncMock, client.close).assert_awaited_once()
-        assert not fleet._active
-        assert fleet.get_client_count() == 3
-        assert "Errors occurred while closing client fleet" in caplog.text
+        assert "Error closing clients in fleet" in caplog.text
+        cast(AsyncMock, mock_clients[1].__aexit__).assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_connect_all_after_close(self, fleet: ClientFleet) -> None:
-        await fleet.close_all()
+    async def test_connect_all_concurrency_limit(self, fleet: ClientFleet, mocker: MockerFixture) -> None:
+        mock_sem = mocker.MagicMock()
+        mock_sem.__aenter__ = mocker.AsyncMock()
+        mock_sem.__aexit__ = mocker.AsyncMock()
+        fleet._connect_sem = mock_sem
 
-        with pytest.raises(ClientError, match="ClientFleet has not been activated"):
-            await fleet.connect_all(url="https://example.com")
+        await fleet.connect_all(url="https://example.com")
+
+        assert mock_sem.__aenter__.await_count == 3
 
     @pytest.mark.asyncio
     async def test_connect_all_with_mixed_results(
@@ -113,7 +123,7 @@ class TestClientFleet:
 
         sessions = await fleet.connect_all(url=url)
 
-        assert len(sessions) == len(mock_clients) - 1
+        assert len(sessions) == 2
         cast(AsyncMock, mock_clients[0].connect).assert_awaited_once_with(url=url)
         cast(AsyncMock, mock_clients[2].connect).assert_awaited_once_with(url=url)
         assert f"Client failed to connect: {error}" in caplog.text
@@ -134,10 +144,11 @@ class TestClientFleet:
         assert client_order[3] is mock_clients[0]
 
     def test_init_success(self, mock_clients: list[Any]) -> None:
-        fleet = ClientFleet(clients=mock_clients)
+        fleet = ClientFleet(clients=mock_clients, max_concurrent_handshakes=10)
 
         assert fleet.get_client_count() == len(mock_clients)
         assert not fleet._active
+        assert fleet._connect_sem._value == 10
 
     def test_init_with_no_clients(self) -> None:
         with pytest.raises(ValueError, match="ClientFleet requires at least one client instance"):

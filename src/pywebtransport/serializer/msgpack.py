@@ -35,8 +35,8 @@ class MsgPackSerializer(BaseDataclassSerializer, Serializer):
                 details={"installation_guide": "Please install it with: pip install pywebtransport[msgpack]"},
             )
 
-        self._pack_kwargs = pack_kwargs.copy() if pack_kwargs else {}
-        self._unpack_kwargs = unpack_kwargs.copy() if unpack_kwargs else {}
+        self._pack_kwargs = pack_kwargs.copy() if pack_kwargs is not None else {}
+        self._unpack_kwargs = unpack_kwargs.copy() if unpack_kwargs is not None else {}
         self._user_default = self._pack_kwargs.pop("default", None)
 
     def deserialize(self, *, data: Buffer, obj_type: Any = None) -> Any:
@@ -45,7 +45,7 @@ class MsgPackSerializer(BaseDataclassSerializer, Serializer):
             unpack_kwargs = {"raw": False, **self._unpack_kwargs}
             decoded_obj = msgpack.unpackb(packed=data, **unpack_kwargs)
 
-            if not obj_type:
+            if obj_type is None:
                 return decoded_obj
             return self.convert_to_type(data=decoded_obj, target_type=obj_type)
         except (msgpack.UnpackException, TypeError, ValueError) as e:
@@ -76,6 +76,6 @@ class MsgPackSerializer(BaseDataclassSerializer, Serializer):
             case _ if is_dataclass(o) and not isinstance(o, type):
                 return asdict(obj=o)
             case _:
-                if self._user_default:
+                if self._user_default is not None:
                     return self._user_default(o)
                 raise TypeError(f"Object of type {type(o).__name__} is not MsgPack serializable")

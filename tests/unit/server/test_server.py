@@ -191,6 +191,18 @@ class TestWebTransportServer:
         assert not server.is_serving
 
     @pytest.mark.asyncio
+    async def test_close_implementation_defensive_check_no_server(
+        self, server: WebTransportServer, mock_connection_manager: Any
+    ) -> None:
+        server._serving = True
+        server._server = None
+
+        await server.close()
+
+        mock_connection_manager.shutdown.assert_awaited_once()
+        assert server.is_serving is False
+
+    @pytest.mark.asyncio
     async def test_close_with_done_task(
         self, server: WebTransportServer, mock_quic_server: Any, mocker: MockerFixture
     ) -> None:
@@ -210,6 +222,21 @@ class TestWebTransportServer:
         mock_gather.assert_awaited_once()
         args = mock_gather.await_args[0]
         assert set(args) == {done_task, not_done_task}
+
+    @pytest.mark.asyncio
+    async def test_close_with_finished_previous_close_task(
+        self, server: WebTransportServer, mock_quic_server: Any, mocker: MockerFixture
+    ) -> None:
+        server._serving = True
+        server._server = mock_quic_server
+        done_task = mocker.create_autospec(asyncio.Task, instance=True)
+        done_task.done.return_value = True
+        server._close_task = done_task
+
+        await server.close()
+
+        assert server._close_task is not done_task
+        mock_quic_server.close.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_close_with_manager_shutdown_error(
@@ -236,11 +263,12 @@ class TestWebTransportServer:
         mock_transport.sendto = mocker.Mock()
         mock_transport.is_closing.return_value = False
         mock_protocol = mocker.MagicMock()
-        mocker.patch("pywebtransport.server.server.WebTransportConnection", side_effect=ValueError("Init failed"))
+        mocker.patch(
+            "pywebtransport.server.server.WebTransportConnection.accept", side_effect=ValueError("Factory failed")
+        )
 
-        conn = server._create_connection_callback(protocol=mock_protocol, transport=mock_transport)
+        server._create_connection_callback(protocol=mock_protocol, transport=mock_transport)
 
-        assert conn is None
         mock_transport.close.assert_called_once()
 
     @pytest.mark.asyncio
@@ -251,11 +279,12 @@ class TestWebTransportServer:
         mock_transport.sendto = mocker.Mock()
         mock_transport.is_closing.return_value = True
         mock_protocol = mocker.MagicMock()
-        mocker.patch("pywebtransport.server.server.WebTransportConnection", side_effect=ValueError("Init failed"))
+        mocker.patch(
+            "pywebtransport.server.server.WebTransportConnection.accept", side_effect=ValueError("Factory failed")
+        )
 
-        conn = server._create_connection_callback(protocol=mock_protocol, transport=mock_transport)
+        server._create_connection_callback(protocol=mock_protocol, transport=mock_transport)
 
-        assert conn is None
         mock_transport.close.assert_not_called()
 
     @pytest.mark.asyncio
@@ -267,9 +296,8 @@ class TestWebTransportServer:
         mock_transport.is_closing.return_value = False
         mock_protocol = mocker.MagicMock()
 
-        conn = server._create_connection_callback(protocol=mock_protocol, transport=mock_transport)
+        server._create_connection_callback(protocol=mock_protocol, transport=mock_transport)
 
-        assert conn is None
         mock_transport.close.assert_called_once()
 
     @pytest.mark.asyncio
@@ -282,9 +310,8 @@ class TestWebTransportServer:
         mock_transport.is_closing.return_value = True
         mock_protocol = mocker.MagicMock()
 
-        conn = server._create_connection_callback(protocol=mock_protocol, transport=mock_transport)
+        server._create_connection_callback(protocol=mock_protocol, transport=mock_transport)
 
-        assert conn is None
         mock_transport.close.assert_not_called()
 
     @pytest.mark.asyncio
@@ -296,9 +323,7 @@ class TestWebTransportServer:
         del mock_transport.close
         mock_protocol = mocker.MagicMock()
 
-        conn = server._create_connection_callback(protocol=mock_protocol, transport=mock_transport)
-
-        assert conn is None
+        server._create_connection_callback(protocol=mock_protocol, transport=mock_transport)
 
     @pytest.mark.asyncio
     async def test_create_connection_callback_success(
@@ -307,12 +332,15 @@ class TestWebTransportServer:
         mock_transport = mocker.Mock(spec=asyncio.DatagramTransport)
         mock_transport.sendto = mocker.Mock()
         mock_protocol = mocker.MagicMock()
+        mock_accept = mocker.patch(
+            "pywebtransport.server.server.WebTransportConnection.accept", return_value=mock_webtransport_connection
+        )
         mock_init_task = mocker.patch.object(server, "_initialize_and_register_connection")
         mock_create_task = mocker.patch("asyncio.create_task")
 
-        conn = server._create_connection_callback(protocol=mock_protocol, transport=mock_transport)
+        server._create_connection_callback(protocol=mock_protocol, transport=mock_transport)
 
-        assert conn is mock_webtransport_connection
+        mock_accept.assert_called_once_with(transport=mock_transport, protocol=mock_protocol, config=server._config)
         mock_init_task.assert_called_once()
         mock_create_task.assert_called_once()
 
@@ -332,25 +360,9 @@ class TestWebTransportServer:
         mock_transport.is_closing.return_value = True
         mock_protocol = mocker.MagicMock()
 
-        conn = server._create_connection_callback(protocol=mock_protocol, transport=mock_transport)
+        server._create_connection_callback(protocol=mock_protocol, transport=mock_transport)
 
-        assert conn is None
         mock_transport.close.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_create_connection_callback_transport_legacy(
-        self, server: WebTransportServer, mocker: MockerFixture
-    ) -> None:
-        mock_transport = mocker.Mock()
-        del mock_transport.sendto
-        mock_transport.close = mocker.Mock()
-        del mock_transport.is_closing
-        mock_protocol = mocker.MagicMock()
-
-        conn = server._create_connection_callback(protocol=mock_protocol, transport=mock_transport)
-
-        assert conn is None
-        mock_transport.close.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_diagnostics(
@@ -456,7 +468,7 @@ class TestWebTransportServer:
         mock_webtransport_connection: Any,
         mocker: MockerFixture,
     ) -> None:
-        mock_webtransport_connection.initialize.side_effect = ValueError("Init failed")
+        mock_connection_manager.add_connection.side_effect = ValueError("Add failed")
 
         await server._initialize_and_register_connection(connection=mock_webtransport_connection)
 
@@ -472,13 +484,37 @@ class TestWebTransportServer:
         mock_webtransport_connection: Any,
         mocker: MockerFixture,
     ) -> None:
-        mock_webtransport_connection.initialize.side_effect = ValueError("Init failed")
+        mock_connection_manager.add_connection.side_effect = ValueError("Add failed")
         type(mock_webtransport_connection).is_closed = mocker.PropertyMock(return_value=True)
 
         await server._initialize_and_register_connection(connection=mock_webtransport_connection)
 
         assert server._stats.connections_rejected == 1
         mock_webtransport_connection.close.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_initialize_connection_session_registration_failure(
+        self,
+        server: WebTransportServer,
+        mock_webtransport_connection: Any,
+        mock_session_manager: Any,
+        mocker: MockerFixture,
+    ) -> None:
+        mock_logger = mocker.patch("pywebtransport.server.server.logger")
+        mock_session_manager.add_session.side_effect = ValueError("Session limit reached")
+
+        await server._initialize_and_register_connection(connection=mock_webtransport_connection)
+
+        call_args = mock_webtransport_connection.events.on.call_args
+        handler = call_args.kwargs["handler"]
+
+        mock_session = mocker.Mock()
+        mock_session.session_id = "test_sess_id"
+        event = Event(type=EventType.SESSION_REQUEST, data={"session": mock_session})
+
+        await handler(event)
+
+        mock_logger.error.assert_called_with("Failed to register session %s: %s", "test_sess_id", mocker.ANY)
 
     @pytest.mark.asyncio
     async def test_initialize_and_register_connection_success(
@@ -491,7 +527,7 @@ class TestWebTransportServer:
         await server._initialize_and_register_connection(connection=mock_webtransport_connection)
 
         mock_webtransport_connection.events.on.assert_called_once()
-        mock_webtransport_connection.initialize.assert_awaited_once()
+        mock_webtransport_connection.initialize.assert_not_awaited()
         mock_connection_manager.add_connection.assert_awaited_once_with(connection=mock_webtransport_connection)
         assert server._stats.connections_accepted == 1
 
@@ -559,6 +595,13 @@ class TestWebTransportServer:
     def test_local_address_oserror(self, server: WebTransportServer, mock_quic_server: Any) -> None:
         server._server = mock_quic_server
         mock_quic_server._transport.get_extra_info.side_effect = OSError("Transport error")
+        assert server.local_address is None
+
+    def test_local_address_with_server_but_no_transport(
+        self, server: WebTransportServer, mock_quic_server: Any
+    ) -> None:
+        server._server = mock_quic_server
+        mock_quic_server._transport = None
         assert server.local_address is None
 
     @pytest.mark.asyncio

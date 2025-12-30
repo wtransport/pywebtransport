@@ -9,8 +9,8 @@ from pywebtransport._protocol.events import ProtocolEvent
 from pywebtransport.types import (
     Buffer,
     ConnectionState,
-    Future,
     Headers,
+    RequestId,
     SessionId,
     SessionState,
     StreamDirection,
@@ -37,8 +37,8 @@ class StreamStateData:
     read_buffer: deque[Buffer] = field(default_factory=deque)
     read_buffer_size: int = 0
 
-    pending_read_requests: deque[Future[Buffer]] = field(default_factory=deque)
-    write_buffer: deque[tuple[Buffer, Future[None], bool]] = field(default_factory=deque)
+    pending_read_requests: deque[tuple[RequestId, int]] = field(default_factory=deque)
+    write_buffer: deque[tuple[Buffer, RequestId, bool]] = field(default_factory=deque)
     write_buffer_size: int = 0
 
     close_code: int | None = None
@@ -60,7 +60,6 @@ class SessionStateData:
     """Represent the complete state of a single WebTransport session."""
 
     session_id: SessionId
-    control_stream_id: StreamId
     state: SessionState
     path: str
     headers: Headers
@@ -81,8 +80,8 @@ class SessionStateData:
     peer_max_streams_uni: int
     peer_streams_uni_opened: int = 0
 
-    pending_bidi_stream_futures: deque[Future[StreamId]] = field(default_factory=deque)
-    pending_uni_stream_futures: deque[Future[StreamId]] = field(default_factory=deque)
+    pending_bidi_stream_requests: deque[RequestId] = field(default_factory=deque)
+    pending_uni_stream_requests: deque[RequestId] = field(default_factory=deque)
 
     datagrams_sent: int = 0
     datagram_bytes_sent: int = 0
@@ -114,9 +113,8 @@ class ProtocolState:
     sessions: dict[SessionId, SessionStateData] = field(default_factory=dict)
     streams: dict[StreamId, StreamStateData] = field(default_factory=dict)
 
-    stream_to_session_map: dict[StreamId, SessionId] = field(default_factory=dict)
-    pending_create_session_futures: dict[StreamId, Future[SessionId]] = field(default_factory=dict)
-    pending_session_configs: dict[SessionId, SessionInitData] = field(default_factory=dict)
+    pending_requests: dict[StreamId, RequestId] = field(default_factory=dict)
+    pending_session_configs: dict[RequestId, SessionInitData] = field(default_factory=dict)
 
     early_event_buffer: dict[StreamId, list[tuple[float, ProtocolEvent]]] = field(default_factory=dict)
     early_event_count: int = 0

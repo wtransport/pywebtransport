@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from types import TracebackType
-from typing import Any, Self
+from typing import Any, Self, cast
 
 from pywebtransport.config import ServerConfig
 from pywebtransport.exceptions import ServerError
@@ -26,7 +26,7 @@ class ServerCluster:
         self._servers: list[WebTransportServer] = []
         self._running = False
         self._lock: asyncio.Lock | None = None
-        self._shutdown_event: asyncio.Event | None = None
+        self._shutdown_event = asyncio.Event()
 
     @property
     def is_running(self) -> bool:
@@ -149,7 +149,7 @@ class ServerCluster:
                     server_to_remove = server
                     break
 
-            if server_to_remove:
+            if server_to_remove is not None:
                 self._servers.remove(server_to_remove)
                 self._configs = [c for c in self._configs if not (c.bind_host == host and c.bind_port == port)]
             else:
@@ -165,7 +165,7 @@ class ServerCluster:
         if self._lock is None:
             raise ServerError("Cluster not activated.")
 
-        if not self._running or not self._shutdown_event:
+        if not self._running:
             raise ServerError("Cluster is not running.")
 
         logger.info("Cluster serving forever. Press Ctrl+C to stop.")
@@ -194,7 +194,7 @@ class ServerCluster:
 
             configs_to_start = list(self._configs)
             self._running = True
-            self._shutdown_event = asyncio.Event()
+            self._shutdown_event.clear()
 
         async def safe_start(config: ServerConfig) -> WebTransportServer | None:
             try:
@@ -213,7 +213,7 @@ class ServerCluster:
         started_servers: list[WebTransportServer] = []
         for task in tasks:
             server = task.result()
-            if server:
+            if server is not None:
                 started_servers.append(server)
 
         async with self._lock:
@@ -237,8 +237,7 @@ class ServerCluster:
             servers_to_stop = list(self._servers)
             self._servers.clear()
             self._running = False
-            if self._shutdown_event:
-                self._shutdown_event.set()
+            self._shutdown_event.set()
 
         if servers_to_stop:
             try:
@@ -267,10 +266,7 @@ class ServerCluster:
         self, *, server: WebTransportServer, config: ServerConfig
     ) -> WebTransportServer | None:
         """Register a newly started server if the cluster is still running."""
-        if self._lock is None:
-            return None
-
-        async with self._lock:
+        async with cast(asyncio.Lock, self._lock):
             if not self._running:
                 logger.warning("Cluster stopped while new server was starting. Shutting down new server.")
                 await server.close()

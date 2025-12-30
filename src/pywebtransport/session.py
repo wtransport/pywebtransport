@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Any, Self
 from pywebtransport._protocol.events import (
     UserCloseSession,
     UserCreateStream,
-    UserEvent,
     UserGetSessionDiagnostics,
     UserGrantDataCredit,
     UserGrantStreamsCredit,
@@ -21,7 +20,7 @@ from pywebtransport.constants import ErrorCodes
 from pywebtransport.events import Event, EventEmitter
 from pywebtransport.exceptions import ConnectionError, SessionError, StreamError, TimeoutError
 from pywebtransport.stream import WebTransportSendStream, WebTransportStream
-from pywebtransport.types import Buffer, EventType, Headers, SessionId, SessionState, StreamId
+from pywebtransport.types import Address, Buffer, EventType, Headers, SessionId, SessionState, StreamId
 from pywebtransport.utils import get_logger
 
 if TYPE_CHECKING:
@@ -39,7 +38,6 @@ class SessionDiagnostics:
     """A snapshot of session diagnostics."""
 
     session_id: SessionId
-    control_stream_id: StreamId
     state: SessionState
     path: str
     headers: Headers
@@ -56,8 +54,8 @@ class SessionDiagnostics:
     local_streams_uni_opened: int
     peer_max_streams_uni: int
     peer_streams_uni_opened: int
-    pending_bidi_stream_futures: list[Any]
-    pending_uni_stream_futures: list[Any]
+    pending_bidi_stream_requests: list[Any]
+    pending_uni_stream_requests: list[Any]
     datagrams_sent: int
     datagram_bytes_sent: int
     datagrams_received: int
@@ -74,18 +72,11 @@ class WebTransportSession:
     """A high-level handle for a WebTransport session."""
 
     def __init__(
-        self,
-        *,
-        connection: WebTransportConnection,
-        session_id: SessionId,
-        path: str,
-        headers: Headers,
-        control_stream_id: StreamId | None,
+        self, *, connection: WebTransportConnection, session_id: SessionId, path: str, headers: Headers
     ) -> None:
         """Initialize the WebTransportSession handle."""
         self._connection = weakref.ref(connection)
         self._session_id = session_id
-        self._control_stream_id = control_stream_id
         self._path = path
         self._headers = headers
         self._cached_state = SessionState.CONNECTING
@@ -118,6 +109,14 @@ class WebTransportSession:
         return self._path
 
     @property
+    def remote_address(self) -> Address | None:
+        """Get the remote address of the peer."""
+        connection = self._connection()
+        if connection is not None:
+            return connection.remote_address
+        return None
+
+    @property
     def session_id(self) -> SessionId:
         """Get the unique identifier for this session."""
         return self._session_id
@@ -144,16 +143,19 @@ class WebTransportSession:
 
         logger.info("Closing session %s: code=%#x reason='%s'", self.session_id, error_code, reason or "")
         connection = self._connection()
-        if not connection:
+        if connection is None:
             return
 
-        fut = asyncio.get_running_loop().create_future()
-        event = UserCloseSession(session_id=self.session_id, error_code=error_code, reason=reason, future=fut)
-        await connection._send_event_to_engine(event=event)
+        request_id, future = connection._protocol.create_request()
+        event = UserCloseSession(
+            request_id=request_id, session_id=self.session_id, error_code=error_code, reason=reason
+        )
+        connection._protocol.send_event(event=event)
+
         try:
-            await fut
+            await future
         except (ConnectionError, SessionError) as e:
-            logger.warning("Error initiating session close for %s: %s", self.session_id, e)
+            logger.warning("Error initiating session close for %s: %s", self.session_id, e, exc_info=True)
 
     async def create_bidirectional_stream(self) -> WebTransportStream:
         """Create a new bidirectional WebTransport stream."""
@@ -171,38 +173,57 @@ class WebTransportSession:
 
     async def diagnostics(self) -> SessionDiagnostics:
         """Get diagnostic information about the session."""
-        fut = asyncio.get_running_loop().create_future()
-        event = UserGetSessionDiagnostics(session_id=self.session_id, future=fut)
+        connection = self._connection()
+        if connection is None:
+            raise ConnectionError("Connection is gone.")
+
+        request_id, future = connection._protocol.create_request()
+        event = UserGetSessionDiagnostics(request_id=request_id, session_id=self.session_id)
+
         try:
-            await self._send_event_to_engine(event=event)
+            connection._protocol.send_event(event=event)
+            diag_data: dict[str, Any] = await future
+            return SessionDiagnostics(**diag_data)
         except ConnectionError as e:
             raise SessionError(f"Connection is closed, cannot get diagnostics: {e}") from e
 
-        diag_data: dict[str, Any] = await fut
-        return SessionDiagnostics(**diag_data)
-
     async def grant_data_credit(self, *, max_data: int) -> None:
         """Manually grant data flow control credit to the peer."""
-        fut = asyncio.get_running_loop().create_future()
-        event = UserGrantDataCredit(session_id=self.session_id, max_data=max_data, future=fut)
-        await self._send_event_to_engine(event=event)
-        await fut
+        connection = self._connection()
+        if connection is None:
+            raise ConnectionError("Connection is gone.")
+
+        request_id, future = connection._protocol.create_request()
+        event = UserGrantDataCredit(request_id=request_id, session_id=self.session_id, max_data=max_data)
+        connection._protocol.send_event(event=event)
+        await future
 
     async def grant_streams_credit(self, *, max_streams: int, is_unidirectional: bool) -> None:
         """Manually grant stream flow control credit to the peer."""
-        fut = asyncio.get_running_loop().create_future()
+        connection = self._connection()
+        if connection is None:
+            raise ConnectionError("Connection is gone.")
+
+        request_id, future = connection._protocol.create_request()
         event = UserGrantStreamsCredit(
-            session_id=self.session_id, max_streams=max_streams, is_unidirectional=is_unidirectional, future=fut
+            request_id=request_id,
+            session_id=self.session_id,
+            max_streams=max_streams,
+            is_unidirectional=is_unidirectional,
         )
-        await self._send_event_to_engine(event=event)
-        await fut
+        connection._protocol.send_event(event=event)
+        await future
 
     async def send_datagram(self, *, data: Buffer | list[Buffer]) -> None:
         """Send an unreliable datagram."""
-        fut = asyncio.get_running_loop().create_future()
-        event = UserSendDatagram(session_id=self.session_id, data=data, future=fut)
-        await self._send_event_to_engine(event=event)
-        await fut
+        connection = self._connection()
+        if connection is None:
+            raise ConnectionError("Connection is gone.")
+
+        request_id, future = connection._protocol.create_request()
+        event = UserSendDatagram(request_id=request_id, session_id=self.session_id, data=data)
+        connection._protocol.send_event(event=event)
+        await future
 
     def _add_stream_handle(self, *, stream: StreamType, event_data: dict[str, Any]) -> None:
         """Register an incoming stream and re-emit the STREAM_OPENED event."""
@@ -216,28 +237,25 @@ class WebTransportSession:
     async def _create_stream_internal(self, *, is_unidirectional: bool) -> WebTransportStream | WebTransportSendStream:
         """Internal logic for creating a stream with timeout handling."""
         connection = self._connection()
-        if not connection:
+        if connection is None:
             raise ConnectionError("Connection is gone.")
 
-        fut = asyncio.get_running_loop().create_future()
-        event = UserCreateStream(session_id=self.session_id, is_unidirectional=is_unidirectional, future=fut)
-        await connection._send_event_to_engine(event=event)
+        request_id, future = connection._protocol.create_request()
+        event = UserCreateStream(request_id=request_id, session_id=self.session_id, is_unidirectional=is_unidirectional)
+        connection._protocol.send_event(event=event)
 
         try:
             timeout = connection.config.stream_creation_timeout
             async with asyncio.timeout(delay=timeout):
-                stream_id: StreamId = await fut
+                stream_id: StreamId = await future
         except asyncio.TimeoutError:
-            fut.cancel()
             logger.warning("Timeout creating stream on session %s", self.session_id)
             raise TimeoutError(f"Session {self.session_id} timed out creating stream after {timeout}s") from None
         except Exception:
-            if not fut.done():
-                fut.cancel()
             raise
 
         stream_handle = connection._stream_handles.get(stream_id)
-        if not stream_handle:
+        if stream_handle is None:
             logger.error("Internal error: Stream handle %d missing after creation", stream_id)
             raise StreamError(f"Internal error creating stream handle for {stream_id}")
 
@@ -253,20 +271,6 @@ class WebTransportSession:
     def _on_session_ready(self, event: Event) -> None:
         """Handle session ready event to update cached state."""
         self._cached_state = SessionState.CONNECTED
-
-    async def _send_event_to_engine(self, *, event: UserEvent[Any]) -> None:
-        """Send a UserEvent to the protocol engine (via the connection)."""
-        connection = self._connection()
-        if not connection:
-            if not event.future.done():
-                exc = ConnectionError("Connection is gone.")
-                try:
-                    event.future.set_exception(exc)
-                except asyncio.InvalidStateError:
-                    pass
-            return
-
-        await connection._send_event_to_engine(event=event)
 
     def __repr__(self) -> str:
         """Provide a developer-friendly representation."""

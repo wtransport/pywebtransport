@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 import weakref
 from collections import deque
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, AsyncIterator, Self
+from typing import TYPE_CHECKING, Any, Self
 
 from pywebtransport._protocol.events import (
     UserGetStreamDiagnostics,
@@ -34,9 +35,9 @@ __all__: list[str] = [
     "WebTransportStream",
 ]
 
-_STREAM_EVENT_HISTORY_SIZE = 0
-_STREAM_EVENT_QUEUE_SIZE = 16
-_STREAM_MAX_EVENT_LISTENERS = 20
+DEFAULT_EVENT_HISTORY_SIZE: int = 0
+DEFAULT_EVENT_QUEUE_SIZE: int = 16
+DEFAULT_MAX_EVENT_LISTENERS: int = 20
 
 logger = get_logger(name=__name__)
 
@@ -74,9 +75,9 @@ class _BaseStream:
         self._stream_id = stream_id
         self._cached_state = StreamState.OPEN
         self.events = EventEmitter(
-            max_queue_size=_STREAM_EVENT_QUEUE_SIZE,
-            max_history=_STREAM_EVENT_HISTORY_SIZE,
-            max_listeners=_STREAM_MAX_EVENT_LISTENERS,
+            max_queue_size=DEFAULT_EVENT_QUEUE_SIZE,
+            max_history=DEFAULT_EVENT_HISTORY_SIZE,
+            max_listeners=DEFAULT_MAX_EVENT_LISTENERS,
         )
         self.events.on(event_type="stream_closed", handler=self._on_closed)
 
@@ -105,14 +106,18 @@ class _BaseStream:
 
     async def diagnostics(self) -> StreamDiagnostics:
         """Get diagnostic information about the stream."""
-        fut = asyncio.get_running_loop().create_future()
-        event = UserGetStreamDiagnostics(stream_id=self.stream_id, future=fut)
+        connection = self.session._connection()
+        if connection is None:
+            raise ConnectionError("Connection is gone.")
+
+        request_id, future = connection._protocol.create_request()
+        event = UserGetStreamDiagnostics(request_id=request_id, stream_id=self.stream_id)
+        connection._protocol.send_event(event=event)
+
         try:
-            await self.session._send_event_to_engine(event=event)
+            diag_data = await future
         except ConnectionError as e:
             raise StreamError(f"Connection is closed, cannot get diagnostics: {e}", stream_id=self.stream_id) from e
-
-        diag_data: dict[str, Any] = await fut
 
         if "write_buffer" in diag_data and isinstance(diag_data["write_buffer"], deque):
             diag_data["write_buffer"] = list(diag_data["write_buffer"])
@@ -134,8 +139,6 @@ class WebTransportReceiveStream(_BaseStream):
     def __init__(self, *, session: WebTransportSession, stream_id: StreamId) -> None:
         """Initialize the receive stream handle."""
         super().__init__(session=session, stream_id=stream_id)
-        self._read_buffer: deque[memoryview] = deque()
-        self._read_buffer_size = 0
         self._read_eof = False
 
     @property
@@ -164,12 +167,6 @@ class WebTransportReceiveStream(_BaseStream):
 
     async def read(self, *, max_bytes: int = -1) -> bytes:
         """Read data from the stream."""
-        if self._read_buffer_size > 0:
-            if max_bytes == -1:
-                return self._consume_buffer(self._read_buffer_size)
-            to_read = min(max_bytes, self._read_buffer_size)
-            return self._consume_buffer(to_read)
-
         if self._read_eof:
             return b""
 
@@ -177,30 +174,32 @@ class WebTransportReceiveStream(_BaseStream):
             self._read_eof = True
             return b""
 
+        connection = self.session._connection()
+        if connection is None:
+            raise ConnectionError("Connection is gone.")
+
+        request_id, future = connection._protocol.create_request()
+        event = UserStreamRead(request_id=request_id, stream_id=self.stream_id, max_bytes=max_bytes)
+        connection._protocol.send_event(event=event)
+
         try:
-            data = await self._read_from_engine(max_bytes=max_bytes)
+            data = await future
         except StreamError as e:
             if e.error_code == ErrorCodes.STREAM_STATE_ERROR:
                 self._read_eof = True
                 return b""
             raise
 
-        if data is None:
+        if not data and max_bytes != 0:
             self._read_eof = True
-            return b""
+
         return bytes(data)
 
     async def read_all(self) -> bytes:
         """Read all data from the stream until EOF."""
         chunks: list[bytes] = []
-        try:
-            if self._read_buffer_size > 0:
-                chunks.append(self._consume_buffer(self._read_buffer_size))
-
-            async for chunk in self:
-                chunks.append(chunk)
-        except StreamError as e:
-            logger.warning("Error during read_all on stream %d: %s", self.stream_id, e)
+        async for chunk in self:
+            chunks.append(chunk)
         return b"".join(chunks)
 
     async def readexactly(self, *, n: int) -> bytes:
@@ -211,43 +210,28 @@ class WebTransportReceiveStream(_BaseStream):
             return b""
 
         connection = self.session._connection()
-        if not connection:
+        if connection is None:
             raise ConnectionError("Connection is gone.")
-        max_buffer_size = connection.config.max_stream_read_buffer
         read_timeout = connection.config.read_timeout
 
-        if n > max_buffer_size:
-            raise StreamError(
-                f"Read request ({n} bytes) exceeds max read buffer ({max_buffer_size} bytes)", stream_id=self.stream_id
-            )
+        chunks: list[bytes] = []
+        bytes_read = 0
 
         try:
             async with asyncio.timeout(read_timeout):
-                while self._read_buffer_size < n:
-                    if self._read_eof:
-                        partial = self._consume_buffer(self._read_buffer_size)
+                while bytes_read < n:
+                    needed = n - bytes_read
+                    chunk = await self.read(max_bytes=needed)
+                    if not chunk:
+                        partial = b"".join(chunks)
                         raise asyncio.IncompleteReadError(partial, n)
 
-                    chunk = await self._read_from_engine()
-                    if chunk is None:
-                        self._read_eof = True
-                        partial = self._consume_buffer(self._read_buffer_size)
-                        raise asyncio.IncompleteReadError(partial, n)
-
-                    chunk_len = len(chunk)
-                    if self._read_buffer_size + chunk_len > max_buffer_size:
-                        self._read_buffer.append(chunk)
-                        self._read_buffer_size += chunk_len
-                        raise StreamError(
-                            f"Read buffer limit ({max_buffer_size} bytes) exceeded", stream_id=self.stream_id
-                        )
-
-                    self._read_buffer.append(chunk)
-                    self._read_buffer_size += chunk_len
+                    chunks.append(chunk)
+                    bytes_read += len(chunk)
         except asyncio.TimeoutError:
             raise TimeoutError(f"readexactly timed out after {read_timeout}s") from None
 
-        return self._consume_buffer(n)
+        return b"".join(chunks)
 
     async def readline(self, *, limit: int = -1) -> bytes:
         """Read a line from the stream."""
@@ -258,183 +242,37 @@ class WebTransportReceiveStream(_BaseStream):
         if not separator:
             raise ValueError("Separator cannot be empty")
 
-        sep_len = len(separator)
         connection = self.session._connection()
-        if not connection:
+        if connection is None:
             raise ConnectionError("Connection is gone.")
-        max_buffer_size = connection.config.max_stream_read_buffer
         read_timeout = connection.config.read_timeout
 
-        if limit < 0:
-            effective_limit = max_buffer_size
-        elif limit > max_buffer_size:
-            raise StreamError(
-                f"Read limit ({limit}) exceeds max read buffer ({max_buffer_size} bytes)", stream_id=self.stream_id
-            )
-        else:
-            effective_limit = limit
-
-        offset = 0
-
+        data = bytearray()
         try:
             async with asyncio.timeout(read_timeout):
                 while True:
-                    found_idx = self._find_in_buffer(separator, start=offset)
-
-                    if found_idx != -1:
-                        total_len = found_idx + sep_len
-                        if total_len > effective_limit:
-                            raise StreamError(
-                                f"Stream {self.stream_id} line over limit {effective_limit}", stream_id=self.stream_id
-                            )
-                        return self._consume_buffer(total_len)
-
-                    if self._read_buffer_size > effective_limit:
-                        raise StreamError(
-                            f"Stream {self.stream_id} separator not found within limit {effective_limit}",
-                            stream_id=self.stream_id,
-                        )
-
-                    if self._read_buffer_size >= sep_len:
-                        offset = self._read_buffer_size - sep_len + 1
-                    else:
-                        offset = 0
-
-                    if self._read_eof:
-                        partial = self._consume_buffer(self._read_buffer_size)
-                        raise asyncio.IncompleteReadError(partial, None)
-
-                    chunk = await self._read_from_engine()
-                    if chunk is None:
-                        self._read_eof = True
-                        partial = self._consume_buffer(self._read_buffer_size)
-                        raise asyncio.IncompleteReadError(partial, None)
-
-                    chunk_len = len(chunk)
-                    if self._read_buffer_size + chunk_len > max_buffer_size:
-                        self._read_buffer.append(chunk)
-                        self._read_buffer_size += chunk_len
-                        raise StreamError(
-                            f"Read buffer limit ({max_buffer_size} bytes) exceeded during readuntil",
-                            stream_id=self.stream_id,
-                        )
-
-                    self._read_buffer.append(chunk)
-                    self._read_buffer_size += chunk_len
+                    chunk = await self.read(max_bytes=1)
+                    if not chunk:
+                        raise asyncio.IncompleteReadError(bytes(data), None)
+                    data.extend(chunk)
+                    if data.endswith(separator):
+                        return bytes(data)
+                    if limit > 0 and len(data) > limit:
+                        raise StreamError(f"Separator not found within limit {limit}", stream_id=self.stream_id)
         except asyncio.TimeoutError:
             raise TimeoutError(f"readuntil timed out after {read_timeout}s") from None
 
     async def stop_receiving(self, *, error_code: int = ErrorCodes.NO_ERROR) -> None:
         """Signal the peer to stop sending data."""
-        fut = asyncio.get_running_loop().create_future()
-        event = UserStopStream(stream_id=self.stream_id, error_code=error_code, future=fut)
-        await self.session._send_event_to_engine(event=event)
-        await fut
-        self._cached_state = StreamState.RESET_RECEIVED
-
-    def _consume_buffer(self, n: int) -> bytes:
-        """Consume n bytes from the deque buffer."""
-        if n == 0:
-            return b""
-
-        if n == self._read_buffer_size:
-            data = b"".join(self._read_buffer)
-            self._read_buffer.clear()
-            self._read_buffer_size = 0
-            return data
-
-        chunks: list[bytes] = []
-        collected = 0
-
-        while collected < n and self._read_buffer:
-            chunk = self._read_buffer[0]
-            chunk_len = len(chunk)
-            needed = n - collected
-
-            if chunk_len <= needed:
-                self._read_buffer.popleft()
-                chunks.append(chunk.tobytes())
-                collected += chunk_len
-            else:
-                take = chunk[:needed]
-                keep = chunk[needed:]
-                self._read_buffer[0] = keep
-                chunks.append(take.tobytes())
-                collected += needed
-                break
-
-        self._read_buffer_size -= collected
-        return b"".join(chunks)
-
-    def _find_in_buffer(self, sep: bytes, start: int = 0) -> int:
-        """Find separator index in the deque buffer."""
-        global_idx = 0
-        sep_len = len(sep)
-        prev_tail = b""
-
-        for chunk in self._read_buffer:
-            chunk_bytes = chunk.tobytes()
-            chunk_len = len(chunk_bytes)
-
-            if global_idx + chunk_len < start:
-                global_idx += chunk_len
-                if chunk_len >= sep_len:
-                    prev_tail = chunk_bytes[-(sep_len - 1) :] if sep_len > 1 else b""
-                else:
-                    prev_tail = (prev_tail + chunk_bytes)[-(sep_len - 1) :] if sep_len > 1 else b""
-                continue
-
-            local_start = max(0, start - global_idx)
-            found = chunk_bytes.find(sep, local_start)
-            if found != -1:
-                return global_idx + found
-
-            if sep_len > 1 and prev_tail:
-                check_window = prev_tail + chunk_bytes[: sep_len - 1]
-                seam_found = check_window.find(sep)
-                if seam_found != -1:
-                    match_abs_idx = (global_idx - len(prev_tail)) + seam_found
-                    if match_abs_idx >= start:
-                        return match_abs_idx
-
-            if chunk_len >= sep_len:
-                prev_tail = chunk_bytes[-(sep_len - 1) :] if sep_len > 1 else b""
-            else:
-                prev_tail = (prev_tail + chunk_bytes)[-(sep_len - 1) :] if sep_len > 1 else b""
-
-            global_idx += chunk_len
-
-        return -1
-
-    async def _read_from_engine(self, *, max_bytes: int = -1) -> memoryview | None:
-        """Fetch data from the engine."""
         connection = self.session._connection()
-        if not connection:
-            raise ConnectionError("Connection is gone.")
+        if connection is None:
+            return
 
-        max_pull_size = connection.config.max_stream_read_buffer
-        effective_max_bytes: int
-        if max_bytes < 0:
-            effective_max_bytes = max_pull_size
-        else:
-            effective_max_bytes = min(max_bytes, max_pull_size)
-
-        fut = asyncio.get_running_loop().create_future()
-        event = UserStreamRead(stream_id=self.stream_id, max_bytes=effective_max_bytes, future=fut)
-        await self.session._send_event_to_engine(event=event)
-
-        try:
-            timeout = connection.config.read_timeout
-            async with asyncio.timeout(delay=timeout):
-                result = await fut
-            if result:
-                return memoryview(result)
-            return None
-        except asyncio.TimeoutError as e:
-            fut.cancel()
-            raise TimeoutError(f"Stream {self.stream_id} read operation timed out after {timeout}s") from e
-        except Exception:
-            raise
+        request_id, future = connection._protocol.create_request()
+        event = UserStopStream(request_id=request_id, stream_id=self.stream_id, error_code=error_code)
+        connection._protocol.send_event(event=event)
+        await future
+        self._cached_state = StreamState.RESET_RECEIVED
 
     def __aiter__(self) -> AsyncIterator[bytes]:
         """Iterate over the stream chunks."""
@@ -442,13 +280,7 @@ class WebTransportReceiveStream(_BaseStream):
 
     async def __anext__(self) -> bytes:
         """Get the next chunk of data."""
-        try:
-            data = await self.read()
-        except StreamError as e:
-            if e.error_code in (ErrorCodes.NO_ERROR, ErrorCodes.H3_NO_ERROR):
-                raise StopAsyncIteration from e
-            raise
-
+        data = await self.read()
         if not data:
             raise StopAsyncIteration
         return data
@@ -503,10 +335,14 @@ class WebTransportSendStream(_BaseStream):
 
     async def stop_sending(self, *, error_code: int = ErrorCodes.NO_ERROR) -> None:
         """Stop sending data and reset the stream."""
-        fut = asyncio.get_running_loop().create_future()
-        event = UserResetStream(stream_id=self.stream_id, error_code=error_code, future=fut)
-        await self.session._send_event_to_engine(event=event)
-        await fut
+        connection = self.session._connection()
+        if connection is None:
+            raise ConnectionError("Connection is gone.")
+
+        request_id, future = connection._protocol.create_request()
+        event = UserResetStream(request_id=request_id, stream_id=self.stream_id, error_code=error_code)
+        connection._protocol.send_event(event=event)
+        await future
         self._cached_state = StreamState.RESET_SENT
 
     async def write(self, *, data: Buffer, end_stream: bool = False) -> None:
@@ -521,49 +357,68 @@ class WebTransportSendStream(_BaseStream):
             return
 
         connection = self.session._connection()
-        if not connection:
+        if connection is None:
             raise ConnectionError("Connection is gone.")
 
-        fut = asyncio.get_running_loop().create_future()
-        event = UserSendStreamData(stream_id=self.stream_id, data=buffer_data, end_stream=end_stream, future=fut)
-        await self.session._send_event_to_engine(event=event)
+        request_id, future = connection._protocol.create_request()
+        event = UserSendStreamData(
+            request_id=request_id, stream_id=self.stream_id, data=buffer_data, end_stream=end_stream
+        )
+        connection._protocol.send_event(event=event)
 
         try:
-            timeout = connection.config.write_timeout
-            async with asyncio.timeout(delay=timeout):
-                await fut
-        except asyncio.TimeoutError as e:
-            fut.cancel()
-            raise TimeoutError(f"Stream {self.stream_id} write operation timed out after {timeout}s") from e
+            await future
         except Exception:
             raise
 
-    async def write_all(self, *, data: Buffer, chunk_size: int = 65536) -> None:
-        """Write buffer data to the stream in chunks and close it."""
+    async def write_all(self, *, data: Buffer, chunk_size: int = 65536, end_stream: bool = False) -> None:
+        """Write buffer data to the stream in chunks."""
         try:
             buffer_data = ensure_buffer(data=data)
             offset = 0
             data_len = len(buffer_data)
+
+            if not buffer_data and end_stream:
+                await self.write(data=b"", end_stream=True)
+                return
+
             while offset < data_len:
                 chunk = buffer_data[offset : offset + chunk_size]
                 offset += len(chunk)
                 is_last_chunk = offset >= data_len
-                await self.write(data=chunk, end_stream=is_last_chunk)
-            if data_len == 0:
-                await self.write(data=b"", end_stream=True)
+                await self.write(data=chunk, end_stream=end_stream if is_last_chunk else False)
         except StreamError as e:
             logger.debug("Error writing bytes to stream %d: %s", self.stream_id, e)
-            await self.stop_sending(error_code=ErrorCodes.APPLICATION_ERROR)
             raise
 
 
-class WebTransportStream(WebTransportReceiveStream, WebTransportSendStream):
+class WebTransportStream(_BaseStream):
     """Represents the bidirectional WebTransport stream."""
+
+    def __init__(self, *, session: WebTransportSession, stream_id: StreamId) -> None:
+        """Initialize the bidirectional stream handle."""
+        super().__init__(session=session, stream_id=stream_id)
+        self._reader = WebTransportReceiveStream(session=session, stream_id=stream_id)
+        self._writer = WebTransportSendStream(session=session, stream_id=stream_id)
+
+    @property
+    def can_read(self) -> bool:
+        """Return True if the stream is readable."""
+        return self._reader.can_read
+
+    @property
+    def can_write(self) -> bool:
+        """Return True if the stream is writable."""
+        return self._writer.can_write
 
     @property
     def direction(self) -> StreamDirection:
         """Get the directionality of the stream."""
         return StreamDirection.BIDIRECTIONAL
+
+    async def __aenter__(self) -> Self:
+        """Enter the async context manager."""
+        return self
 
     async def __aexit__(
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
@@ -581,9 +436,59 @@ class WebTransportStream(WebTransportReceiveStream, WebTransportSendStream):
 
     async def close(self, *, error_code: int | None = None) -> None:
         """Close both sides of the stream."""
-        await WebTransportSendStream.close(self, error_code=error_code)
+        await self._writer.close(error_code=error_code)
         stop_code = error_code if error_code is not None else ErrorCodes.NO_ERROR
-        await WebTransportReceiveStream.stop_receiving(self, error_code=stop_code)
+        await self._reader.stop_receiving(error_code=stop_code)
+
+    async def read(self, *, max_bytes: int = -1) -> bytes:
+        """Read data from the stream."""
+        return await self._reader.read(max_bytes=max_bytes)
+
+    async def read_all(self) -> bytes:
+        """Read all data from the stream until EOF."""
+        return await self._reader.read_all()
+
+    async def readexactly(self, *, n: int) -> bytes:
+        """Read exactly n bytes from the stream."""
+        return await self._reader.readexactly(n=n)
+
+    async def readline(self, *, limit: int = -1) -> bytes:
+        """Read a line from the stream."""
+        return await self._reader.readline(limit=limit)
+
+    async def readuntil(self, *, separator: bytes, limit: int = -1) -> bytes:
+        """Read data from the stream until a separator is found."""
+        return await self._reader.readuntil(separator=separator, limit=limit)
+
+    async def stop_receiving(self, *, error_code: int = ErrorCodes.NO_ERROR) -> None:
+        """Signal the peer to stop sending data."""
+        await self._reader.stop_receiving(error_code=error_code)
+
+    async def stop_sending(self, *, error_code: int = ErrorCodes.NO_ERROR) -> None:
+        """Stop sending data and reset the stream."""
+        await self._writer.stop_sending(error_code=error_code)
+
+    async def write(self, *, data: Buffer, end_stream: bool = False) -> None:
+        """Write data to the stream."""
+        await self._writer.write(data=data, end_stream=end_stream)
+
+    async def write_all(self, *, data: Buffer, chunk_size: int = 65536, end_stream: bool = False) -> None:
+        """Write buffer data to the stream in chunks."""
+        await self._writer.write_all(data=data, chunk_size=chunk_size, end_stream=end_stream)
+
+    def _on_closed(self, event: Event) -> None:
+        """Handle stream closed event and propagate to children."""
+        super()._on_closed(event)
+        self._reader._on_closed(event)
+        self._writer._on_closed(event)
+
+    def __aiter__(self) -> AsyncIterator[bytes]:
+        """Iterate over the stream chunks."""
+        return self
+
+    async def __anext__(self) -> bytes:
+        """Get the next chunk of data."""
+        return await self._reader.__anext__()
 
 
 type StreamType = WebTransportStream | WebTransportReceiveStream | WebTransportSendStream

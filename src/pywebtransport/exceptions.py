@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from pywebtransport.constants import ErrorCodes
-from pywebtransport.types import SessionState, StreamState
+from pywebtransport.types import SessionId, SessionState, StreamState
 
 __all__: list[str] = [
     "AuthenticationError",
@@ -50,7 +50,7 @@ class WebTransportError(Exception):
         super().__init__(message)
         self.message = message
         self.error_code = error_code if error_code is not None else ErrorCodes.INTERNAL_ERROR
-        self.details = details or {}
+        self.details = details if details is not None else {}
 
     @property
     def category(self) -> str:
@@ -58,7 +58,7 @@ class WebTransportError(Exception):
         name = self.__class__.__name__
         if name.endswith("Error"):
             name = name[:-5]
-        return _to_snake_case(name)
+        return _to_snake_case(name=name)
 
     @property
     def is_fatal(self) -> bool:
@@ -344,7 +344,7 @@ class SessionError(WebTransportError):
         self,
         message: str,
         *,
-        session_id: str | None = None,
+        session_id: SessionId | None = None,
         error_code: int | None = None,
         session_state: SessionState | None = None,
         details: dict[str, Any] | None = None,
@@ -410,6 +410,6 @@ class TimeoutError(WebTransportError):
         self.operation = operation
 
 
-def _to_snake_case(name: str) -> str:
+def _to_snake_case(*, name: str) -> str:
     """Convert a CamelCase string to snake_case."""
     return "".join(["_" + c.lower() if c.isupper() else c for c in name]).lstrip("_")

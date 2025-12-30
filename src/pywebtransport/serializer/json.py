@@ -22,8 +22,8 @@ class JSONSerializer(BaseDataclassSerializer, Serializer):
 
     def __init__(self, *, dump_kwargs: dict[str, Any] | None = None, load_kwargs: dict[str, Any] | None = None) -> None:
         """Initialize the JSON serializer."""
-        self._dump_kwargs = dump_kwargs.copy() if dump_kwargs else {}
-        self._load_kwargs = load_kwargs.copy() if load_kwargs else {}
+        self._dump_kwargs = dump_kwargs.copy() if dump_kwargs is not None else {}
+        self._load_kwargs = load_kwargs.copy() if load_kwargs is not None else {}
         self._user_default = self._dump_kwargs.pop("default", None)
 
     def convert_to_type(self, *, data: Any, target_type: Any, depth: int = 0) -> Any:
@@ -47,7 +47,7 @@ class JSONSerializer(BaseDataclassSerializer, Serializer):
 
             decoded_obj = json.loads(s=data, **self._load_kwargs)
 
-            if not obj_type:
+            if obj_type is None:
                 return decoded_obj
             return self.convert_to_type(data=decoded_obj, target_type=obj_type)
         except (json.JSONDecodeError, TypeError, ValueError) as e:
@@ -80,6 +80,6 @@ class JSONSerializer(BaseDataclassSerializer, Serializer):
             case _ if is_dataclass(o) and not isinstance(o, type):
                 return asdict(obj=o)
             case _:
-                if self._user_default:
+                if self._user_default is not None:
                     return self._user_default(o)
                 raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")

@@ -211,7 +211,7 @@ async def handle_bidirectional_stream(*, stream: WebTransportStream) -> None:
     try:
         request_data = await stream.read_all()
         echo_data = b"ECHO: " + request_data
-        await stream.write_all(data=echo_data)
+        await stream.write_all(data=echo_data, end_stream=True)
     except (asyncio.CancelledError, ConnectionError, StreamError):
         pass
     except Exception as e:
@@ -281,7 +281,7 @@ async def handle_receive_stream(*, stream: WebTransportReceiveStream) -> None:
         logger.error("Receive stream %s error: %s", stream.stream_id, e, exc_info=True)
 
 
-async def handle_single_stream(*, stream: Any, session_id: str) -> None:
+async def handle_single_stream(*, stream: Any, session_id: int) -> None:
     """Process a single stream based on its type."""
     stream_id = stream.stream_id
 
@@ -370,13 +370,6 @@ async def main() -> None:
         certfile=str(CERT_PATH),
         keyfile=str(KEY_PATH),
         log_level="DEBUG" if DEBUG_MODE else "INFO",
-        initial_max_data=16 * 1024,
-        initial_max_streams_bidi=5,
-        initial_max_streams_uni=5,
-        flow_control_window_auto_scale=True,
-        flow_control_window_size=65536,
-        stream_flow_control_increment_bidi=5,
-        stream_flow_control_increment_uni=5,
     )
     app = E2EServerApp(config=config)
 

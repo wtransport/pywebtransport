@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import ssl
 from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import AbstractAsyncContextManager as AsyncContextManager
 from enum import StrEnum
-from typing import Any, AsyncContextManager, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 __all__: list[str] = [
     "Address",
@@ -23,6 +24,7 @@ __all__: list[str] = [
     "Future",
     "Headers",
     "Priority",
+    "RequestId",
     "SSLContext",
     "Serializer",
     "SessionId",
@@ -47,9 +49,10 @@ type Data = bytes | bytearray | memoryview | str
 type ErrorCode = int
 type EventData = Any
 type Future[T] = asyncio.Future[T]
-type Headers = dict[str, str] | list[tuple[str, str]]
+type Headers = dict[str | bytes, str | bytes] | list[tuple[str | bytes, str | bytes]]
 type Priority = int
-type SessionId = str
+type RequestId = int
+type SessionId = int
 type SSLContext = ssl.SSLContext
 type StreamId = int
 type Timeout = float | None
@@ -84,6 +87,11 @@ class SessionProtocol(Protocol):
     @property
     def path(self) -> str:
         """Get the session path."""
+        ...
+
+    @property
+    def remote_address(self) -> Address | None:
+        """Get the remote address of the peer."""
         ...
 
     @property

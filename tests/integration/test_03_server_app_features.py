@@ -17,7 +17,7 @@ from pywebtransport import (
 )
 from pywebtransport.server import MiddlewareRejected
 from pywebtransport.types import EventType, SessionProtocol
-from pywebtransport.utils import get_header
+from pywebtransport.utils import get_header_as_str
 
 pytestmark = pytest.mark.asyncio
 
@@ -29,7 +29,7 @@ async def test_middleware_accepts_session(
     handler_was_reached = asyncio.Event()
 
     async def auth_middleware(session: SessionProtocol) -> None:
-        token = get_header(headers=session.headers, key="x-auth-token")
+        token = get_header_as_str(headers=session.headers, key="x-auth-token")
         if token != "valid-token":
             raise MiddlewareRejected(status_code=http.HTTPStatus.FORBIDDEN)
 
@@ -55,7 +55,7 @@ async def test_middleware_rejects_session(
     host, port = server
 
     async def auth_middleware(session: SessionProtocol) -> None:
-        token = get_header(headers=session.headers, key="x-auth-token")
+        token = get_header_as_str(headers=session.headers, key="x-auth-token")
         if token != "valid-token":
             raise MiddlewareRejected(status_code=http.HTTPStatus.FORBIDDEN)
 

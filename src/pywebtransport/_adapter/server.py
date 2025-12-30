@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from asyncio import BaseTransport
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from aioquic.asyncio.server import QuicServer
 from aioquic.asyncio.server import serve as quic_serve
@@ -16,14 +16,11 @@ from pywebtransport._adapter.utils import create_quic_configuration
 from pywebtransport.config import ServerConfig
 from pywebtransport.utils import get_logger
 
-if TYPE_CHECKING:
-    from pywebtransport.connection import WebTransportConnection
-
-    ConnectionCreator = Callable[["WebTransportServerProtocol", BaseTransport], WebTransportConnection | None]
-
 __all__: list[str] = []
 
 logger = get_logger(name=__name__)
+
+type ConnectionCreator = Callable[[WebTransportServerProtocol, BaseTransport], None]
 
 
 class WebTransportServerProtocol(WebTransportCommonProtocol):
@@ -43,7 +40,12 @@ class WebTransportServerProtocol(WebTransportCommonProtocol):
     ) -> None:
         """Initialize the server protocol adapter."""
         super().__init__(
-            quic=quic, stream_handler=stream_handler, loop=loop, max_event_queue_size=server_config.max_event_queue_size
+            quic=quic,
+            config=server_config,
+            is_client=False,
+            stream_handler=stream_handler,
+            loop=loop,
+            max_event_queue_size=server_config.max_event_queue_size,
         )
         self._server_config = server_config
         self._connection_creator = connection_creator
@@ -73,10 +75,7 @@ async def create_server(
 
     def protocol_factory(quic: QuicConnection, stream_handler: Any = None, **kwargs: Any) -> WebTransportServerProtocol:
         return WebTransportServerProtocol(
-            quic=quic,
-            server_config=config,
-            connection_creator=connection_creator,
-            stream_handler=stream_handler,
+            quic=quic, server_config=config, connection_creator=connection_creator, stream_handler=stream_handler
         )
 
     return await quic_serve(host=host, port=port, configuration=quic_config, create_protocol=protocol_factory)

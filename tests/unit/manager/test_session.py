@@ -1,7 +1,7 @@
 """Unit tests for the pywebtransport.manager.session module."""
 
 from typing import cast
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 from pytest_mock import MockerFixture
@@ -13,6 +13,12 @@ from pywebtransport.session import WebTransportSession
 from pywebtransport.types import SessionState
 
 
+class FalsySession(Mock):
+
+    def __bool__(self) -> bool:
+        return False
+
+
 class TestSessionManager:
 
     @pytest.fixture
@@ -22,7 +28,7 @@ class TestSessionManager:
     @pytest.fixture
     def mock_session(self, mocker: MockerFixture) -> MagicMock:
         session = mocker.Mock(spec=WebTransportSession)
-        session.session_id = "sess-1"
+        session.session_id = 1
         session.state = SessionState.CONNECTED
         session.is_closed = False
         session.events = EventEmitter()
@@ -34,9 +40,9 @@ class TestSessionManager:
         async with manager:
             session_id = await manager.add_session(session=mock_session)
 
-            assert session_id == "sess-1"
+            assert session_id == 1
             assert len(manager) == 1
-            assert await manager.get_resource(resource_id="sess-1") is mock_session
+            assert await manager.get_resource(resource_id=1) is mock_session
 
     @pytest.mark.asyncio
     async def test_close_resource_already_closed(self, manager: SessionManager, mock_session: MagicMock) -> None:
@@ -55,17 +61,17 @@ class TestSessionManager:
         mock_session.close.assert_awaited_once_with(error_code=ErrorCodes.NO_ERROR, reason="Session manager shutdown")
 
     def test_get_resource_id(self, manager: SessionManager, mock_session: MagicMock) -> None:
-        assert manager._get_resource_id(resource=mock_session) == "sess-1"
+        assert manager._get_resource_id(resource=mock_session) == 1
 
     @pytest.mark.asyncio
     async def test_get_sessions_by_state(self, manager: SessionManager, mocker: MockerFixture) -> None:
-        s1 = mocker.Mock(spec=WebTransportSession, session_id="s1", events=EventEmitter())
+        s1 = mocker.Mock(spec=WebTransportSession, session_id=1, events=EventEmitter())
         s1.state = SessionState.CONNECTED
         s1.is_closed = False
-        s2 = mocker.Mock(spec=WebTransportSession, session_id="s2", events=EventEmitter())
+        s2 = mocker.Mock(spec=WebTransportSession, session_id=2, events=EventEmitter())
         s2.state = SessionState.CLOSING
         s2.is_closed = False
-        s3 = mocker.Mock(spec=WebTransportSession, session_id="s3", events=EventEmitter())
+        s3 = mocker.Mock(spec=WebTransportSession, session_id=3, events=EventEmitter())
         s3.state = SessionState.CONNECTED
         s3.is_closed = False
 
@@ -89,10 +95,10 @@ class TestSessionManager:
 
     @pytest.mark.asyncio
     async def test_get_stats_includes_states(self, manager: SessionManager, mocker: MockerFixture) -> None:
-        s1 = mocker.Mock(spec=WebTransportSession, session_id="s1", events=EventEmitter())
+        s1 = mocker.Mock(spec=WebTransportSession, session_id=1, events=EventEmitter())
         s1.state = SessionState.CONNECTED
         s1.is_closed = False
-        s2 = mocker.Mock(spec=WebTransportSession, session_id="s2", events=EventEmitter())
+        s2 = mocker.Mock(spec=WebTransportSession, session_id=2, events=EventEmitter())
         s2.state = SessionState.DRAINING
         s2.is_closed = False
 
@@ -125,13 +131,30 @@ class TestSessionManager:
             await manager.add_session(session=mock_session)
             assert len(manager) == 1
 
-            removed = await manager.remove_session(session_id="sess-1")
+            removed = await manager.remove_session(session_id=1)
 
             assert removed is mock_session
             assert len(manager) == 0
             stats = await manager.get_stats()
             assert stats["total_closed"] == 1
             spy_off.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_remove_session_falsy(self, manager: SessionManager, mocker: MockerFixture) -> None:
+        session = FalsySession(spec=WebTransportSession)
+        session.session_id = 1
+        session.events = EventEmitter()
+        session.is_closed = False
+        session.state = SessionState.CONNECTED
+
+        async with manager:
+            await manager.add_session(session=cast(WebTransportSession, session))
+
+            removed = await manager.remove_session(session_id=1)
+
+            assert removed is session
+            stats = await manager.get_stats()
+            assert stats["total_closed"] == 1
 
     @pytest.mark.asyncio
     async def test_remove_session_handler_error(
@@ -142,7 +165,7 @@ class TestSessionManager:
         async with manager:
             await manager.add_session(session=mock_session)
 
-            removed = await manager.remove_session(session_id="sess-1")
+            removed = await manager.remove_session(session_id=1)
 
             assert removed is mock_session
             assert len(manager) == 0
@@ -150,10 +173,10 @@ class TestSessionManager:
     @pytest.mark.asyncio
     async def test_remove_session_missing(self, manager: SessionManager) -> None:
         async with manager:
-            removed = await manager.remove_session(session_id="missing")
+            removed = await manager.remove_session(session_id=999)
 
             assert removed is None
 
     @pytest.mark.asyncio
     async def test_remove_session_no_lock(self, manager: SessionManager) -> None:
-        assert await manager.remove_session(session_id="s1") is None
+        assert await manager.remove_session(session_id=1) is None

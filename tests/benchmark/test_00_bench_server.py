@@ -66,13 +66,8 @@ class BenchmarkServerApp(ServerApp):
             try:
 
                 async def sender() -> None:
-                    bytes_sent = 0
                     limit = 1024 * 1024
-                    while bytes_sent < limit:
-                        chunk_size = min(CHUNK_SIZE, limit - bytes_sent)
-                        chunk = STATIC_VIEW[:chunk_size]
-                        await stream.write(data=chunk)
-                        bytes_sent += chunk_size
+                    await stream.write_all(data=STATIC_VIEW[:limit], end_stream=False)
                     await stream.write(data=b"", end_stream=True)
 
                 async def receiver() -> None:
@@ -150,7 +145,7 @@ class BenchmarkServerApp(ServerApp):
         async def stream_responder(*, stream: WebTransportStream) -> None:
             try:
                 data = await stream.read_all()
-                await stream.write_all(data=data)
+                await stream.write_all(data=data, end_stream=True)
                 await stream.read(max_bytes=1)
             except (ConnectionError, StreamError):
                 pass
@@ -179,14 +174,7 @@ class BenchmarkServerApp(ServerApp):
                 except ValueError:
                     return
 
-                bytes_sent = 0
-                while bytes_sent < size_to_send:
-                    chunk_size = min(CHUNK_SIZE, size_to_send - bytes_sent)
-                    chunk = STATIC_VIEW[:chunk_size]
-                    await stream.write(data=chunk)
-                    bytes_sent += chunk_size
-
-                await stream.write(data=b"", end_stream=True)
+                await stream.write_all(data=STATIC_VIEW[:size_to_send], end_stream=True)
                 await stream.read(max_bytes=1)
             except (ConnectionError, StreamError):
                 pass
@@ -224,13 +212,16 @@ async def main() -> None:
         certfile=str(CERT_PATH),
         keyfile=str(KEY_PATH),
         max_connections=10000,
-        initial_max_data=104857600,
-        flow_control_window_size=104857600,
+        max_sessions=10000,
+        initial_max_data=100 * 1024 * 1024,
         initial_max_streams_bidi=10000,
         initial_max_streams_uni=10000,
-        stream_flow_control_increment_bidi=1048576,
-        stream_flow_control_increment_uni=1048576,
-        max_event_queue_size=20000,
+        flow_control_window_size=100 * 1024 * 1024,
+        stream_flow_control_increment_bidi=1000,
+        stream_flow_control_increment_uni=1000,
+        max_stream_read_buffer=200 * 1024 * 1024,
+        max_stream_write_buffer=200 * 1024 * 1024,
+        max_event_queue_size=100000,
     )
 
     app = BenchmarkServerApp(config=config)

@@ -25,13 +25,15 @@ logging.basicConfig(level=logging.CRITICAL)
 def client_config() -> ClientConfig:
     return ClientConfig(
         verify_mode=ssl.CERT_NONE,
-        connect_timeout=10.0,
-        read_timeout=30.0,
-        write_timeout=30.0,
-        initial_max_data=104857600,
+        initial_max_data=100 * 1024 * 1024,
         initial_max_streams_bidi=1000,
         initial_max_streams_uni=1000,
-        max_event_queue_size=5000,
+        flow_control_window_size=100 * 1024 * 1024,
+        stream_flow_control_increment_bidi=100,
+        stream_flow_control_increment_uni=100,
+        max_stream_read_buffer=200 * 1024 * 1024,
+        max_stream_write_buffer=200 * 1024 * 1024,
+        max_event_queue_size=10000,
     )
 
 
@@ -45,7 +47,7 @@ class TestStreamThroughput:
                 session = await client.connect(url=url)
                 for _ in range(STREAMS_PER_ROUND):
                     stream = await session.create_unidirectional_stream()
-                    await stream.write_all(data=STATIC_VIEW)
+                    await stream.write_all(data=STATIC_VIEW, end_stream=True)
                 await session.close()
 
         for _ in range(WARMUP_ROUNDS):
@@ -70,7 +72,7 @@ class TestStreamThroughput:
                 for _ in range(STREAMS_PER_ROUND):
                     stream = await session.create_bidirectional_stream()
                     await stream.write(data=cmd)
-                    while await stream.read(max_bytes=65536):
+                    while await stream.read(max_bytes=PAYLOAD_SIZE):
                         pass
                 await session.close()
 
@@ -99,7 +101,7 @@ class TestStreamThroughput:
                         await stream.write(data=STATIC_VIEW, end_stream=False)
 
                     async def receiver() -> None:
-                        while await stream.read(max_bytes=65536):
+                        while await stream.read(max_bytes=PAYLOAD_SIZE):
                             pass
 
                     sender_task = asyncio.create_task(coro=sender())

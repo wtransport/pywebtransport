@@ -11,8 +11,7 @@ from pytest_asyncio import fixture as asyncio_fixture
 from pytest_mock import MockerFixture
 
 from pywebtransport import ServerConfig, ServerError
-from pywebtransport.server.cluster import ServerCluster
-from pywebtransport.server.server import WebTransportServer
+from pywebtransport.server import ServerCluster, WebTransportServer
 from pywebtransport.types import ConnectionState, SessionState
 
 
@@ -290,7 +289,6 @@ class TestServerCluster:
         await asyncio.sleep(0.01)
         assert not serve_task.done()
 
-        assert cluster._shutdown_event is not None
         cluster._shutdown_event.set()
 
         await serve_task
@@ -322,6 +320,16 @@ class TestServerCluster:
         await cluster.stop_all()
         with pytest.raises(ServerError, match="Cluster is not running"):
             await cluster.serve_forever()
+
+    @pytest.mark.asyncio
+    async def test_serve_forever_wait_exception(self, cluster: ServerCluster, mocker: MockerFixture) -> None:
+        await cluster.start_all()
+        mocker.patch.object(cluster._shutdown_event, "wait", side_effect=ValueError("Unexpected error"))
+        mock_logger = mocker.patch("pywebtransport.server.cluster.logger")
+
+        await cluster.serve_forever()
+
+        mock_logger.error.assert_called_with("Error during serve_forever wait: %s", mocker.ANY)
 
     @pytest.mark.asyncio
     async def test_start_all_failure(

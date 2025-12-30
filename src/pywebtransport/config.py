@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import copy
 import ssl
+import types
 from abc import ABC
 from dataclasses import dataclass, field
-from typing import Any, Self
+from enum import Enum
+from typing import Any, Self, Union, get_args, get_origin, get_type_hints
 
 from pywebtransport.constants import (
     DEFAULT_ALPN_PROTOCOLS,
@@ -55,7 +57,6 @@ from pywebtransport.constants import (
 )
 from pywebtransport.exceptions import ConfigurationError
 from pywebtransport.types import Headers
-from pywebtransport.version import __version__
 
 __all__: list[str] = ["BaseConfig", "ClientConfig", "ServerConfig"]
 
@@ -102,11 +103,37 @@ class BaseConfig(ABC):
         """Create a configuration instance from a dictionary."""
         valid_keys = {f.name for f in cls.__dataclass_fields__.values()}
         filtered_dict = {k: v for k, v in config_dict.items() if k in valid_keys}
+
+        type_hints = get_type_hints(cls)
+
+        for key, value in filtered_dict.items():
+            if key not in type_hints:
+                continue
+
+            target_type = type_hints[key]
+            origin = get_origin(target_type)
+
+            if origin is types.UnionType or origin is Union:
+                args = [arg for arg in get_args(target_type) if arg is not type(None)]
+                if len(args) == 1:
+                    target_type = args[0]
+                elif isinstance(value, str):
+                    for arg in args:
+                        if isinstance(arg, type) and issubclass(arg, Enum):
+                            target_type = arg
+                            break
+
+            if isinstance(value, str) and isinstance(target_type, type) and issubclass(target_type, Enum):
+                try:
+                    filtered_dict[key] = target_type[value]
+                except KeyError:
+                    pass
+
         return cls(**filtered_dict)
 
     def copy(self) -> Self:
         """Create a deep copy of the configuration."""
-        return copy.deepcopy(self)
+        return copy.deepcopy(x=self)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert the configuration to a dictionary."""
@@ -283,22 +310,8 @@ class ClientConfig(BaseConfig):
     max_sessions: int = DEFAULT_CLIENT_MAX_SESSIONS
     retry_backoff: float = DEFAULT_RETRY_BACKOFF
     retry_delay: float = DEFAULT_RETRY_DELAY
-    user_agent: str = f"PyWebTransport/{__version__}"
+    user_agent: str | None = None
     verify_mode: ssl.VerifyMode | None = DEFAULT_CLIENT_VERIFY_MODE
-
-    def __post_init__(self) -> None:
-        """Normalize headers and validate the configuration."""
-        self.headers = _normalize_headers(headers=self.headers)
-
-        if isinstance(self.headers, dict):
-            if "user-agent" not in self.headers:
-                self.headers["user-agent"] = self.user_agent
-        else:
-            has_ua = any(key == "user-agent" for key, _ in self.headers)
-            if not has_ua:
-                self.headers.append(("user-agent", self.user_agent))
-
-        self.validate()
 
     def validate(self) -> None:
         """Validate client specific configuration."""
@@ -338,8 +351,8 @@ class ClientConfig(BaseConfig):
                 config_value=self.retry_delay,
             )
 
-        has_certfile = bool(self.certfile)
-        has_keyfile = bool(self.keyfile)
+        has_certfile = self.certfile is not None
+        has_keyfile = self.keyfile is not None
         if has_certfile != has_keyfile:
             raise ConfigurationError(
                 message="TLS configuration error: 'certfile' and 'keyfile' must be provided together",
@@ -365,10 +378,6 @@ class ServerConfig(BaseConfig):
     max_connections: int = DEFAULT_SERVER_MAX_CONNECTIONS
     max_sessions: int = DEFAULT_SERVER_MAX_SESSIONS
     verify_mode: ssl.VerifyMode = DEFAULT_SERVER_VERIFY_MODE
-
-    def __post_init__(self) -> None:
-        """Validate the configuration after initialization."""
-        self.validate()
 
     @classmethod
     def from_dict(cls, *, config_dict: dict[str, Any]) -> Self:
@@ -399,7 +408,7 @@ class ServerConfig(BaseConfig):
                 message=f"Invalid value for 'bind_port': {e}", config_key="bind_port", config_value=self.bind_port
             ) from e
 
-        if not self.certfile or not self.keyfile:
+        if self.certfile is None or self.keyfile is None:
             raise ConfigurationError(
                 message="TLS configuration error: Server requires both certificate and key files",
                 config_key="certfile/keyfile",
@@ -413,13 +422,6 @@ class ServerConfig(BaseConfig):
                 config_key="verify_mode",
                 config_value=self.verify_mode,
             )
-
-
-def _normalize_headers(*, headers: Headers) -> Headers:
-    """Normalize header keys to lowercase and values to strings."""
-    if isinstance(headers, dict):
-        return {str(key).lower(): str(value) for key, value in headers.items()}
-    return [(str(key).lower(), str(value)) for key, value in headers]
 
 
 def _validate_port(*, port: Any) -> None:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import uuid
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -30,7 +29,6 @@ class Event:
     timestamp: float = field(default_factory=get_timestamp)
     data: EventData | None = None
     source: Any | None = None
-    event_id: str = field(default_factory=lambda: str(uuid.uuid4()))
 
     def __post_init__(self) -> None:
         """Handle string-based event types after initialization."""
@@ -43,23 +41,22 @@ class Event:
     def to_dict(self) -> dict[str, Any]:
         """Convert the event to a dictionary."""
         return {
-            "id": self.event_id,
             "type": self.type,
             "timestamp": self.timestamp,
             "data": self.data,
-            "source": str(self.source) if self.source else None,
+            "source": str(self.source) if self.source is not None else None,
         }
 
     def __repr__(self) -> str:
         """Return a detailed string representation of the event."""
-        return f"Event(type={self.type}, id={self.event_id}, timestamp={self.timestamp})"
+        return f"Event(type={self.type}, timestamp={self.timestamp})"
 
     def __str__(self) -> str:
         """Return a simple string representation of the event."""
-        return f"Event({self.type}, {self.event_id[:8]})"
+        return f"Event({self.type})"
 
 
-EventHandler = Callable[[Event], Awaitable[None] | None]
+type EventHandler = Callable[[Event], Awaitable[None] | None]
 
 
 class EventEmitter:
@@ -73,9 +70,6 @@ class EventEmitter:
         max_queue_size: int = DEFAULT_MAX_EVENT_QUEUE_SIZE,
     ) -> None:
         """Initialize the event emitter."""
-        if getattr(self, "_emitter_initialized", False):
-            return
-
         self._handlers: dict[EventType | str, list[EventHandler]] = defaultdict(list)
         self._once_handlers: dict[EventType | str, list[EventHandler]] = defaultdict(list)
         self._wildcard_handlers: list[EventHandler] = []
@@ -86,11 +80,10 @@ class EventEmitter:
         self._paused = False
         self._max_listeners = max_listeners
         self._max_history = max_history
-        self._emitter_initialized = True
 
     async def close(self) -> None:
         """Cancel running event processing tasks and clear all listeners."""
-        if self._processing_task and not self._processing_task.done():
+        if self._processing_task is not None and not self._processing_task.done():
             self._processing_task.cancel()
             try:
                 await self._processing_task
@@ -125,7 +118,7 @@ class EventEmitter:
             return
 
         try:
-            task = asyncio.create_task(self._process_event(event=event))
+            task = asyncio.create_task(coro=self._process_event(event=event))
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
         except RuntimeError:
@@ -287,7 +280,7 @@ class EventEmitter:
 
     def _enqueue_event(self, event: Event) -> None:
         """Enqueue an event safely, dropping oldest if full."""
-        if self._event_queue.maxlen and len(self._event_queue) >= self._event_queue.maxlen:
+        if self._event_queue.maxlen is not None and len(self._event_queue) >= self._event_queue.maxlen:
             logger.warning("Event queue full, dropping oldest event to make room")
         self._event_queue.append(event)
 

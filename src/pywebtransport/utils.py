@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import secrets
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -18,12 +17,14 @@ __all__: list[str] = [
     "ensure_buffer",
     "format_duration",
     "generate_self_signed_cert",
-    "generate_session_id",
     "get_header",
+    "get_header_as_str",
     "get_logger",
     "get_timestamp",
     "merge_headers",
 ]
+
+_timer_logger = logging.getLogger(name="timer")
 
 
 class Timer:
@@ -41,7 +42,7 @@ class Timer:
         if self.start_time is None:
             return 0.0
 
-        end = self.end_time or time.perf_counter()
+        end = self.end_time if self.end_time is not None else time.perf_counter()
         return end - self.start_time
 
     def __enter__(self) -> Self:
@@ -54,8 +55,7 @@ class Timer:
     ) -> None:
         """Stop the timer and log the duration upon exiting the context."""
         elapsed = self.stop()
-        logger = get_logger(name="timer")
-        logger.debug("%s took %s", self.name, format_duration(seconds=elapsed))
+        _timer_logger.debug("%s took %s", self.name, format_duration(seconds=elapsed))
 
     def start(self) -> None:
         """Start the timer."""
@@ -75,7 +75,7 @@ def ensure_buffer(*, data: Buffer | str, encoding: str = "utf-8") -> Buffer:
     """Ensure that the given data is in a buffer-compatible format."""
     match data:
         case str():
-            return data.encode(encoding)
+            return data.encode(encoding=encoding)
         case bytes() | bytearray() | memoryview():
             return data
         case _:
@@ -114,25 +114,25 @@ def generate_self_signed_cert(
 
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=key_size)
     subject = issuer = x509.Name(
-        [
-            x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
-            x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, "CA"),
-            x509.NameAttribute(NameOID.LOCALITY_NAME, "San Francisco"),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "PyWebTransport"),
-            x509.NameAttribute(NameOID.COMMON_NAME, hostname),
+        attributes=[
+            x509.NameAttribute(oid=NameOID.COUNTRY_NAME, value="US"),
+            x509.NameAttribute(oid=NameOID.STATE_OR_PROVINCE_NAME, value="CA"),
+            x509.NameAttribute(oid=NameOID.LOCALITY_NAME, value="San Francisco"),
+            x509.NameAttribute(oid=NameOID.ORGANIZATION_NAME, value="PyWebTransport"),
+            x509.NameAttribute(oid=NameOID.COMMON_NAME, value=hostname),
         ]
     )
 
     cert = (
         x509.CertificateBuilder()
-        .subject_name(subject)
-        .issuer_name(issuer)
-        .public_key(private_key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.now(timezone.utc))
-        .not_valid_after(datetime.now(timezone.utc) + timedelta(days=days_valid))
-        .add_extension(x509.SubjectAlternativeName([x509.DNSName(hostname)]), critical=False)
-        .sign(private_key, hashes.SHA256())
+        .subject_name(name=subject)
+        .issuer_name(name=issuer)
+        .public_key(key=private_key.public_key())
+        .serial_number(number=x509.random_serial_number())
+        .not_valid_before(time=datetime.now(tz=timezone.utc))
+        .not_valid_after(time=datetime.now(tz=timezone.utc) + timedelta(days=days_valid))
+        .add_extension(extval=x509.SubjectAlternativeName([x509.DNSName(value=hostname)]), critical=False)
+        .sign(private_key=private_key, algorithm=hashes.SHA256())
     )
 
     output_path = Path(output_dir)
@@ -140,7 +140,7 @@ def generate_self_signed_cert(
     cert_file = output_path / f"{hostname}.crt"
     key_file = output_path / f"{hostname}.key"
 
-    with open(key_file, "wb") as f:
+    with open(file=key_file, mode="wb") as f:
         f.write(
             private_key.private_bytes(
                 encoding=serialization.Encoding.PEM,
@@ -148,40 +148,57 @@ def generate_self_signed_cert(
                 encryption_algorithm=serialization.NoEncryption(),
             )
         )
-    os.chmod(key_file, 0o600)
+    os.chmod(path=key_file, mode=0o600)
 
-    with open(cert_file, "wb") as f:
-        f.write(cert.public_bytes(serialization.Encoding.PEM))
+    with open(file=cert_file, mode="wb") as f:
+        f.write(cert.public_bytes(encoding=serialization.Encoding.PEM))
 
     return (str(cert_file), str(key_file))
 
 
-def generate_session_id() -> str:
-    """Generate a unique, URL-safe session ID."""
-    return secrets.token_urlsafe(16)
-
-
-def get_header(*, headers: Headers, key: str, default: str | None = None) -> str | None:
+def get_header(*, headers: Headers, key: str, default: str | bytes | None = None) -> str | bytes | None:
     """
     Get a header value case-insensitively from a dict or list.
 
     .. note::
-       Performance Optimization: When ``headers`` is a dict, this function assumes
-       keys are already lowercased (per HTTP/3 spec) to ensure O(1) lookup.
+        Performance Optimization: When ``headers`` is a dict, this function assumes
+        keys are already lowercased (per HTTP/3 spec) to ensure O(1) lookup.
     """
     target_key = key.lower()
+    target_key_bytes = target_key.encode("utf-8")
+
     if isinstance(headers, dict):
-        return headers.get(target_key, default)
+        if target_key in headers:
+            return headers[target_key]
+        return headers.get(target_key_bytes, default)
 
     for k, v in headers:
-        if k.lower() == target_key:
+        if isinstance(k, bytes):
+            if k.lower() == target_key_bytes:
+                return v
+        elif k.lower() == target_key:
             return v
     return default
 
 
+def get_header_as_str(*, headers: Headers, key: str, default: str | None = None) -> str | None:
+    """Get a header value and decode it to a string if necessary."""
+    value = get_header(headers=headers, key=key)
+    if value is None:
+        return default
+
+    if isinstance(value, str):
+        return value
+
+    try:
+        return value.decode("utf-8")
+    except UnicodeDecodeError:
+        return default
+
+
 def get_logger(*, name: str) -> logging.Logger:
     """Get a logger instance with a specific name."""
-    return logging.getLogger(name)
+    return logging.getLogger(name=name)
 
 
 def get_timestamp() -> float:

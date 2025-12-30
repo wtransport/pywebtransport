@@ -26,13 +26,12 @@ logging.basicConfig(level=logging.CRITICAL)
 def client_config() -> ClientConfig:
     return ClientConfig(
         verify_mode=ssl.CERT_NONE,
-        connect_timeout=30.0,
-        read_timeout=60.0,
         write_timeout=60.0,
         stream_creation_timeout=30.0,
-        initial_max_data=1073741824,
+        initial_max_data=1024 * 1024 * 1024,
         initial_max_streams_bidi=2000,
         initial_max_streams_uni=2000,
+        flow_control_window_size=1024 * 1024 * 1024,
         max_event_queue_size=20000,
     )
 
@@ -44,7 +43,7 @@ class TestMultiplexingEfficiency:
 
         async def stream_worker(*, session: Any) -> None:
             stream = await session.create_unidirectional_stream()
-            await stream.write_all(data=STATIC_VIEW)
+            await stream.write_all(data=STATIC_VIEW, end_stream=True)
 
         async def run_multiplexing() -> None:
             async with WebTransportClient(config=client_config) as client:

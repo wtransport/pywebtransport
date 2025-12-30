@@ -2,7 +2,27 @@
 
 import pytest
 
-from pywebtransport.client.utils import parse_webtransport_url, validate_url
+from pywebtransport import Headers
+from pywebtransport.client.utils import normalize_headers, parse_webtransport_url, validate_url
+
+
+class TestNormalizeHeaders:
+
+    def test_normalize_headers_dict(self) -> None:
+        headers: Headers = {"Content-Type": "application/json", "USER-AGENT": "test-client"}
+
+        normalized = normalize_headers(headers=headers)
+
+        assert isinstance(normalized, dict)
+        assert normalized == {"content-type": "application/json", "user-agent": "test-client"}
+
+    def test_normalize_headers_list(self) -> None:
+        headers: Headers = [("Content-Type", "application/json"), ("USER-AGENT", "test-client")]
+
+        normalized = normalize_headers(headers=headers)
+
+        assert isinstance(normalized, list)
+        assert normalized == [("content-type", "application/json"), ("user-agent", "test-client")]
 
 
 class TestUrlUtils:
@@ -23,6 +43,7 @@ class TestUrlUtils:
         "url, expected",
         [
             ("https://example.com", ("example.com", 443, "/")),
+            ("https://example.com:0", ("example.com", 0, "/")),
             ("https://localhost:8080/path", ("localhost", 8080, "/path")),
             ("https://[::1]:9090/q?a=1#f", ("::1", 9090, "/q?a=1")),
         ],

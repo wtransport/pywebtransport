@@ -7,9 +7,10 @@ name = "pywebtransport"
 dynamic = ["version"]
 description = "An async-native WebTransport stack for Python."
 readme = "README.md"
-license = { file = "LICENSE" }
+license-expression = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.12"
-authors = [{ name = "lemonsterfy", email = "lemonsterfy@gmail.com" }]
+authors = [{ name = "The WTransport Authors", email = "admin@wtransport.org" }]
 keywords = ["async", "http3", "networking", "protocol", "quic", "webtransport"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -58,17 +59,17 @@ test = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/lemonsterfy/pywebtransport"
-Documentation = "https://docs.pywebtransport.org"
-Repository = "https://github.com/lemonsterfy/pywebtransport.git"
-Issues = "https://github.com/lemonsterfy/pywebtransport/issues"
-Changelog = "https://github.com/lemonsterfy/pywebtransport/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/wtransport/pywebtransport"
+Documentation = "https://python.wtransport.org"
+Repository = "https://github.com/wtransport/pywebtransport.git"
+Issues = "https://github.com/wtransport/pywebtransport/issues"
+Changelog = "https://github.com/wtransport/pywebtransport/blob/main/CHANGELOG.md"
 
 [tool.hatch.version]
 path = "src/pywebtransport/version.py"
 
 [tool.hatch.build.targets.sdist]
-include = ["/CHANGELOG.md", "/LICENSE", "/NOTICE", "/README.md", "/src"]
+include = ["/AUTHORS", "/CHANGELOG.md", "/src"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pywebtransport"]

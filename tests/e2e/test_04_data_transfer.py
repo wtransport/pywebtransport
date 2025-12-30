@@ -34,14 +34,7 @@ async def test_small_data() -> bool:
     """Test small data transfers (< 1KB)."""
     logger.info("--- Test 04A: Small Data Transfer ---")
     test_sizes = [10, 100, 500, 1000]
-    config = ClientConfig(
-        verify_mode=ssl.CERT_NONE,
-        connect_timeout=10.0,
-        read_timeout=5.0,
-        initial_max_data=1024 * 1024,
-        initial_max_streams_bidi=100,
-        initial_max_streams_uni=100,
-    )
+    config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
@@ -51,7 +44,7 @@ async def test_small_data() -> bool:
                 test_data = generate_test_data(size=size)
                 stream = await session.create_bidirectional_stream()
 
-                await stream.write_all(data=test_data)
+                await stream.write_all(data=test_data, end_stream=True)
                 response = await stream.read_all()
 
                 expected = b"ECHO: " + test_data
@@ -74,14 +67,7 @@ async def test_medium_data() -> bool:
     """Test medium data transfers (1KB - 64KB)."""
     logger.info("--- Test 04B: Medium Data Transfer ---")
     test_sizes = [1024, 4096, 16384, 65536]
-    config = ClientConfig(
-        verify_mode=ssl.CERT_NONE,
-        connect_timeout=10.0,
-        read_timeout=15.0,
-        initial_max_data=1024 * 1024,
-        initial_max_streams_bidi=100,
-        initial_max_streams_uni=100,
-    )
+    config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
@@ -92,7 +78,7 @@ async def test_medium_data() -> bool:
                 test_data = generate_test_data(size=size)
                 stream = await session.create_bidirectional_stream()
 
-                await stream.write_all(data=test_data)
+                await stream.write_all(data=test_data, end_stream=True)
                 response_data = await stream.read_all()
 
                 expected = b"ECHO: " + test_data
@@ -116,14 +102,7 @@ async def test_chunked_transfer() -> bool:
     logger.info("--- Test 04C: Chunked Transfer ---")
     total_size = 32768
     chunk_size = 4096
-    config = ClientConfig(
-        verify_mode=ssl.CERT_NONE,
-        connect_timeout=10.0,
-        read_timeout=10.0,
-        initial_max_data=1024 * 1024,
-        initial_max_streams_bidi=100,
-        initial_max_streams_uni=100,
-    )
+    config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
@@ -159,14 +138,7 @@ async def test_chunked_transfer() -> bool:
 async def test_binary_data() -> bool:
     """Test the transfer of raw binary data to ensure no corruption."""
     logger.info("--- Test 04D: Binary Data Transfer ---")
-    config = ClientConfig(
-        verify_mode=ssl.CERT_NONE,
-        connect_timeout=10.0,
-        read_timeout=10.0,
-        initial_max_data=1024 * 1024,
-        initial_max_streams_bidi=100,
-        initial_max_streams_uni=100,
-    )
+    config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
@@ -175,7 +147,7 @@ async def test_binary_data() -> bool:
             logger.info("Testing transfer of %d raw binary bytes.", len(binary_data))
             stream = await session.create_bidirectional_stream()
 
-            await stream.write_all(data=binary_data)
+            await stream.write_all(data=binary_data, end_stream=True)
             response_data = await stream.read_all()
 
             expected = b"ECHO: " + binary_data
@@ -197,14 +169,7 @@ async def test_performance_benchmark() -> bool:
     """Perform a simple performance benchmark with a 1MB payload."""
     logger.info("--- Test 04E: Performance Benchmark (1MB) ---")
     test_size = 1024 * 1024
-    config = ClientConfig(
-        verify_mode=ssl.CERT_NONE,
-        connect_timeout=10.0,
-        read_timeout=30.0,
-        initial_max_data=2 * 1024 * 1024,
-        initial_max_streams_bidi=100,
-        initial_max_streams_uni=100,
-    )
+    config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
@@ -214,7 +179,7 @@ async def test_performance_benchmark() -> bool:
 
             logger.info("Starting 1MB round-trip transfer...")
             start_time = time.time()
-            await stream.write_all(data=test_data)
+            await stream.write_all(data=test_data, end_stream=True)
             response_data = await stream.read_all()
             duration = time.time() - start_time
 

@@ -18,22 +18,19 @@ except ImportError:
     msgpack = None
 
 
+class NonSerializable:
+    pass
+
+
 @dataclass(kw_only=True)
 class SimpleData:
-
     id: int
     name: str
 
 
 class Status(Enum):
-
     ACTIVE = "active"
     INACTIVE = "inactive"
-
-
-class NonSerializable:
-
-    pass
 
 
 def test_module_import_handles_missing_msgpack() -> None:
@@ -60,16 +57,17 @@ class TestMsgPackSerializer:
 
         return MsgPackSerializer()
 
-    def test_init_raises_configuration_error_if_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("pywebtransport.serializer.msgpack.msgpack", None)
-        from pywebtransport.serializer.msgpack import MsgPackSerializer
-
-        with pytest.raises(ConfigurationError, match="library is required"):
-            MsgPackSerializer()
-
     def test_deserialize_invalid_data_raises_error(self, serializer: Any) -> None:
         with pytest.raises(SerializationError, match="Data is not valid MsgPack"):
             serializer.deserialize(data=b"\xc1")
+
+    def test_deserialize_memoryview_input(self, serializer: Any) -> None:
+        data = msgpack.packb({"id": 1, "name": "test"})
+        mv = memoryview(data)
+
+        result = serializer.deserialize(data=mv, obj_type=SimpleData)
+
+        assert result == SimpleData(id=1, name="test")
 
     def test_deserialize_to_dataclass(self, serializer: Any) -> None:
         data = msgpack.packb({"id": 1, "name": "test"})
@@ -84,14 +82,6 @@ class TestMsgPackSerializer:
         result = serializer.deserialize(data=data)
 
         assert result == {"id": 1, "name": "test"}
-
-    def test_deserialize_memoryview_input(self, serializer: Any) -> None:
-        data = msgpack.packb({"id": 1, "name": "test"})
-        mv = memoryview(data)
-
-        result = serializer.deserialize(data=mv, obj_type=SimpleData)
-
-        assert result == SimpleData(id=1, name="test")
 
     def test_deserialize_type_mismatch_raises_error(self, serializer: Any) -> None:
         data = msgpack.packb({"name": "test"})
@@ -109,6 +99,29 @@ class TestMsgPackSerializer:
 
         assert isinstance(result, tuple)
         assert result == (1, 2, 3)
+
+    def test_init_raises_configuration_error_if_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("pywebtransport.serializer.msgpack.msgpack", None)
+        from pywebtransport.serializer.msgpack import MsgPackSerializer
+
+        with pytest.raises(ConfigurationError, match="library is required"):
+            MsgPackSerializer()
+
+    def test_serialize_custom_default_handler(self) -> None:
+        def custom_default(o: Any) -> Any:
+            if isinstance(o, complex):
+                return {"real": o.real, "imag": o.imag}
+            raise TypeError(f"Unknown type {type(o)}")
+
+        from pywebtransport.serializer.msgpack import MsgPackSerializer
+
+        serializer = MsgPackSerializer(pack_kwargs={"default": custom_default})
+        data = complex(1, 2)
+
+        result = serializer.serialize(obj=data)
+        unpacked = serializer.deserialize(data=result)
+
+        assert unpacked == {"real": 1.0, "imag": 2.0}
 
     def test_serialize_dataclass(self, serializer: Any) -> None:
         instance = SimpleData(id=1, name="test")
@@ -152,22 +165,6 @@ class TestMsgPackSerializer:
 
         assert "is not MsgPack serializable" in str(exc_info.value)
         assert isinstance(exc_info.value.__cause__, TypeError)
-
-    def test_serialize_custom_default_handler(self) -> None:
-        def custom_default(o: Any) -> Any:
-            if isinstance(o, complex):
-                return {"real": o.real, "imag": o.imag}
-            raise TypeError(f"Unknown type {type(o)}")
-
-        from pywebtransport.serializer.msgpack import MsgPackSerializer
-
-        serializer = MsgPackSerializer(pack_kwargs={"default": custom_default})
-        data = complex(1, 2)
-
-        result = serializer.serialize(obj=data)
-        unpacked = serializer.deserialize(data=result)
-
-        assert unpacked == {"real": 1.0, "imag": 2.0}
 
     def test_serialize_with_pack_kwargs(self) -> None:
         from pywebtransport.serializer.msgpack import MsgPackSerializer

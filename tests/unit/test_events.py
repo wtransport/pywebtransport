@@ -6,7 +6,8 @@ from typing import Any
 import pytest
 from pytest_mock import MockerFixture
 
-from pywebtransport.events import Event, EventEmitter
+from pywebtransport import Event
+from pywebtransport.events import EventEmitter
 from pywebtransport.types import EventType
 
 
@@ -16,37 +17,36 @@ def mock_logger(mocker: MockerFixture) -> Any:
 
 
 @pytest.fixture(autouse=True)
-def mock_other_dependencies(mocker: MockerFixture) -> None:
+def mock_timestamp(mocker: MockerFixture) -> None:
     mocker.patch("time.perf_counter", return_value=12345.6789)
-    mock_uuid = mocker.MagicMock()
-    mock_uuid.__str__.return_value = "mock-uuid-1234"
-    mocker.patch("pywebtransport.events.uuid.uuid4", return_value=mock_uuid)
 
 
 class TestEvent:
+
     def test_event_equality(self) -> None:
-        event1 = Event(type=EventType.SESSION_READY, timestamp=100.0, event_id="uuid-1")
-        event2 = Event(type=EventType.SESSION_READY, timestamp=100.0, event_id="uuid-1")
-        event3 = Event(type=EventType.SESSION_READY, timestamp=100.0, event_id="uuid-2")
+        event1 = Event(type=EventType.SESSION_READY, timestamp=100.0)
+        event2 = Event(type=EventType.SESSION_READY, timestamp=100.0)
+        event3 = Event(type=EventType.SESSION_READY, timestamp=200.0)
 
         assert event1 == event2
         assert event1 != event3
 
     def test_event_explicit_init(self) -> None:
-        event = Event(
-            type=EventType.SESSION_READY, timestamp=999.99, data={"foo": "bar"}, source="src", event_id="explicit-id"
-        )
+        event = Event(type=EventType.SESSION_READY, timestamp=999.99, data={"foo": "bar"}, source="src")
 
         assert event.timestamp == 999.99
-        assert event.event_id == "explicit-id"
         assert event.data == {"foo": "bar"}
+        assert event.source == "src"
+
+    def test_init_with_non_string_type(self) -> None:
+        event = Event(type=123)  # type: ignore[arg-type]
+        assert event.type == 123  # type: ignore[comparison-overlap]
 
     def test_initialization_with_enum(self) -> None:
         event = Event(type=EventType.CONNECTION_ESTABLISHED)
 
         assert event.type == EventType.CONNECTION_ESTABLISHED
         assert event.timestamp == 12345.6789
-        assert event.event_id == "mock-uuid-1234"
         assert event.data is None
 
     def test_post_init_str_to_enum_conversion(self) -> None:
@@ -63,13 +63,12 @@ class TestEvent:
     def test_repr_and_str(self) -> None:
         event = Event(type=EventType.CONNECTION_FAILED)
 
-        assert repr(event) == "Event(type=connection_failed, id=mock-uuid-1234, timestamp=12345.6789)"
-        assert str(event) == "Event(connection_failed, mock-uui)"
+        assert repr(event) == "Event(type=connection_failed, timestamp=12345.6789)"
+        assert str(event) == "Event(connection_failed)"
 
     def test_to_dict(self) -> None:
         event = Event(type=EventType.SESSION_READY, data={"id": 1}, source="test_source")
         expected_dict = {
-            "id": "mock-uuid-1234",
             "type": EventType.SESSION_READY,
             "timestamp": 12345.6789,
             "data": {"id": 1},
@@ -89,6 +88,7 @@ class TestEvent:
 
 
 class TestEventEmitter:
+
     @pytest.fixture
     def emitter(self) -> EventEmitter:
         return EventEmitter(max_listeners=3, max_history=10)
@@ -114,6 +114,33 @@ class TestEventEmitter:
         cancel_spy.assert_called_once()
         assert real_task.cancelled()
         assert emitter.get_stats()["total_handlers"] == 0
+
+    @pytest.mark.asyncio
+    async def test_close_cancels_background_tasks(self, emitter: EventEmitter) -> None:
+        async def hang() -> None:
+            await asyncio.sleep(10)
+
+        async def quick() -> None:
+            pass
+
+        task1 = asyncio.create_task(hang())
+        task2 = asyncio.create_task(quick())
+
+        await task2
+
+        emitter._background_tasks.add(task1)
+        emitter._background_tasks.add(task2)
+
+        await asyncio.sleep(0)
+
+        await emitter.close()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task1
+
+        assert task1.cancelled()
+        assert task2.done()
+        assert not task2.cancelled()
 
     @pytest.mark.asyncio
     async def test_close_with_done_task(self, emitter: EventEmitter, mocker: MockerFixture) -> None:
@@ -153,7 +180,12 @@ class TestEventEmitter:
         handler = mocker.AsyncMock()
         emitter.on(event_type=EventType.SESSION_READY, handler=handler)
 
+        assert len(emitter._background_tasks) == 0
+
         emitter.emit_nowait(event_type=EventType.SESSION_READY, data={"k": "v"})
+
+        assert len(emitter._background_tasks) == 1
+
         await asyncio.sleep(delay=0.01)
 
         handler.assert_awaited_once()
@@ -237,13 +269,11 @@ class TestEventEmitter:
 
     def test_init_is_idempotent(self) -> None:
         emitter = EventEmitter(max_listeners=5)
-        assert emitter._emitter_initialized is True
         assert emitter._max_listeners == 5
 
         emitter.__init__(max_listeners=10)  # type: ignore[misc]
 
-        assert emitter._emitter_initialized is True
-        assert emitter._max_listeners == 5
+        assert emitter._max_listeners == 10
 
     @pytest.mark.asyncio
     async def test_max_listeners_warning(self, emitter: EventEmitter, mocker: MockerFixture, mock_logger: Any) -> None:
@@ -363,20 +393,31 @@ class TestEventEmitter:
         assert emitter.listener_count(event_type=EventType.STREAM_OPENED) == 0
 
     @pytest.mark.asyncio
+    async def test_once_duplicate_handler(self, emitter: EventEmitter, mocker: MockerFixture, mock_logger: Any) -> None:
+        handler = mocker.AsyncMock()
+        emitter.once(event_type=EventType.SESSION_READY, handler=handler)
+
+        emitter.once(event_type=EventType.SESSION_READY, handler=handler)
+
+        assert emitter.listener_count(event_type=EventType.SESSION_READY) == 1
+        assert len(emitter._once_handlers[EventType.SESSION_READY]) == 1
+
+    @pytest.mark.asyncio
     async def test_pause_and_resume(self, emitter: EventEmitter, mocker: MockerFixture) -> None:
         handler = mocker.AsyncMock()
-        mock_create_task = mocker.patch("pywebtransport.events.asyncio.create_task")
+        spy_create_task = mocker.spy(asyncio, "create_task")
+
         emitter.on(event_type=EventType.SESSION_READY, handler=handler)
 
         emitter.pause()
         await emitter.emit(event_type=EventType.SESSION_READY)
         handler.assert_not_awaited()
+
         task = emitter.resume()
 
         assert task is not None
-        mock_create_task.assert_called_once()
-        coro = mock_create_task.call_args.kwargs["coro"]
-        await coro
+        spy_create_task.assert_called()
+        await task
         handler.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -429,6 +470,32 @@ class TestEventEmitter:
         task = emitter.resume()
 
         assert task is None
+
+    @pytest.mark.asyncio
+    async def test_resume_task_cancelled(self, emitter: EventEmitter, mocker: MockerFixture) -> None:
+        started = asyncio.Event()
+
+        async def blocking_handler(event: Event) -> None:
+            started.set()
+            try:
+                await asyncio.sleep(2)
+            except asyncio.CancelledError:
+                raise
+
+        emitter.on(event_type=EventType.SESSION_READY, handler=blocking_handler)
+
+        emitter.pause()
+        await emitter.emit(event_type=EventType.SESSION_READY)
+
+        task = emitter.resume()
+        assert task is not None
+
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
 
     @pytest.mark.asyncio
     async def test_wait_for_condition(self, emitter: EventEmitter) -> None:

@@ -65,15 +65,16 @@ class StructuredDatagramTransport:
             return
 
         self._closed = True
-        if self._handler_ref:
-            if session := self._session():
+        if self._handler_ref is not None:
+            session = self._session()
+            if session is not None:
                 try:
                     session.events.off(event_type=EventType.DATAGRAM_RECEIVED, handler=self._handler_ref)
                 except (ValueError, KeyError):
                     pass
             self._handler_ref = None
 
-        if self._incoming_obj_queue:
+        if self._incoming_obj_queue is not None:
             self._incoming_obj_queue.put_nowait(item=self._sentinel)
 
     def initialize(self, *, queue_size: int = 100) -> None:
@@ -84,7 +85,8 @@ class StructuredDatagramTransport:
         self._queue_size = queue_size
         self._incoming_obj_queue = asyncio.Queue(maxsize=self._queue_size)
 
-        if session := self._session():
+        session = self._session()
+        if session is not None:
             if session.is_closed:
                 raise SessionError(message="Cannot initialize transport, parent session is closed.")
 
@@ -122,7 +124,7 @@ class StructuredDatagramTransport:
     async def send_obj(self, *, obj: Any) -> None:
         """Serialize and send a Python object as a datagram."""
         session = self._session()
-        if not session or session.is_closed:
+        if session is None or session.is_closed:
             raise SessionError(message="Session is closed, cannot send object.")
         if not self._is_initialized:
             raise SessionError(message="Structured transport has not been initialized.")
@@ -139,7 +141,7 @@ class StructuredDatagramTransport:
 
     async def _on_datagram_received(self, *, event: Event) -> None:
         """Handle incoming raw datagrams and place them in the object queue."""
-        if self._closed or not isinstance(event.data, dict) or not self._incoming_obj_queue:
+        if self._closed or not isinstance(event.data, dict) or self._incoming_obj_queue is None:
             return
 
         datagram: bytes | None = event.data.get("data")
@@ -166,7 +168,7 @@ class StructuredDatagramTransport:
                 self._incoming_obj_queue.put_nowait(item=obj)
             except asyncio.QueueFull:
                 session = self._session()
-                session_id = session.session_id if session else "unknown"
+                session_id = session.session_id if session is not None else "unknown"
                 logger.warning("Structured datagram queue full for session %s; dropping datagram.", session_id)
 
         except (struct.error, SerializationError) as e:

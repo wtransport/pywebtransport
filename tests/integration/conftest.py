@@ -32,26 +32,14 @@ def certificates_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 @pytest.fixture(scope="module")
 def client_config(certificates_dir: Path) -> ClientConfig:
     """Provide a ClientConfig that trusts the self-signed server certificate."""
-    return ClientConfig(
-        verify_mode=ssl.CERT_NONE,
-        connect_timeout=5.0,
-        initial_max_data=1024 * 1024,
-        initial_max_streams_bidi=100,
-        initial_max_streams_uni=100,
-    )
+    return ClientConfig(verify_mode=ssl.CERT_NONE)
 
 
 @pytest.fixture(scope="module")
 def server_config(certificates_dir: Path) -> ServerConfig:
     """Provide a base ServerConfig configured with the test certificates."""
     return ServerConfig(
-        certfile=str(certificates_dir / "localhost.crt"),
-        keyfile=str(certificates_dir / "localhost.key"),
-        max_connections=10,
-        connection_idle_timeout=5.0,
-        initial_max_data=1024 * 1024,
-        initial_max_streams_bidi=100,
-        initial_max_streams_uni=100,
+        certfile=str(certificates_dir / "localhost.crt"), keyfile=str(certificates_dir / "localhost.key")
     )
 
 

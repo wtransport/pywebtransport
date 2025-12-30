@@ -46,7 +46,7 @@ class SessionManager(BaseResourceManager[SessionId, WebTransportSession]):
                     pass
 
             removed_session = self._resources.pop(session_id, None)
-            if removed_session:
+            if removed_session is not None:
                 self._stats["total_closed"] += 1
                 self._update_stats_unsafe()
                 self._log.debug("Manually removed session %s (total: %d)", session_id, self._stats["current_count"])
@@ -63,7 +63,7 @@ class SessionManager(BaseResourceManager[SessionId, WebTransportSession]):
     async def get_stats(self) -> dict[str, Any]:
         """Get detailed statistics about the managed sessions."""
         stats = await super().get_stats()
-        if self._lock:
+        if self._lock is not None:
             async with self._lock:
                 states: defaultdict[str, int] = defaultdict(int)
                 for session in self._resources.values():

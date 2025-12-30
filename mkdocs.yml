@@ -2,10 +2,10 @@
 
 site_name: PyWebTransport
 site_description: An async-native WebTransport stack for Python.
-site_url: https://docs.pywebtransport.org
-repo_url: https://github.com/lemonsterfy/pywebtransport
-repo_name: lemonsterfy/pywebtransport
-copyright: Copyright &copy; 2025 PyWebTransport
+site_url: https://python.wtransport.org
+repo_url: https://github.com/wtransport/pywebtransport
+repo_name: wtransport/pywebtransport
+copyright: Copyright &copy; 2025 The WTransport Authors
 
 theme:
   name: material

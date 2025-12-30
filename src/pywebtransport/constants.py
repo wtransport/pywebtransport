@@ -4,17 +4,11 @@ from __future__ import annotations
 
 import ssl
 from enum import IntEnum
-from typing import TypedDict
-
-from pywebtransport.types import Headers
-from pywebtransport.version import __version__
 
 __all__: list[str] = [
     "ALPN_H3",
     "BIDIRECTIONAL_STREAM",
     "CLOSE_WEBTRANSPORT_SESSION_TYPE",
-    "ClientConfigDefaults",
-    "CommonConfigDefaults",
     "DEFAULT_ALPN_PROTOCOLS",
     "DEFAULT_BIND_HOST",
     "DEFAULT_CERTFILE",
@@ -84,7 +78,6 @@ __all__: list[str] = [
     "SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI",
     "SETTINGS_WT_INITIAL_MAX_STREAMS_UNI",
     "SUPPORTED_CONGESTION_CONTROL_ALGORITHMS",
-    "ServerConfigDefaults",
     "UNIDIRECTIONAL_STREAM",
     "USER_AGENT_HEADER",
     "WEBTRANSPORT_DEFAULT_PORT",
@@ -97,8 +90,6 @@ __all__: list[str] = [
     "WT_STREAM_DATA_BLOCKED_TYPE",
     "WT_STREAMS_BLOCKED_BIDI_TYPE",
     "WT_STREAMS_BLOCKED_UNI_TYPE",
-    "get_default_client_config",
-    "get_default_server_config",
 ]
 
 ALPN_H3: str = "h3"
@@ -144,7 +135,7 @@ WT_STREAMS_BLOCKED_BIDI_TYPE: int = 0x190B4D43
 WT_STREAMS_BLOCKED_UNI_TYPE: int = 0x190B4D44
 
 DEFAULT_ALPN_PROTOCOLS: tuple[str, ...] = (ALPN_H3,)
-DEFAULT_BIND_HOST: str = "localhost"
+DEFAULT_BIND_HOST: str = "::"
 DEFAULT_CERTFILE: str | None = None
 DEFAULT_CLIENT_MAX_CONNECTIONS: int = 100
 DEFAULT_CLIENT_MAX_SESSIONS: int = 100
@@ -156,22 +147,22 @@ DEFAULT_CONNECTION_IDLE_TIMEOUT: float = 60.0
 DEFAULT_DEV_PORT: int = 4433
 DEFAULT_FLOW_CONTROL_WINDOW_AUTO_SCALE: bool = True
 DEFAULT_FLOW_CONTROL_WINDOW_SIZE: int = 1024 * 1024
-DEFAULT_INITIAL_MAX_DATA: int = 0
-DEFAULT_INITIAL_MAX_STREAMS_BIDI: int = 0
-DEFAULT_INITIAL_MAX_STREAMS_UNI: int = 0
+DEFAULT_INITIAL_MAX_DATA: int = 10 * 1024 * 1024
+DEFAULT_INITIAL_MAX_STREAMS_BIDI: int = 100
+DEFAULT_INITIAL_MAX_STREAMS_UNI: int = 100
 DEFAULT_KEEP_ALIVE: bool = True
 DEFAULT_KEYFILE: str | None = None
 DEFAULT_LOG_LEVEL: str = "INFO"
 DEFAULT_MAX_CONNECTION_RETRIES: int = 3
-DEFAULT_MAX_DATAGRAM_SIZE: int = 65535
+DEFAULT_MAX_DATAGRAM_SIZE: int = 1350
 DEFAULT_MAX_EVENT_HISTORY_SIZE: int = 0
 DEFAULT_MAX_EVENT_LISTENERS: int = 100
 DEFAULT_MAX_EVENT_QUEUE_SIZE: int = 1000
 DEFAULT_MAX_MESSAGE_SIZE: int = 1024 * 1024
-DEFAULT_MAX_PENDING_EVENTS_PER_SESSION: int = 16
+DEFAULT_MAX_PENDING_EVENTS_PER_SESSION: int = 100
 DEFAULT_MAX_RETRY_DELAY: float = 30.0
-DEFAULT_MAX_STREAM_READ_BUFFER: int = 65536
-DEFAULT_MAX_STREAM_WRITE_BUFFER: int = 1024 * 1024
+DEFAULT_MAX_STREAM_READ_BUFFER: int = 2 * 1024 * 1024
+DEFAULT_MAX_STREAM_WRITE_BUFFER: int = 2 * 1024 * 1024
 DEFAULT_MAX_TOTAL_PENDING_EVENTS: int = 1000
 DEFAULT_PENDING_EVENT_TTL: float = 5.0
 DEFAULT_READ_TIMEOUT: float = 60.0
@@ -188,65 +179,8 @@ DEFAULT_WRITE_TIMEOUT: float = 30.0
 SUPPORTED_CONGESTION_CONTROL_ALGORITHMS: tuple[str, str] = ("reno", "cubic")
 
 
-class CommonConfigDefaults(TypedDict):
-    """Common configuration fields shared between client and server."""
-
-    alpn_protocols: list[str]
-    ca_certs: str | None
-    certfile: str | None
-    close_timeout: float
-    congestion_control_algorithm: str
-    connection_idle_timeout: float
-    flow_control_window_auto_scale: bool
-    flow_control_window_size: int
-    initial_max_data: int
-    initial_max_streams_bidi: int
-    initial_max_streams_uni: int
-    keep_alive: bool
-    keyfile: str | None
-    log_level: str
-    max_connections: int
-    max_datagram_size: int
-    max_event_history_size: int
-    max_event_listeners: int
-    max_event_queue_size: int
-    max_message_size: int
-    max_pending_events_per_session: int
-    max_sessions: int
-    max_stream_read_buffer: int
-    max_stream_write_buffer: int
-    max_total_pending_events: int
-    pending_event_ttl: float
-    read_timeout: float | None
-    resource_cleanup_interval: float
-    stream_creation_timeout: float
-    stream_flow_control_increment_bidi: int
-    stream_flow_control_increment_uni: int
-    verify_mode: ssl.VerifyMode | None
-    write_timeout: float | None
-
-
-class ClientConfigDefaults(CommonConfigDefaults):
-    """A type definition for the client configuration dictionary."""
-
-    connect_timeout: float
-    headers: Headers
-    max_connection_retries: int
-    max_retry_delay: float
-    retry_backoff: float
-    retry_delay: float
-    user_agent: str
-
-
-class ServerConfigDefaults(CommonConfigDefaults):
-    """A type definition for the server configuration dictionary."""
-
-    bind_host: str
-    bind_port: int
-
-
 class ErrorCodes(IntEnum):
-    """A collection of standard WebTransport and QUIC error codes."""
+    """Collection of standard WebTransport and QUIC error codes."""
 
     NO_ERROR = 0x0
     INTERNAL_ERROR = 0x1
@@ -297,90 +231,3 @@ class ErrorCodes(IntEnum):
     APP_RESOURCE_EXHAUSTED = 0x1003
     APP_INVALID_REQUEST = 0x1004
     APP_SERVICE_UNAVAILABLE = 0x1005
-
-
-def get_default_client_config() -> ClientConfigDefaults:
-    """Return a new instance of the default client configuration."""
-    return {
-        "alpn_protocols": list(DEFAULT_ALPN_PROTOCOLS),
-        "ca_certs": None,
-        "certfile": None,
-        "close_timeout": DEFAULT_CLOSE_TIMEOUT,
-        "congestion_control_algorithm": DEFAULT_CONGESTION_CONTROL_ALGORITHM,
-        "connect_timeout": DEFAULT_CONNECT_TIMEOUT,
-        "connection_idle_timeout": DEFAULT_CONNECTION_IDLE_TIMEOUT,
-        "flow_control_window_auto_scale": DEFAULT_FLOW_CONTROL_WINDOW_AUTO_SCALE,
-        "flow_control_window_size": DEFAULT_FLOW_CONTROL_WINDOW_SIZE,
-        "headers": {},
-        "initial_max_data": DEFAULT_INITIAL_MAX_DATA,
-        "initial_max_streams_bidi": DEFAULT_INITIAL_MAX_STREAMS_BIDI,
-        "initial_max_streams_uni": DEFAULT_INITIAL_MAX_STREAMS_UNI,
-        "keep_alive": DEFAULT_KEEP_ALIVE,
-        "keyfile": None,
-        "log_level": DEFAULT_LOG_LEVEL,
-        "max_connection_retries": DEFAULT_MAX_CONNECTION_RETRIES,
-        "max_connections": DEFAULT_CLIENT_MAX_CONNECTIONS,
-        "max_datagram_size": DEFAULT_MAX_DATAGRAM_SIZE,
-        "max_event_history_size": DEFAULT_MAX_EVENT_HISTORY_SIZE,
-        "max_event_listeners": DEFAULT_MAX_EVENT_LISTENERS,
-        "max_event_queue_size": DEFAULT_MAX_EVENT_QUEUE_SIZE,
-        "max_message_size": DEFAULT_MAX_MESSAGE_SIZE,
-        "max_pending_events_per_session": DEFAULT_MAX_PENDING_EVENTS_PER_SESSION,
-        "max_retry_delay": DEFAULT_MAX_RETRY_DELAY,
-        "max_sessions": DEFAULT_CLIENT_MAX_SESSIONS,
-        "max_stream_read_buffer": DEFAULT_MAX_STREAM_READ_BUFFER,
-        "max_stream_write_buffer": DEFAULT_MAX_STREAM_WRITE_BUFFER,
-        "max_total_pending_events": DEFAULT_MAX_TOTAL_PENDING_EVENTS,
-        "pending_event_ttl": DEFAULT_PENDING_EVENT_TTL,
-        "read_timeout": DEFAULT_READ_TIMEOUT,
-        "resource_cleanup_interval": DEFAULT_RESOURCE_CLEANUP_INTERVAL,
-        "retry_backoff": DEFAULT_RETRY_BACKOFF,
-        "retry_delay": DEFAULT_RETRY_DELAY,
-        "stream_creation_timeout": DEFAULT_STREAM_CREATION_TIMEOUT,
-        "stream_flow_control_increment_bidi": DEFAULT_STREAM_FLOW_CONTROL_INCREMENT_BIDI,
-        "stream_flow_control_increment_uni": DEFAULT_STREAM_FLOW_CONTROL_INCREMENT_UNI,
-        "user_agent": f"PyWebTransport/{__version__}",
-        "verify_mode": DEFAULT_CLIENT_VERIFY_MODE,
-        "write_timeout": DEFAULT_WRITE_TIMEOUT,
-    }
-
-
-def get_default_server_config() -> ServerConfigDefaults:
-    """Return a new instance of the default server configuration."""
-    return {
-        "alpn_protocols": list(DEFAULT_ALPN_PROTOCOLS),
-        "bind_host": DEFAULT_BIND_HOST,
-        "bind_port": DEFAULT_DEV_PORT,
-        "ca_certs": None,
-        "certfile": DEFAULT_CERTFILE,
-        "close_timeout": DEFAULT_CLOSE_TIMEOUT,
-        "congestion_control_algorithm": DEFAULT_CONGESTION_CONTROL_ALGORITHM,
-        "connection_idle_timeout": DEFAULT_CONNECTION_IDLE_TIMEOUT,
-        "flow_control_window_auto_scale": DEFAULT_FLOW_CONTROL_WINDOW_AUTO_SCALE,
-        "flow_control_window_size": DEFAULT_FLOW_CONTROL_WINDOW_SIZE,
-        "initial_max_data": DEFAULT_INITIAL_MAX_DATA,
-        "initial_max_streams_bidi": DEFAULT_INITIAL_MAX_STREAMS_BIDI,
-        "initial_max_streams_uni": DEFAULT_INITIAL_MAX_STREAMS_UNI,
-        "keep_alive": DEFAULT_KEEP_ALIVE,
-        "keyfile": DEFAULT_KEYFILE,
-        "log_level": DEFAULT_LOG_LEVEL,
-        "max_connections": DEFAULT_SERVER_MAX_CONNECTIONS,
-        "max_datagram_size": DEFAULT_MAX_DATAGRAM_SIZE,
-        "max_event_history_size": DEFAULT_MAX_EVENT_HISTORY_SIZE,
-        "max_event_listeners": DEFAULT_MAX_EVENT_LISTENERS,
-        "max_event_queue_size": DEFAULT_MAX_EVENT_QUEUE_SIZE,
-        "max_message_size": DEFAULT_MAX_MESSAGE_SIZE,
-        "max_pending_events_per_session": DEFAULT_MAX_PENDING_EVENTS_PER_SESSION,
-        "max_sessions": DEFAULT_SERVER_MAX_SESSIONS,
-        "max_stream_read_buffer": DEFAULT_MAX_STREAM_READ_BUFFER,
-        "max_stream_write_buffer": DEFAULT_MAX_STREAM_WRITE_BUFFER,
-        "max_total_pending_events": DEFAULT_MAX_TOTAL_PENDING_EVENTS,
-        "pending_event_ttl": DEFAULT_PENDING_EVENT_TTL,
-        "read_timeout": DEFAULT_READ_TIMEOUT,
-        "resource_cleanup_interval": DEFAULT_RESOURCE_CLEANUP_INTERVAL,
-        "stream_creation_timeout": DEFAULT_STREAM_CREATION_TIMEOUT,
-        "stream_flow_control_increment_bidi": DEFAULT_STREAM_FLOW_CONTROL_INCREMENT_BIDI,
-        "stream_flow_control_increment_uni": DEFAULT_STREAM_FLOW_CONTROL_INCREMENT_UNI,
-        "verify_mode": DEFAULT_SERVER_VERIFY_MODE,
-        "write_timeout": DEFAULT_WRITE_TIMEOUT,
-    }

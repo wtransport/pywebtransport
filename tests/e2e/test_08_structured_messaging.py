@@ -57,13 +57,7 @@ MESSAGE_REGISTRY: dict[int, type[Any]] = {1: UserData, 2: StatusUpdate}
 
 async def run_structured_test(*, serializer: Serializer, path: str, serializer_name: str) -> bool:
     """Run the core logic for testing a specific serializer end-to-end."""
-    config = ClientConfig(
-        verify_mode=ssl.CERT_NONE,
-        connect_timeout=10.0,
-        initial_max_data=1024 * 1024,
-        initial_max_streams_bidi=100,
-        initial_max_streams_uni=100,
-    )
+    config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
