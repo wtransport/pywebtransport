@@ -59,7 +59,7 @@ async def _is_server_ready() -> bool:
     return False
 
 
-@asyncio_fixture(scope="function", autouse=True)
+@asyncio_fixture(scope="module", autouse=True)
 async def e2e_server() -> AsyncGenerator[None, None]:
     server_command = [
         sys.executable,

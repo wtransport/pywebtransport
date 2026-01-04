@@ -12,6 +12,7 @@ from pywebtransport.constants import (
     DEFAULT_CONNECT_TIMEOUT,
     DEFAULT_FLOW_CONTROL_WINDOW_SIZE,
     DEFAULT_INITIAL_MAX_DATA,
+    DEFAULT_MAX_CAPSULE_SIZE,
     DEFAULT_SERVER_MAX_CONNECTIONS,
 )
 
@@ -40,6 +41,7 @@ class TestClientConfig:
         assert config.congestion_control_algorithm == "cubic"
         assert config.flow_control_window_size == DEFAULT_FLOW_CONTROL_WINDOW_SIZE
         assert config.initial_max_data == DEFAULT_INITIAL_MAX_DATA
+        assert config.max_capsule_size == DEFAULT_MAX_CAPSULE_SIZE
         assert config.alpn_protocols == list(DEFAULT_ALPN_PROTOCOLS)
 
     def test_from_dict_method(self) -> None:
@@ -116,6 +118,7 @@ class TestClientConfig:
             ({"connect_timeout": "invalid"}, "Timeout must be a number"),
             ({"connection_idle_timeout": 0}, "Timeout must be positive"),
             ({"flow_control_window_size": 0}, "must be positive"),
+            ({"max_capsule_size": 0}, "must be positive"),
             ({"max_connections": 0}, "must be positive"),
             ({"max_datagram_size": 0}, "must be between 1 and 65535"),
             ({"max_datagram_size": 65536}, "must be between 1 and 65535"),
@@ -129,8 +132,6 @@ class TestClientConfig:
             ({"max_stream_write_buffer": 0}, "must be positive"),
             ({"max_total_pending_events": 0}, "must be positive"),
             ({"pending_event_ttl": 0}, "Timeout must be positive"),
-            ({"stream_flow_control_increment_bidi": 0}, "must be positive"),
-            ({"stream_flow_control_increment_uni": 0}, "must be positive"),
             ({"verify_mode": "INVALID"}, "unknown SSL verify mode"),
         ],
     )
@@ -172,6 +173,7 @@ class TestServerConfig:
         assert config.congestion_control_algorithm == "cubic"
         assert config.flow_control_window_size == DEFAULT_FLOW_CONTROL_WINDOW_SIZE
         assert config.initial_max_data == DEFAULT_INITIAL_MAX_DATA
+        assert config.max_capsule_size == DEFAULT_MAX_CAPSULE_SIZE
         assert config.alpn_protocols == list(DEFAULT_ALPN_PROTOCOLS)
 
     def test_from_dict_coercion(self) -> None:
@@ -278,6 +280,7 @@ class TestServerConfig:
             ({"bind_port": "invalid"}, "must be an integer"),
             ({"congestion_control_algorithm": "invalid_algo"}, "must be one of"),
             ({"flow_control_window_size": 0}, "must be positive"),
+            ({"max_capsule_size": 0}, "must be positive"),
             ({"max_connections": 0}, "must be positive"),
             ({"max_datagram_size": 0}, "must be between 1 and 65535"),
             ({"max_datagram_size": 65536}, "must be between 1 and 65535"),
@@ -292,8 +295,6 @@ class TestServerConfig:
             ({"max_total_pending_events": 0}, "must be positive"),
             ({"pending_event_ttl": -1.0}, "Timeout must be positive"),
             ({"read_timeout": "invalid"}, "Timeout must be a number"),
-            ({"stream_flow_control_increment_bidi": 0}, "must be positive"),
-            ({"stream_flow_control_increment_uni": 0}, "must be positive"),
             ({"verify_mode": "INVALID"}, "unknown SSL verify mode"),
         ],
     )

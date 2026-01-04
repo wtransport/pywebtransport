@@ -30,8 +30,12 @@ from pywebtransport._protocol.events import (
 )
 from pywebtransport._protocol.state import ProtocolState, SessionStateData, StreamStateData
 from pywebtransport._protocol.utils import (
+    calculate_new_data_limit,
+    calculate_new_stream_limit,
     get_stream_direction_from_id,
     http_code_to_webtransport_code,
+    is_peer_initiated_stream,
+    is_unidirectional_stream,
     webtransport_code_to_http_code,
 )
 from pywebtransport.constants import ErrorCodes
@@ -46,6 +50,8 @@ if TYPE_CHECKING:
 __all__: list[str] = []
 
 logger = get_logger(name=__name__)
+
+OPTIMIZED_READ_SLICE_THRESHOLD = 32 * 1024
 
 
 class StreamProcessor:
@@ -174,6 +180,7 @@ class StreamProcessor:
                 stream_data.state = StreamState.CLOSED
                 if session_data is not None:
                     session_data.active_streams.discard(stream_id)
+                    effects.extend(self._process_stream_closure(session_data=session_data, stream_id=stream_id))
                 effects.append(
                     EmitStreamEvent(
                         stream_id=stream_id, event_type=EventType.STREAM_CLOSED, data={"stream_id": stream_id}
@@ -253,6 +260,7 @@ class StreamProcessor:
                         stream_data.state = StreamState.CLOSED
                         session_data.active_streams.discard(stream_id)
                         session_data.blocked_streams.discard(stream_id)
+                        effects.extend(self._process_stream_closure(session_data=session_data, stream_id=stream_id))
                         effects.append(
                             EmitStreamEvent(
                                 stream_id=stream_id, event_type=EventType.STREAM_CLOSED, data={"stream_id": stream_id}
@@ -353,6 +361,7 @@ class StreamProcessor:
                 if session_data is not None:
                     session_data.active_streams.discard(stream_id)
                     session_data.blocked_streams.discard(stream_id)
+                    effects.extend(self._process_stream_closure(session_data=session_data, stream_id=stream_id))
                 effects.append(
                     EmitStreamEvent(
                         stream_id=stream_id, event_type=EventType.STREAM_CLOSED, data={"stream_id": stream_id}
@@ -384,6 +393,14 @@ class StreamProcessor:
             )
             data_to_return = self._read_from_buffer(stream_data=stream_data, max_bytes=target)
             effects.append(NotifyRequestDone(request_id=event.request_id, result=data_to_return))
+
+            session_data = state.sessions.get(stream_data.session_id)
+            if session_data is not None:
+                session_data.local_data_consumed += len(data_to_return)
+                credit_effect = self._check_and_send_data_credit(session_data=session_data)
+                if credit_effect is not None:
+                    effects.append(credit_effect)
+
             return effects
 
         if stream_data.state in (StreamState.RESET_RECEIVED, StreamState.CLOSED):
@@ -444,6 +461,7 @@ class StreamProcessor:
         if session_data is not None:
             session_data.active_streams.discard(stream_id)
             session_data.blocked_streams.discard(stream_id)
+            effects.extend(self._process_stream_closure(session_data=session_data, stream_id=stream_id))
 
         effects.append(
             EmitStreamEvent(stream_id=stream_id, event_type=EventType.STREAM_CLOSED, data={"stream_id": stream_id})
@@ -523,12 +541,6 @@ class StreamProcessor:
                         return []
                     session_data.peer_streams_uni_opened += 1
 
-                    credit_effect = self._check_and_send_stream_credit(
-                        session_data=session_data, is_unidirectional=True
-                    )
-                    if credit_effect is not None:
-                        effects.append(credit_effect)
-
                 case StreamDirection.BIDIRECTIONAL:
                     if session_data.peer_streams_bidi_opened >= session_data.local_max_streams_bidi:
                         logger.warning(
@@ -540,17 +552,14 @@ class StreamProcessor:
                         return []
                     session_data.peer_streams_bidi_opened += 1
 
-                    credit_effect = self._check_and_send_stream_credit(
-                        session_data=session_data, is_unidirectional=False
-                    )
-                    if credit_effect is not None:
-                        effects.append(credit_effect)
-
                 case StreamDirection.SEND_ONLY:
                     logger.warning(
                         "Received WT data on server for client-initiated send-only stream %d, ignoring.", stream_id
                     )
                     return []
+
+                case _:
+                    raise AssertionError(f"Unreachable code: Unhandled stream direction {direction}")
 
             logger.debug("Creating new incoming stream %d for session %s", stream_id, session_id)
             stream_data = StreamStateData(
@@ -606,9 +615,6 @@ class StreamProcessor:
             stream_data.read_buffer_size += data_len
 
             session_data.peer_data_sent += data_len
-            credit_effect = self._check_and_send_data_credit(session_data=session_data)
-            if credit_effect is not None:
-                effects.append(credit_effect)
 
         while stream_data.pending_read_requests and stream_data.read_buffer_size > 0:
             req_id, max_bytes = stream_data.pending_read_requests.popleft()
@@ -616,6 +622,11 @@ class StreamProcessor:
 
             data_chunk = self._read_from_buffer(stream_data=stream_data, max_bytes=target)
             effects.append(NotifyRequestDone(request_id=req_id, result=data_chunk))
+
+            session_data.local_data_consumed += len(data_chunk)
+            credit_effect = self._check_and_send_data_credit(session_data=session_data)
+            if credit_effect is not None:
+                effects.append(credit_effect)
 
         if event.stream_ended:
             original_state = stream_data.state
@@ -626,6 +637,7 @@ class StreamProcessor:
                         stream_data.closed_at = get_timestamp()
                         session_data.active_streams.discard(stream_id)
                         session_data.blocked_streams.discard(stream_id)
+                        effects.extend(self._process_stream_closure(session_data=session_data, stream_id=stream_id))
                         effects.append(
                             EmitStreamEvent(
                                 stream_id=stream_id, event_type=EventType.STREAM_CLOSED, data={"stream_id": stream_id}
@@ -650,30 +662,25 @@ class StreamProcessor:
             return buffer_size
         return min(requested_bytes, buffer_size)
 
-    def _check_and_send_data_credit(self, *, session_data: SessionStateData) -> Effect | None:
+    def _check_and_send_data_credit(self, *, session_data: SessionStateData, force_send: bool = False) -> Effect | None:
         """Check session data credit and send a MAX_DATA capsule if needed."""
-        if not self._config.flow_control_window_auto_scale:
+        if session_data.state in (SessionState.CLOSED, SessionState.DRAINING):
             return None
 
-        configured_window = self._config.flow_control_window_size
-        physical_limit = self._config.max_stream_read_buffer
-        target_window = min(configured_window, physical_limit)
+        new_limit = calculate_new_data_limit(
+            current_limit=session_data.local_max_data,
+            consumed=session_data.local_data_consumed,
+            window_size=self._config.flow_control_window_size,
+            auto_scale=self._config.flow_control_window_auto_scale,
+            force_update=force_send,
+        )
 
-        current_limit = session_data.local_max_data
-        current_usage = session_data.peer_data_sent
-
-        available_credit = current_limit - current_usage
-        threshold = target_window // 2
-
-        if available_credit <= threshold:
-            new_limit = current_usage + target_window
-
+        if new_limit is not None:
             logger.debug(
-                "Session %s data credit auto-increment: usage=%d available=%d limit=%d new_limit=%d",
+                "Session %s data credit auto-increment: consumed=%d limit=%d new_limit=%d",
                 session_data.session_id,
-                current_usage,
-                available_credit,
-                current_limit,
+                session_data.local_data_consumed,
+                session_data.local_max_data,
                 new_limit,
             )
 
@@ -691,35 +698,37 @@ class StreamProcessor:
         return None
 
     def _check_and_send_stream_credit(
-        self, *, session_data: SessionStateData, is_unidirectional: bool
+        self, *, session_data: SessionStateData, is_unidirectional: bool, force_send: bool = False
     ) -> Effect | None:
         """Check stream credit and send a MAX_STREAMS capsule if needed."""
-        if not self._config.flow_control_window_auto_scale:
+        if session_data.state in (SessionState.CLOSED, SessionState.DRAINING):
             return None
 
         if is_unidirectional:
-            target_window = self._config.stream_flow_control_increment_uni
             current_limit = session_data.local_max_streams_uni
-            current_usage = session_data.peer_streams_uni_opened
+            closed_count = session_data.peer_streams_uni_closed
+            target_window = self._config.initial_max_streams_uni
             capsule_type = constants.WT_MAX_STREAMS_UNI_TYPE
         else:
-            target_window = self._config.stream_flow_control_increment_bidi
             current_limit = session_data.local_max_streams_bidi
-            current_usage = session_data.peer_streams_bidi_opened
+            closed_count = session_data.peer_streams_bidi_closed
+            target_window = self._config.initial_max_streams_bidi
             capsule_type = constants.WT_MAX_STREAMS_BIDI_TYPE
 
-        available_credit = current_limit - current_usage
-        threshold = target_window // 2
+        new_limit = calculate_new_stream_limit(
+            current_limit=current_limit,
+            closed_count=closed_count,
+            initial_window=target_window,
+            auto_scale=self._config.flow_control_window_auto_scale,
+            force_update=force_send,
+        )
 
-        if available_credit <= threshold:
-            new_limit = current_usage + target_window
-
+        if new_limit is not None:
             logger.debug(
-                "Session %s stream credit auto-increment: type=%s usage=%d available=%d limit=%d new_limit=%d",
+                "Session %s stream credit auto-increment: type=%s closed=%d limit=%d new_limit=%d",
                 session_data.session_id,
                 "uni" if is_unidirectional else "bidi",
-                current_usage,
-                available_credit,
+                closed_count,
                 current_limit,
                 new_limit,
             )
@@ -737,8 +746,49 @@ class StreamProcessor:
             )
         return None
 
+    def _process_stream_closure(self, *, session_data: SessionStateData, stream_id: int) -> list[Effect]:
+        """Update stream closure counters and trigger credit checks."""
+        effects: list[Effect] = []
+
+        is_peer_initiated = is_peer_initiated_stream(stream_id=stream_id, is_client=self._is_client)
+
+        if is_peer_initiated:
+            is_uni = is_unidirectional_stream(stream_id=stream_id)
+            credit_effect: Effect | None = None
+
+            if is_uni:
+                session_data.peer_streams_uni_closed += 1
+                credit_effect = self._check_and_send_stream_credit(session_data=session_data, is_unidirectional=True)
+            else:
+                session_data.peer_streams_bidi_closed += 1
+                credit_effect = self._check_and_send_stream_credit(session_data=session_data, is_unidirectional=False)
+
+            if credit_effect is not None:
+                effects.append(credit_effect)
+
+        return effects
+
     def _read_from_buffer(self, *, stream_data: StreamStateData, max_bytes: int) -> bytes:
         """Read up to max_bytes from the stream's read buffer."""
+        if not stream_data.read_buffer:
+            return b""
+
+        head_chunk = stream_data.read_buffer[0]
+        head_len = len(head_chunk)
+
+        if head_len >= max_bytes:
+            if head_len == max_bytes or head_len <= OPTIMIZED_READ_SLICE_THRESHOLD:
+                stream_data.read_buffer.popleft()
+                stream_data.read_buffer_size -= max_bytes
+
+                if head_len == max_bytes:
+                    return bytes(head_chunk)
+
+                result = bytes(head_chunk[:max_bytes])
+                remainder = head_chunk[max_bytes:]
+                stream_data.read_buffer.appendleft(remainder)
+                return result
+
         chunks: list[Buffer] = []
         bytes_collected = 0
 

@@ -470,6 +470,12 @@ class WebTransportH3Engine:
                 capsule_type = buf.pull_uint_var()
                 capsule_length = buf.pull_uint_var()
 
+                if capsule_length > self._config.max_capsule_size:
+                    raise ProtocolError(
+                        message=f"Capsule length {capsule_length} exceeds limit {self._config.max_capsule_size}",
+                        error_code=ErrorCodes.H3_EXCESSIVE_LOAD,
+                    )
+
                 if buf.capacity - buf.tell() < capsule_length:
                     buf.seek(start_pos)
                     break

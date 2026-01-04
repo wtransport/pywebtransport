@@ -4,13 +4,14 @@ import asyncio
 import gc
 import logging
 import ssl
+from collections.abc import Callable, Coroutine
 from typing import Any, Final, cast
 
 import pytest
 import uvloop
 from pytest_benchmark.fixture import BenchmarkFixture
 
-from pywebtransport import ClientConfig, WebTransportClient
+from pywebtransport import ClientConfig, WebTransportClient, WebTransportSession
 
 SERVER_URL_BASE: Final[str] = "https://127.0.0.1:4433"
 WARMUP_ROUNDS: Final[int] = 5
@@ -29,8 +30,6 @@ def client_config() -> ClientConfig:
         initial_max_streams_bidi=1000,
         initial_max_streams_uni=1000,
         flow_control_window_size=100 * 1024 * 1024,
-        stream_flow_control_increment_bidi=100,
-        stream_flow_control_increment_uni=100,
         max_stream_read_buffer=200 * 1024 * 1024,
         max_stream_write_buffer=200 * 1024 * 1024,
         max_event_queue_size=10000,
@@ -40,87 +39,98 @@ def client_config() -> ClientConfig:
 class TestStreamThroughput:
 
     def test_upload_throughput(self, *, benchmark: BenchmarkFixture, client_config: ClientConfig) -> None:
-        url = f"{SERVER_URL_BASE}/discard"
+        async def upload_worker(session: WebTransportSession) -> int:
+            stream = await session.create_bidirectional_stream()
+            await stream.write_all(data=STATIC_VIEW, end_stream=True)
+            await stream.read_all()
+            return PAYLOAD_SIZE
 
-        async def run_upload() -> None:
-            async with WebTransportClient(config=client_config) as client:
-                session = await client.connect(url=url)
-                for _ in range(STREAMS_PER_ROUND):
-                    stream = await session.create_unidirectional_stream()
-                    await stream.write_all(data=STATIC_VIEW, end_stream=True)
-                await session.close()
-
-        for _ in range(WARMUP_ROUNDS):
-            uvloop.run(run_upload())
-        gc.collect()
-
-        benchmark(lambda: uvloop.run(run_upload()))
-
-        stats = cast(dict[str, Any], benchmark.stats)
-        mean_time = stats["mean"]
-        total_mb = (PAYLOAD_SIZE * STREAMS_PER_ROUND) / (1024 * 1024)
-        throughput = total_mb / mean_time if mean_time > 0 else 0
-        benchmark.extra_info["throughput_mb_s"] = throughput
+        self._run_benchmark_scenario(
+            benchmark=benchmark,
+            client_config=client_config,
+            endpoint="/discard",
+            stream_handler=upload_worker,
+        )
 
     def test_download_throughput(self, *, benchmark: BenchmarkFixture, client_config: ClientConfig) -> None:
-        url = f"{SERVER_URL_BASE}/produce"
         cmd = str(PAYLOAD_SIZE).encode()
 
-        async def run_download() -> None:
-            async with WebTransportClient(config=client_config) as client:
-                session = await client.connect(url=url)
-                for _ in range(STREAMS_PER_ROUND):
-                    stream = await session.create_bidirectional_stream()
-                    await stream.write(data=cmd)
-                    while await stream.read(max_bytes=PAYLOAD_SIZE):
-                        pass
-                await session.close()
+        async def download_worker(session: WebTransportSession) -> int:
+            stream = await session.create_bidirectional_stream()
+            await stream.write(data=cmd)
+            received = 0
+            while True:
+                chunk = await stream.read(max_bytes=PAYLOAD_SIZE)
+                if not chunk:
+                    break
+                received += len(chunk)
+            await stream.close()
+            return received
 
-        for _ in range(WARMUP_ROUNDS):
-            uvloop.run(run_download())
-        gc.collect()
-
-        benchmark(lambda: uvloop.run(run_download()))
-
-        stats = cast(dict[str, Any], benchmark.stats)
-        mean_time = stats["mean"]
-        total_mb = (PAYLOAD_SIZE * STREAMS_PER_ROUND) / (1024 * 1024)
-        throughput = total_mb / mean_time if mean_time > 0 else 0
-        benchmark.extra_info["throughput_mb_s"] = throughput
+        self._run_benchmark_scenario(
+            benchmark=benchmark,
+            client_config=client_config,
+            endpoint="/produce",
+            stream_handler=download_worker,
+        )
 
     def test_duplex_throughput(self, *, benchmark: BenchmarkFixture, client_config: ClientConfig) -> None:
-        url = f"{SERVER_URL_BASE}/duplex"
+        async def duplex_worker(session: WebTransportSession) -> int:
+            stream = await session.create_bidirectional_stream()
 
-        async def run_duplex() -> None:
+            async def sender() -> int:
+                await stream.write_all(data=STATIC_VIEW, end_stream=True)
+                return PAYLOAD_SIZE
+
+            async def receiver() -> int:
+                received = 0
+                while True:
+                    chunk = await stream.read(max_bytes=PAYLOAD_SIZE)
+                    if not chunk:
+                        break
+                    received += len(chunk)
+                return received
+
+            results = await asyncio.gather(sender(), receiver())
+            await stream.close()
+            return sum(results)
+
+        self._run_benchmark_scenario(
+            benchmark=benchmark,
+            client_config=client_config,
+            endpoint="/duplex",
+            stream_handler=duplex_worker,
+        )
+
+    def _run_benchmark_scenario(
+        self,
+        *,
+        benchmark: BenchmarkFixture,
+        client_config: ClientConfig,
+        endpoint: str,
+        stream_handler: Callable[[WebTransportSession], Coroutine[Any, Any, int]],
+    ) -> None:
+        url = f"{SERVER_URL_BASE}{endpoint}"
+
+        async def run_scenario() -> int:
+            total_bytes = 0
             async with WebTransportClient(config=client_config) as client:
                 session = await client.connect(url=url)
-                for _ in range(STREAMS_PER_ROUND):
-                    stream = await session.create_bidirectional_stream()
-
-                    async def sender() -> None:
-                        await stream.write(data=STATIC_VIEW, end_stream=False)
-
-                    async def receiver() -> None:
-                        while await stream.read(max_bytes=PAYLOAD_SIZE):
-                            pass
-
-                    sender_task = asyncio.create_task(coro=sender())
-                    receiver_task = asyncio.create_task(coro=receiver())
-
-                    await asyncio.gather(sender_task, receiver_task)
-
-                    await stream.write(data=b"", end_stream=True)
-
+                tasks = [stream_handler(session) for _ in range(STREAMS_PER_ROUND)]
+                results = await asyncio.gather(*tasks)
+                total_bytes = sum(results)
                 await session.close()
+            return total_bytes
 
         for _ in range(WARMUP_ROUNDS):
-            uvloop.run(run_duplex())
+            uvloop.run(run_scenario())
         gc.collect()
 
-        benchmark(lambda: uvloop.run(run_duplex()))
+        result_bytes = benchmark(lambda: uvloop.run(run_scenario()))
 
         stats = cast(dict[str, Any], benchmark.stats)
         mean_time = stats["mean"]
-        total_mb = (PAYLOAD_SIZE * STREAMS_PER_ROUND * 2) / (1024 * 1024)
+
+        total_mb = result_bytes / (1024 * 1024)
         throughput = total_mb / mean_time if mean_time > 0 else 0
         benchmark.extra_info["throughput_mb_s"] = throughput

@@ -308,13 +308,11 @@ class WebTransportSendStream(_BaseStream):
     ) -> None:
         """Exit the async context manager."""
         exit_error_code: int | None = None
-        match exc_val:
-            case asyncio.CancelledError():
-                exit_error_code = ErrorCodes.APPLICATION_ERROR
-            case BaseException():
-                exit_error_code = getattr(exc_val, "error_code", ErrorCodes.APPLICATION_ERROR)
-            case None:
-                pass
+
+        if isinstance(exc_val, asyncio.CancelledError):
+            exit_error_code = ErrorCodes.APPLICATION_ERROR
+        elif isinstance(exc_val, BaseException):
+            exit_error_code = getattr(exc_val, "error_code", ErrorCodes.APPLICATION_ERROR)
 
         await self.close(error_code=exit_error_code)
 
@@ -425,13 +423,12 @@ class WebTransportStream(_BaseStream):
     ) -> None:
         """Exit the async context manager."""
         exit_error_code: int | None = None
-        match exc_val:
-            case asyncio.CancelledError():
-                exit_error_code = ErrorCodes.APPLICATION_ERROR
-            case BaseException():
-                exit_error_code = getattr(exc_val, "error_code", ErrorCodes.APPLICATION_ERROR)
-            case None:
-                pass
+
+        if isinstance(exc_val, asyncio.CancelledError):
+            exit_error_code = ErrorCodes.APPLICATION_ERROR
+        elif isinstance(exc_val, BaseException):
+            exit_error_code = getattr(exc_val, "error_code", ErrorCodes.APPLICATION_ERROR)
+
         await self.close(error_code=exit_error_code)
 
     async def close(self, *, error_code: int | None = None) -> None:

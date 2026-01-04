@@ -1,0 +1,68 @@
+# PyWebTransport Feature Proposal GitHub Issue Form
+
+name: "Feature Proposal"
+description: "Submit a technical enhancement proposal."
+title: ""
+labels: ["enhancement", "triage"]
+body:
+  - type: "markdown"
+    attributes:
+      value: |
+        Technical proposal for library enhancement.
+
+  - type: "textarea"
+    id: "motivation"
+    attributes:
+      label: "Motivation"
+      description: "Contextual justification for the proposal."
+    validations:
+      required: true
+
+  - type: "textarea"
+    id: "design"
+    attributes:
+      label: "Technical Design"
+      description: "Architectural implementation details."
+    validations:
+      required: true
+
+  - type: "textarea"
+    id: "interface"
+    attributes:
+      label: "Proposed Interface"
+      description: "Public API signatures and usage patterns."
+      placeholder: |
+        ```python
+        # Demonstrative usage of the proposed API
+        from pywebtransport import WebTransportSession
+
+        async def usage_example(session: WebTransportSession):
+            await session.new_feature(param=True)
+        ```
+    validations:
+      required: true
+
+  - type: "textarea"
+    id: "alternatives"
+    attributes:
+      label: "Design Alternatives"
+      description: "Discarded approaches and trade-offs."
+    validations:
+      required: false
+
+  - type: "textarea"
+    id: "reference"
+    attributes:
+      label: "Protocol Reference"
+      description: "Citations of relevant IETF specifications."
+      placeholder: "e.g., draft-ietf-webtrans-http3-14, Section 5.2"
+    validations:
+      required: false
+
+  - type: "checkboxes"
+    id: "contribution"
+    attributes:
+      label: "Contribution"
+      options:
+        - label: "Willing to submit a Pull Request."
+          required: false

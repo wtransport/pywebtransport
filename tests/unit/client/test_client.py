@@ -49,6 +49,7 @@ class TestClientStats:
 
     def test_avg_connect_time(self) -> None:
         stats = ClientStats(created_at=0)
+
         assert stats.avg_connect_time == 0.0
 
         stats.connections_successful = 2
@@ -69,14 +70,17 @@ class TestClientStats:
 
     def test_success_rate(self) -> None:
         stats = ClientStats(created_at=0)
+
         assert stats.success_rate == 1.0
 
         stats.connections_attempted = 10
         stats.connections_successful = 8
+
         assert stats.success_rate == 0.8
 
         stats.connections_attempted = 10
         stats.connections_successful = 0
+
         assert stats.success_rate == 0.0
 
     def test_to_dict(self, mocker: MockerFixture) -> None:
@@ -92,6 +96,7 @@ class TestClientStats:
 
         stats.min_connect_time = float("inf")
         stats_dict = stats.to_dict()
+
         assert stats_dict["min_connect_time"] == 0.0
 
 
@@ -152,7 +157,6 @@ class TestWebTransportClient:
 
     @pytest.fixture(autouse=True)
     def setup_common_mocks(self, mocker: MockerFixture) -> None:
-        mocker.patch("pywebtransport.client.client.validate_url")
         mocker.patch("pywebtransport.client.client.parse_webtransport_url", return_value=("example.com", 443, "/"))
         mocker.patch("pywebtransport.client.client.format_duration")
         mocker.patch("pywebtransport.client.client.get_timestamp", return_value=1000.0)
@@ -169,6 +173,7 @@ class TestWebTransportClient:
     @pytest.mark.asyncio
     async def test_close_sequential_calls(self, client: WebTransportClient, mock_connection_manager: Any) -> None:
         await client.close()
+
         assert client.is_closed
 
         await client.close()
@@ -257,7 +262,6 @@ class TestWebTransportClient:
 
         mock_connect_class_method.assert_awaited_once()
         mock_connection_manager.add_connection.assert_awaited_once_with(connection=mock_webtransport_connection)
-
         mock_webtransport_connection.create_session.assert_awaited_once()
         args, kwargs = mock_webtransport_connection.create_session.call_args
         assert kwargs["path"] == "/"
@@ -332,12 +336,10 @@ class TestWebTransportClient:
 
     @pytest.mark.asyncio
     async def test_connect_with_explicit_user_agent_header(
-        self,
-        client: WebTransportClient,
-        mock_connect_class_method: Any,
-        mock_client_config: Any,
+        self, client: WebTransportClient, mock_connect_class_method: Any, mock_client_config: Any
     ) -> None:
         custom_ua = "ExplicitUA/1.0"
+
         await client.connect(url="https://example.com", headers={"user-agent": custom_ua})
 
         mock_client_config.update.assert_called_once()
@@ -411,13 +413,16 @@ class TestWebTransportClient:
 
     def test_initialization_default(self, mocker: MockerFixture) -> None:
         mock_cm_constructor = mocker.patch("pywebtransport.client.client.ConnectionManager", autospec=True)
+
         WebTransportClient()
 
         mock_cm_constructor.assert_called_once_with(max_connections=100)
 
     def test_str_representation(self, client: WebTransportClient, mock_connection_manager: Any) -> None:
         mock_connection_manager.__len__.return_value = 5
+
         assert str(client) == "WebTransportClient(status=open, connections=5)"
 
         client._closed = True
+
         assert str(client) == "WebTransportClient(status=closed, connections=5)"

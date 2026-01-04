@@ -1,36 +1,28 @@
 # Implementation Philosophy
 
-This document outlines the core principles that guide the design and development of PyWebTransport.
-
----
-
-PyWebTransport is engineered to be a **standards-compliant and robust** implementation of the WebTransport protocol for the Python ecosystem. Our philosophy prioritizes standards compliance, clean architecture, and long-term maintainability.
+PyWebTransport is engineered as a **standards-compliant and deterministic** implementation of the WebTransport protocol. The design prioritizes protocol correctness, architectural purity, and long-term maintainability over transient compatibility.
 
 ## Core Tenets
 
-- **The Standard is the Sole Authority**: We treat IETF Drafts and formal RFCs as the only technical basis for implementation decisions.
-- **Rejection of Compatibility Patches**: The core implementation does not include compatibility patches or workarounds for non-standard, flawed, or outdated clients. Strict adherence to the standard is the foundation of a healthy, interoperable ecosystem.
+- **Standard Authority**: IETF Drafts and formal RFCs serve as the exclusive technical basis for implementation decisions.
+- **Non-Accommodation of Deviations**: The core implementation rejects compatibility patches or workarounds for non-compliant user agents. Strict adherence constitutes the foundation of an interoperable ecosystem.
 
 ### 1. Strict Adherence to Standards
 
-The primary responsibility of this library is correctness. The core protocol layer—encompassing connection, stream, and datagram management—is implemented in strict accordance with the official IETF WebTransport specifications, currently targeting **[draft-ietf-webtrans-http3-14](https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-14.txt)**.
+The primary directive of the library is correctness. The transport layer is implemented in strict accordance with the official IETF WebTransport specifications.
 
-**Note on Active Draft Implementations**: When our target specification remains in an active IETF draft stage, this library will prioritize tracking and implementing the IETF Working Group's (WG) latest live consensus, even if that consensus is not yet reflected in the published draft text. This approach ensures forward-compatibility and avoids implementing features already deprecated by WG resolution.
+**Active Draft Consensus**: During the active IETF draft stage, the library prioritizes the Working Group's (WG) latest consensus, ensuring forward compatibility and avoiding the implementation of features deprecated by WG resolution.
 
-### 2. Layered and Composable Design
+### 2. Architectural Integrity
 
-As a foundational infrastructure component, PyWebTransport is designed with a clear separation of concerns, ensuring a lean and pure protocol core.
+As a foundational infrastructure component, PyWebTransport enforces a strict separation of concerns to ensure reliability and maintainability.
 
-- **Pure Protocol Core**: The low-level protocol implementation is kept independent of application-level concerns. It focuses solely on providing a reliable and efficient transport layer.
-- **Optional Application Toolkit**: High-level utilities such as **pluggable serializers** and **structured messaging** wrappers are provided as optional modules. This allows developers to build complex applications quickly without bloating the core protocol implementation.
+- **Decoupled Logic**: The core protocol logic is kept independent of the I/O runtime and application state. This isolation ensures the transport layer remains deterministic and verifiable in any execution environment.
+- **Composable Design**: High-level abstractions and ecosystem integrations are implemented as optional, modular layers. This structure prevents feature bloat and ensures the core remains focused solely on transport efficiency.
 
-### 3. Standard-Focused Development and Testing
+### 3. Verification Strategy
 
-Our development and testing practices prioritize protocol correctness over accommodating specific implementation quirks.
+Development practices prioritize protocol compliance over accommodation of implementation-specific behaviors.
 
-- **E2E as Verification**: End-to-end (E2E) tests between our own client and server implementations serve as the primary means of validating correctness against the standard.
-- **Correctness Over Compatibility**: While external tools like Web Platform Tests (WPT) are valuable references, we will not sacrifice protocol correctness to pass tests that accommodate divergent or erroneous browser behavior. Our goal is to promote the standard, not to patch over deviations.
-
----
-
-We believe this disciplined approach will provide long-term value to the Python community and the broader internet ecosystem.
+- **E2E Verification**: End-to-end (E2E) execution between the native client and server implementations serves as the primary validation mechanism.
+- **Correctness Over Compatibility**: While external suites like Web Platform Tests (WPT) provide reference value, protocol correctness takes precedence over passing tests that reflect divergent browser behaviors. The objective is to promote standard compliance rather than mask deviations.

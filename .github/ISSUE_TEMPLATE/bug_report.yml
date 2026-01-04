@@ -1,38 +1,38 @@
 # PyWebTransport Bug Report GitHub Issue Form
 
 name: "Bug Report"
-description: "Report a bug to help us improve the library."
-title: "[Bug]: A brief description of the bug"
+description: "File a technical defect report."
+title: ""
 labels: ["bug", "triage"]
 body:
-  - type: markdown
+  - type: "markdown"
     attributes:
       value: |
-        Thank you for taking the time to file a bug report! Please fill out the form below to help us diagnose and fix the issue as quickly as possible.
+        Required details for defect diagnosis.
 
-  - type: input
-    id: version
+  - type: "input"
+    id: "version"
     attributes:
-      label: "PyWebTransport Version"
-      description: "What version of `pywebtransport` are you using? (e.g., 0.9.0)"
-      placeholder: "e.g., 0.9.0"
+      label: "Library Version"
+      description: "Specific version identifier."
+      placeholder: "e.g., 0.11.0"
     validations:
       required: true
 
-  - type: input
-    id: python-version
+  - type: "input"
+    id: "python-version"
     attributes:
-      label: "Python Version"
-      description: "What version of Python are you using? (e.g., 3.12.12)"
+      label: "Python Runtime"
+      description: "Interpreter version."
       placeholder: "e.g., 3.12.12"
     validations:
       required: true
 
-  - type: dropdown
-    id: os
+  - type: "dropdown"
+    id: "os"
     attributes:
       label: "Operating System"
-      description: "What operating system are you running this on?"
+      description: "Host platform environment."
       options:
         - "Linux"
         - "macOS"
@@ -41,55 +41,73 @@ body:
     validations:
       required: true
 
-  - type: textarea
-    id: description
+  - type: "dropdown"
+    id: "network"
     attributes:
-      label: "Bug Description"
-      description: "A clear and concise description of what the bug is."
+      label: "Network Topology"
+      description: "Execution environment connectivity."
+      options:
+        - "Loopback"
+        - "LAN"
+        - "WAN"
+        - "Container"
+        - "CI"
+      multiple: true
     validations:
       required: true
 
-  - type: textarea
-    id: reproduction
+  - type: "textarea"
+    id: "description"
     attributes:
-      label: "Steps to Reproduce"
-      description: "Please provide a minimal, self-contained code snippet that reproduces the problem. This is the most important part of any bug report."
+      label: "Defect Summary"
+      description: "Technical description of the anomaly."
+    validations:
+      required: true
+
+  - type: "textarea"
+    id: "reproduction"
+    attributes:
+      label: "Reproduction"
+      description: "Minimal executable code snippet demonstrating the failure."
       placeholder: |
         ```python
-        # Your minimal, runnable code example here
+        import asyncio
+        from pywebtransport import WebTransportSession
+
+        async def main():
+            # Minimal reproduction logic
+            pass
+
+        if __name__ == "__main__":
+            asyncio.run(main())
         ```
     validations:
       required: true
 
-  - type: textarea
-    id: expected-behavior
+  - type: "textarea"
+    id: "comparison"
     attributes:
-      label: "Expected Behavior"
-      description: "A clear and concise description of what you expected to happen."
+      label: "Expected vs Actual"
+      description: "Contrast expected protocol behavior with observed results."
+      placeholder: |
+        Expected: Stream closes with error code 0x0.
+        Actual: Connection timeout after 500ms.
     validations:
       required: true
 
-  - type: textarea
-    id: actual-behavior
+  - type: "textarea"
+    id: "logs"
     attributes:
-      label: "Actual Behavior"
-      description: "A clear and concise description of what actually happened."
-    validations:
-      required: true
+      label: "Diagnostics"
+      description: "Tracebacks or debug logs."
+      render: "shell"
 
-  - type: textarea
-    id: logs
-    attributes:
-      label: "Logs and Tracebacks"
-      description: "If applicable, add any logs or tracebacks to help explain your problem. Please use debug-level logging for maximum detail."
-      render: "python"
-
-  - type: checkboxes
-    id: checks
+  - type: "checkboxes"
+    id: "verification"
     attributes:
       label: "Verification"
       options:
-        - label: "I have searched the existing issues and have not found a similar bug report."
+        - label: "Checked existing issues for duplicates."
           required: true
-        - label: "I am willing to provide additional information and follow-up on this issue."
-          required: true
+        - label: "Tested against the latest stable release."
+          required: false

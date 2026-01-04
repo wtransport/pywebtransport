@@ -3,7 +3,7 @@
 import pytest
 
 from pywebtransport import Headers
-from pywebtransport.client.utils import normalize_headers, parse_webtransport_url, validate_url
+from pywebtransport.client.utils import normalize_headers, parse_webtransport_url
 
 
 class TestNormalizeHeaders:
@@ -52,18 +52,3 @@ class TestUrlUtils:
         parsed_url = parse_webtransport_url(url=url)
 
         assert parsed_url == expected
-
-    @pytest.mark.parametrize(
-        "url, expected",
-        [
-            ("https://example.com", True),
-            ("https://[::1]:8080/path", True),
-            ("http://example.com", False),
-            ("ftp://invalid.scheme", False),
-            ("not-a-url", False),
-        ],
-    )
-    def test_validate_url(self, url: str, expected: bool) -> None:
-        result = validate_url(url=url)
-
-        assert result is expected

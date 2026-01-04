@@ -13,6 +13,64 @@ from pywebtransport.types import StreamDirection
 
 
 class TestUtils:
+    @pytest.mark.parametrize(
+        "current_limit, consumed, window_size, auto_scale, force_update, expected",
+        [
+            (100, 50, 100, False, False, None),
+            (100, 50, 100, True, False, None),
+            (100, 51, 100, True, False, 151),
+            (100, 50, 100, True, True, 150),
+            (100, 10, 100, True, False, None),
+        ],
+    )
+    def test_calculate_new_data_limit(
+        self,
+        current_limit: int,
+        consumed: int,
+        window_size: int,
+        auto_scale: bool,
+        force_update: bool,
+        expected: int | None,
+    ) -> None:
+        result = protocol_utils.calculate_new_data_limit(
+            current_limit=current_limit,
+            consumed=consumed,
+            window_size=window_size,
+            auto_scale=auto_scale,
+            force_update=force_update,
+        )
+
+        assert result == expected
+
+    @pytest.mark.parametrize(
+        "current_limit, closed_count, initial_window, auto_scale, force_update, expected",
+        [
+            (10, 5, 10, False, False, None),
+            (10, 5, 10, True, False, 15),
+            (10, 4, 10, True, False, None),
+            (10, 1, 10, True, True, 11),
+            (10, 0, 10, True, False, None),
+            (20, 5, 10, True, False, None),
+        ],
+    )
+    def test_calculate_new_stream_limit(
+        self,
+        current_limit: int,
+        closed_count: int,
+        initial_window: int,
+        auto_scale: bool,
+        force_update: bool,
+        expected: int | None,
+    ) -> None:
+        result = protocol_utils.calculate_new_stream_limit(
+            current_limit=current_limit,
+            closed_count=closed_count,
+            initial_window=initial_window,
+            auto_scale=auto_scale,
+            force_update=force_update,
+        )
+
+        assert result == expected
 
     @pytest.mark.parametrize(
         "stream_id, is_client, expected",
@@ -117,22 +175,27 @@ class TestUtils:
 
         assert result == expected
 
-    @pytest.mark.parametrize("stream_id, expected", [(0, True), (2, True), (1, False), (3, False)])
-    def test_is_client_initiated_stream(self, stream_id: int, expected: bool) -> None:
-        # Accessing protected member for unit testing verification
-        result = protocol_utils._is_client_initiated_stream(stream_id=stream_id)
+    @pytest.mark.parametrize(
+        "stream_id, is_client, expected",
+        [
+            (0, True, False),
+            (0, False, True),
+            (1, True, True),
+            (1, False, False),
+            (2, True, False),
+            (2, False, True),
+            (3, True, True),
+            (3, False, False),
+        ],
+    )
+    def test_is_peer_initiated_stream(self, stream_id: int, is_client: bool, expected: bool) -> None:
+        result = protocol_utils.is_peer_initiated_stream(stream_id=stream_id, is_client=is_client)
 
         assert result == expected
 
     @pytest.mark.parametrize("stream_id, expected", [(0, True), (4, True), (1, False), (2, False)])
     def test_is_request_response_stream(self, stream_id: int, expected: bool) -> None:
         result = protocol_utils.is_request_response_stream(stream_id=stream_id)
-
-        assert result == expected
-
-    @pytest.mark.parametrize("stream_id, expected", [(1, True), (3, True), (0, False), (2, False)])
-    def test_is_server_initiated_stream(self, stream_id: int, expected: bool) -> None:
-        result = protocol_utils._is_server_initiated_stream(stream_id=stream_id)
 
         assert result == expected
 

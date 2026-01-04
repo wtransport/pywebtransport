@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass, field
 from types import TracebackType
 from typing import Any, Self
 
-from pywebtransport.client.utils import normalize_headers, parse_webtransport_url, validate_url
+from pywebtransport.client.utils import normalize_headers, parse_webtransport_url
 from pywebtransport.config import ClientConfig
 from pywebtransport.connection import WebTransportConnection
 from pywebtransport.events import EventEmitter
@@ -147,7 +147,6 @@ class WebTransportClient(EventEmitter):
         if self._closed:
             raise ClientError(message="Client is closed")
 
-        validate_url(url=url)
         host, port, path = parse_webtransport_url(url=url)
         connect_timeout = timeout if timeout is not None else self._config.connect_timeout
         logger.info("Connecting to %s:%s%s", host, port, path)

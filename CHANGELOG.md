@@ -11,6 +11,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(No planned changes for the next release yet.)_
 
+## [0.11.1] - 2026-01-04
+
+This release refactors the flow control architecture to enforce a **consumption-based backpressure model**, synchronizing credit updates with application-layer data consumption to mitigate resource exhaustion vectors. Additionally, this release hardens the protocol engine against OOM attacks via mandatory capsule limits, optimizes client-side validation logic, and standardizes the performance benchmarking methodology.
+
+### Added
+
+- **Adaptive Flow Control**: Introduced deterministic sliding window algorithms in `_protocol/utils` to calculate flow control credits for data transfer and stream concurrency.
+- **Backpressure Observability**: Added `local_data_consumed` and stream closure counters to `SessionStateData` and `SessionDiagnostics` for granular visibility into backpressure state.
+- **Configuration**: Added `max_capsule_size` parameter to `ClientConfig` and `ServerConfig`.
+
+### Changed
+
+- **Flow Control Logic**: Transformed the window update mechanism in `SessionProcessor` and `StreamProcessor` to grant credits only upon application consumption (via `read()`) rather than network reception, coupling window size to actual processing capacity.
+- **Stream Read Performance**: Optimized `StreamProcessor` buffer handling by implementing a fast-path slicing strategy, avoiding expensive memory concatenation when the head chunk satisfies the read request.
+- **Client Optimization**: Streamlined `WebTransportClient` connection flow by adopting a "Parse, Don't Validate" pattern, delegating URL validation strictly to `parse_webtransport_url`.
+- **Benchmark Suite**: Re-engineered the performance testing framework to adopt "Goodput" for data transfer and "RPC Throughput" (RPS) for multiplexing metrics, strictly decoupling stream scheduling efficiency from connection establishment capacity.
+- **Code Style**: Standardized exception handling in `WebTransportStream` context managers to use explicit `isinstance` checks, replacing structural pattern matching.
+
+### Removed
+
+- **Obsolete Configuration**: Removed `stream_flow_control_increment` parameters from configuration classes and constants in favor of the new adaptive window algorithm.
+
+### Security
+
+- **Capsule Resource Limits**: Enforced strict size validation for HTTP/3 capsules via the new `max_capsule_size` configuration (default: 64KB) to mitigate Memory-Exhaustion DoS vectors.
+
 ## [0.11.0] - 2025-12-30
 
 Version 0.11.0 marks the completion of the transition to a deterministic **Sans-I/O** architecture and serves as the **final pure-Python release** of the library. This release purifies the protocol engine by eliminating all runtime-couplings, implementing a strict **Request ID** pattern for asynchronous lifecycle management, and standardizing structured concurrency. These structural changes establish a strictly typed codebase with enforced concurrency safety mechanisms and optimized memory layout through integer-based identifiers. Additionally, this release formalizes the project's transition to the **WTransport** organization, unifying governance, asset ownership, and contribution policies.
@@ -650,7 +676,8 @@ This is a major release focused on enhancing runtime safety and modernizing the 
 - cryptography (>=45.0.4,<46.0.0) for SSL/TLS operations
 - typing-extensions (>=4.14.0,<5.0.0) for Python <3.10 support
 
-[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.11.1...HEAD
+[0.11.0]: https://github.com/wtransport/pywebtransport/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/wtransport/pywebtransport/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/wtransport/pywebtransport/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/wtransport/pywebtransport/compare/v0.9.1...v0.10.0

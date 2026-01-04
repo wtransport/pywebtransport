@@ -13,7 +13,6 @@ from pywebtransport import (
     ServerApp,
     ServerConfig,
     StreamError,
-    WebTransportReceiveStream,
     WebTransportSession,
     WebTransportStream,
 )
@@ -25,49 +24,49 @@ SERVER_PORT: Final[int] = 4433
 CERT_PATH: Final[Path] = Path("localhost.crt")
 KEY_PATH: Final[Path] = Path("localhost.key")
 CHUNK_SIZE: Final[int] = 65536
-STATIC_VIEW: Final[memoryview] = memoryview(b"x" * (10 * 1024 * 1024))
+STATIC_VIEW: Final[memoryview] = memoryview(b"x" * (100 * 1024 * 1024))
 
 logging.basicConfig(level=logging.CRITICAL)
 logger = logging.getLogger("bench_server")
 
 
 class BenchmarkServerApp(ServerApp):
-    """A minimal high-performance server application for benchmarking."""
 
     def __init__(self, **kwargs: Any) -> None:
-        """Initialize the benchmark server app."""
         super().__init__(**kwargs)
         self._register_routes()
 
     async def handle_discard(self, session: WebTransportSession, **kwargs: Any) -> None:
-        """Handle unidirectional upload streams by draining them."""
-
-        async def stream_drainer(*, stream: WebTransportReceiveStream) -> None:
+        async def stream_drainer(*, stream: WebTransportStream) -> None:
             try:
                 while await stream.read(max_bytes=CHUNK_SIZE):
                     pass
             except Exception:
                 pass
+            finally:
+                if hasattr(stream, "close"):
+                    await stream.close()
 
         async def on_stream(event: Event) -> None:
             if isinstance(event.data, dict) and (stream := event.data.get("stream")):
                 asyncio.create_task(coro=stream_drainer(stream=stream))
 
+        async def on_dgram(event: Event) -> None:
+            pass
+
         session.events.on(event_type=EventType.STREAM_OPENED, handler=on_stream)
+        session.events.on(event_type=EventType.DATAGRAM_RECEIVED, handler=on_dgram)
         try:
             await session.events.wait_for(event_type=EventType.SESSION_CLOSED)
         except Exception:
             pass
 
     async def handle_duplex(self, session: WebTransportSession, **kwargs: Any) -> None:
-        """Handle full duplex throughput test."""
-
         async def stream_handler(*, stream: WebTransportStream) -> None:
             try:
 
                 async def sender() -> None:
-                    limit = 1024 * 1024
-                    await stream.write_all(data=STATIC_VIEW[:limit], end_stream=False)
+                    await stream.write_all(data=STATIC_VIEW[: 1024 * 1024], end_stream=False)
                     await stream.write(data=b"", end_stream=True)
 
                 async def receiver() -> None:
@@ -92,8 +91,6 @@ class BenchmarkServerApp(ServerApp):
             pass
 
     async def handle_echo(self, session: WebTransportSession, **kwargs: Any) -> None:
-        """Handle bidirectional echo for streams and datagrams."""
-
         async def datagram_loop() -> None:
             async def on_dgram(event: Event) -> None:
                 if isinstance(event.data, dict) and (data := event.data.get("data")):
@@ -140,8 +137,6 @@ class BenchmarkServerApp(ServerApp):
             t2.cancel()
 
     async def handle_latency(self, session: WebTransportSession, **kwargs: Any) -> None:
-        """Handle request-response latency tests."""
-
         async def stream_responder(*, stream: WebTransportStream) -> None:
             try:
                 data = await stream.read_all()
@@ -164,8 +159,6 @@ class BenchmarkServerApp(ServerApp):
             pass
 
     async def handle_produce(self, session: WebTransportSession, **kwargs: Any) -> None:
-        """Handle unidirectional download tests by producing static data."""
-
         async def stream_producer(*, stream: WebTransportStream) -> None:
             try:
                 cmd_bytes = await stream.read(max_bytes=128)
@@ -193,7 +186,6 @@ class BenchmarkServerApp(ServerApp):
             pass
 
     def _register_routes(self) -> None:
-        """Register optimized handlers for benchmark scenarios."""
         self.route(path="/discard")(self.handle_discard)
         self.route(path="/duplex")(self.handle_duplex)
         self.route(path="/echo")(self.handle_echo)
@@ -202,7 +194,6 @@ class BenchmarkServerApp(ServerApp):
 
 
 async def main() -> None:
-    """Run the benchmark server."""
     if not CERT_PATH.exists() or not KEY_PATH.exists():
         generate_self_signed_cert(hostname="localhost", output_dir=".")
 
@@ -217,8 +208,6 @@ async def main() -> None:
         initial_max_streams_bidi=10000,
         initial_max_streams_uni=10000,
         flow_control_window_size=100 * 1024 * 1024,
-        stream_flow_control_increment_bidi=1000,
-        stream_flow_control_increment_uni=1000,
         max_stream_read_buffer=200 * 1024 * 1024,
         max_stream_write_buffer=200 * 1024 * 1024,
         max_event_queue_size=100000,
