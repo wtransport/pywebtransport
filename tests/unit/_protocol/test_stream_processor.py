@@ -42,6 +42,14 @@ class TestStreamProcessor:
         return mocker.patch("pywebtransport._protocol.stream_processor.QuicBuffer", autospec=True)
 
     @pytest.fixture
+    def mock_calc_data_limit(self, mocker: MockerFixture) -> MagicMock:
+        return mocker.patch("pywebtransport._protocol.stream_processor.calculate_new_data_limit")
+
+    @pytest.fixture
+    def mock_calc_stream_limit(self, mocker: MockerFixture) -> MagicMock:
+        return mocker.patch("pywebtransport._protocol.stream_processor.calculate_new_stream_limit")
+
+    @pytest.fixture
     def mock_client_config(self, mocker: MockerFixture) -> MagicMock:
         config = mocker.create_autospec(ClientConfig, instance=True)
         config.max_stream_write_buffer = 1000
@@ -50,8 +58,8 @@ class TestStreamProcessor:
         config.max_pending_events_per_session = 10
         config.flow_control_window_auto_scale = True
         config.flow_control_window_size = 100
-        config.stream_flow_control_increment_uni = 5
-        config.stream_flow_control_increment_bidi = 5
+        config.initial_max_streams_uni = 10
+        config.initial_max_streams_bidi = 10
         return config
 
     @pytest.fixture
@@ -74,6 +82,14 @@ class TestStreamProcessor:
         )
 
     @pytest.fixture
+    def mock_is_peer_initiated(self, mocker: MockerFixture) -> MagicMock:
+        return mocker.patch("pywebtransport._protocol.stream_processor.is_peer_initiated_stream")
+
+    @pytest.fixture
+    def mock_is_unidirectional(self, mocker: MockerFixture) -> MagicMock:
+        return mocker.patch("pywebtransport._protocol.stream_processor.is_unidirectional_stream")
+
+    @pytest.fixture
     def mock_server_config(self, mocker: MockerFixture) -> MagicMock:
         config = mocker.create_autospec(ServerConfig, instance=True)
         config.max_stream_write_buffer = 1000
@@ -82,8 +98,8 @@ class TestStreamProcessor:
         config.max_pending_events_per_session = 10
         config.flow_control_window_auto_scale = True
         config.flow_control_window_size = 100
-        config.stream_flow_control_increment_uni = 5
-        config.stream_flow_control_increment_bidi = 5
+        config.initial_max_streams_uni = 10
+        config.initial_max_streams_bidi = 10
         return config
 
     @pytest.fixture
@@ -93,11 +109,14 @@ class TestStreamProcessor:
         session.state = SessionState.CONNECTED
         session.peer_max_data = 1000
         session.local_data_sent = 0
+        session.local_data_consumed = 0
         session.local_max_data = 100
-        session.peer_data_sent = 51
+        session.peer_data_sent = 0
         session.peer_streams_uni_opened = 0
+        session.peer_streams_uni_closed = 0
         session.local_max_streams_uni = 10
         session.peer_streams_bidi_opened = 8
+        session.peer_streams_bidi_closed = 0
         session.local_max_streams_bidi = 10
         session.active_streams = set()
         session.blocked_streams = set()
@@ -142,92 +161,97 @@ class TestStreamProcessor:
     def server_processor(self, mock_server_config: MagicMock) -> StreamProcessor:
         return StreamProcessor(is_client=False, config=mock_server_config)
 
-    def test_check_and_send_data_credit_autocredit_disabled(
-        self, client_processor: StreamProcessor, mock_session_data: SessionStateData, mock_client_config: MagicMock
+    def test_check_and_send_data_credit_closed_session(
+        self, client_processor: StreamProcessor, mock_session_data: SessionStateData, mock_calc_data_limit: MagicMock
     ) -> None:
-        mock_client_config.flow_control_window_auto_scale = False
+        mock_session_data.state = SessionState.CLOSED
 
         effect = client_processor._check_and_send_data_credit(session_data=mock_session_data)
 
         assert effect is None
+        mock_calc_data_limit.assert_not_called()
 
-    def test_check_and_send_data_credit_no_increase(
-        self, client_processor: StreamProcessor, mock_session_data: SessionStateData, mock_client_config: MagicMock
-    ) -> None:
-        mock_client_config.flow_control_window_auto_scale = True
-        mock_client_config.flow_control_window_size = 100
-        mock_session_data.local_max_data = 100
-        mock_session_data.peer_data_sent = 49
-
-        effect = client_processor._check_and_send_data_credit(session_data=mock_session_data)
-
-        assert effect is None
-        assert mock_session_data.local_max_data == 100
-
-    def test_check_and_send_data_credit_zero_window(
-        self, client_processor: StreamProcessor, mock_session_data: SessionStateData, mock_client_config: MagicMock
-    ) -> None:
-        mock_client_config.flow_control_window_auto_scale = True
-        mock_client_config.flow_control_window_size = 0
-
-        effect = client_processor._check_and_send_data_credit(session_data=mock_session_data)
-
-        assert effect is None
-
-    @pytest.mark.parametrize("is_uni", [True, False])
-    def test_check_and_send_stream_credit_autocredit_disabled(
+    def test_check_and_send_data_credit_no_update(
         self,
         client_processor: StreamProcessor,
         mock_session_data: SessionStateData,
         mock_client_config: MagicMock,
-        is_uni: bool,
+        mock_calc_data_limit: MagicMock,
     ) -> None:
-        mock_client_config.flow_control_window_auto_scale = False
+        mock_calc_data_limit.return_value = None
 
-        effect = client_processor._check_and_send_stream_credit(
-            session_data=mock_session_data, is_unidirectional=is_uni
+        effect = client_processor._check_and_send_data_credit(session_data=mock_session_data)
+
+        assert effect is None
+        mock_calc_data_limit.assert_called_once_with(
+            current_limit=100, consumed=0, window_size=100, auto_scale=True, force_update=False
         )
 
-        assert effect is None
-
-    def test_check_and_send_stream_credit_uni_increase(
+    def test_check_and_send_data_credit_sends_update(
         self,
         client_processor: StreamProcessor,
         mock_session_data: SessionStateData,
-        mock_client_config: MagicMock,
+        mock_calc_data_limit: MagicMock,
         mock_buffer_cls: MagicMock,
     ) -> None:
-        mock_client_config.flow_control_window_auto_scale = True
-        mock_client_config.stream_flow_control_increment_uni = 10
+        mock_calc_data_limit.return_value = 200
+
+        effect = client_processor._check_and_send_data_credit(session_data=mock_session_data)
+
+        assert isinstance(effect, SendH3Capsule)
+        assert effect.capsule_type == constants.WT_MAX_DATA_TYPE
+        assert mock_session_data.local_max_data == 200
+
+    def test_check_and_send_stream_credit_closed_session(
+        self, client_processor: StreamProcessor, mock_session_data: SessionStateData, mock_calc_stream_limit: MagicMock
+    ) -> None:
+        mock_session_data.state = SessionState.CLOSED
+
+        effect = client_processor._check_and_send_stream_credit(session_data=mock_session_data, is_unidirectional=True)
+
+        assert effect is None
+        mock_calc_stream_limit.assert_not_called()
+
+    def test_check_and_send_stream_credit_no_update(
+        self, client_processor: StreamProcessor, mock_session_data: SessionStateData, mock_calc_stream_limit: MagicMock
+    ) -> None:
+        mock_calc_stream_limit.return_value = None
+
+        effect = client_processor._check_and_send_stream_credit(session_data=mock_session_data, is_unidirectional=True)
+
+        assert effect is None
+
+    def test_check_and_send_stream_credit_sends_update_bidi(
+        self,
+        client_processor: StreamProcessor,
+        mock_session_data: SessionStateData,
+        mock_calc_stream_limit: MagicMock,
+        mock_buffer_cls: MagicMock,
+    ) -> None:
+        mock_calc_stream_limit.return_value = 20
+        mock_session_data.local_max_streams_bidi = 10
+
+        effect = client_processor._check_and_send_stream_credit(session_data=mock_session_data, is_unidirectional=False)
+
+        assert isinstance(effect, SendH3Capsule)
+        assert effect.capsule_type == constants.WT_MAX_STREAMS_BIDI_TYPE
+        assert mock_session_data.local_max_streams_bidi == 20
+
+    def test_check_and_send_stream_credit_sends_update_uni(
+        self,
+        client_processor: StreamProcessor,
+        mock_session_data: SessionStateData,
+        mock_calc_stream_limit: MagicMock,
+        mock_buffer_cls: MagicMock,
+    ) -> None:
+        mock_calc_stream_limit.return_value = 20
         mock_session_data.local_max_streams_uni = 10
-        mock_session_data.peer_streams_uni_opened = 6
 
         effect = client_processor._check_and_send_stream_credit(session_data=mock_session_data, is_unidirectional=True)
 
         assert isinstance(effect, SendH3Capsule)
         assert effect.capsule_type == constants.WT_MAX_STREAMS_UNI_TYPE
-        assert effect.stream_id == mock_session_data.session_id
-        assert mock_session_data.local_max_streams_uni == 16
-
-    @pytest.mark.parametrize("is_uni", [True, False])
-    def test_check_and_send_stream_credit_zero_window(
-        self,
-        client_processor: StreamProcessor,
-        mock_session_data: SessionStateData,
-        mock_client_config: MagicMock,
-        is_uni: bool,
-    ) -> None:
-        mock_client_config.flow_control_window_auto_scale = True
-        if is_uni:
-            mock_client_config.stream_flow_control_increment_uni = 0
-        else:
-            mock_client_config.stream_flow_control_increment_bidi = 0
-
-        effect = client_processor._check_and_send_stream_credit(
-            session_data=mock_session_data, is_unidirectional=is_uni
-        )
-
-        assert effect is None
+        assert mock_session_data.local_max_streams_uni == 20
 
     def test_handle_get_stream_diagnostics_not_found(
         self, client_processor: StreamProcessor, mock_state: MagicMock
@@ -259,13 +283,15 @@ class TestStreamProcessor:
             "pywebtransport._protocol.stream_processor.dataclasses.asdict", return_value=test_dict
         ) as mock_asdict:
             event = UserGetStreamDiagnostics(request_id=1, stream_id=4)
+
             effects = client_processor.handle_get_stream_diagnostics(event=event, state=mock_state)
 
             mock_asdict.assert_called_once_with(mock_stream_data)
             assert len(effects) == 1
-            assert isinstance(effects[0], NotifyRequestDone)
-            assert effects[0].request_id == 1
-            result_value = effects[0].result
+            effect = effects[0]
+            assert isinstance(effect, NotifyRequestDone)
+            assert effect.request_id == 1
+            result_value = effect.result
             assert result_value["read_buffer"] == b""
             assert result_value["read_buffer_size"] == 13
 
@@ -333,6 +359,19 @@ class TestStreamProcessor:
         assert isinstance(effects[0], NotifyRequestFailed)
         assert effects[0].request_id == 1
 
+    def test_handle_internal_fail_quic_stream_session_closed(
+        self, client_processor: StreamProcessor, mock_state: MagicMock, mock_session_data: SessionStateData
+    ) -> None:
+        mock_session_data.state = SessionState.CLOSED
+        mock_session_data.local_streams_uni_opened = 5
+        event = InternalFailQuicStream(request_id=1, session_id=0, exception=ValueError("fail"), is_unidirectional=True)
+
+        effects = client_processor.handle_internal_fail_quic_stream(event=event, state=mock_state)
+
+        assert mock_session_data.local_streams_uni_opened == 4
+        assert len(effects) == 1
+        assert isinstance(effects[0], NotifyRequestFailed)
+
     def test_handle_internal_fail_quic_stream_session_not_found(
         self, client_processor: StreamProcessor, mock_state: MagicMock
     ) -> None:
@@ -360,6 +399,24 @@ class TestStreamProcessor:
         event_uni = InternalFailQuicStream(request_id=2, session_id=0, exception=ValueError(), is_unidirectional=True)
         client_processor.handle_internal_fail_quic_stream(event=event_uni, state=mock_state)
         assert mock_session_data.local_streams_uni_opened == 0
+
+    def test_handle_reset_stream_active_streams_inconsistency(
+        self,
+        client_processor: StreamProcessor,
+        mock_state: MagicMock,
+        mock_session_data: SessionStateData,
+        mock_stream_data: StreamStateData,
+        mock_is_peer_initiated: MagicMock,
+    ) -> None:
+        mock_stream_data.state = StreamState.OPEN
+        mock_session_data.active_streams = set()
+        mock_is_peer_initiated.return_value = True
+        event = UserResetStream(request_id=1, stream_id=4, error_code=100)
+
+        effects = client_processor.handle_reset_stream(event=event, state=mock_state)
+
+        assert mock_stream_data.state == StreamState.RESET_SENT
+        assert EmitStreamEvent(stream_id=4, event_type=EventType.STREAM_CLOSED, data={"stream_id": 4}) not in effects
 
     def test_handle_reset_stream_empty_buffer(
         self,
@@ -410,13 +467,34 @@ class TestStreamProcessor:
         assert fail_effect.request_id == 1
         assert isinstance(fail_effect.exception, StreamError)
 
+    def test_handle_reset_stream_peer_initiated_no_credit_update(
+        self,
+        client_processor: StreamProcessor,
+        mock_state: MagicMock,
+        mock_session_data: SessionStateData,
+        mock_stream_data: StreamStateData,
+        mock_is_peer_initiated: MagicMock,
+        mock_calc_stream_limit: MagicMock,
+        mock_wt_to_http_code: MagicMock,
+    ) -> None:
+        mock_stream_data.state = StreamState.HALF_CLOSED_REMOTE
+        mock_session_data.blocked_streams.add(4)
+        mock_is_peer_initiated.return_value = True
+        mock_calc_stream_limit.return_value = None
+        event = UserResetStream(request_id=1, stream_id=4, error_code=100)
+
+        effects = client_processor.handle_reset_stream(event=event, state=mock_state)
+
+        assert mock_stream_data.state == StreamState.CLOSED
+        assert not any(isinstance(e, SendH3Capsule) for e in effects)
+
     def test_handle_reset_stream_session_missing(
         self, client_processor: StreamProcessor, mock_state: MagicMock, mock_stream_data: StreamStateData
     ) -> None:
         mock_state.sessions.get.return_value = None
         mock_stream_data.state = StreamState.HALF_CLOSED_REMOTE
-
         event = UserResetStream(request_id=1, stream_id=4, error_code=0)
+
         effects = client_processor.handle_reset_stream(event=event, state=mock_state)
 
         assert mock_stream_data.state == StreamState.CLOSED
@@ -430,7 +508,7 @@ class TestStreamProcessor:
             (StreamState.RESET_RECEIVED, StreamState.CLOSED),
         ],
     )
-    def test_handle_reset_stream_state_transitions(
+    def test_handle_reset_stream_state_transitions_and_credit_update(
         self,
         client_processor: StreamProcessor,
         mock_state: MagicMock,
@@ -438,11 +516,17 @@ class TestStreamProcessor:
         mock_stream_data: StreamStateData,
         mock_wt_to_http_code: MagicMock,
         mock_get_timestamp: MagicMock,
+        mock_is_peer_initiated: MagicMock,
+        mock_is_unidirectional: MagicMock,
+        mock_calc_stream_limit: MagicMock,
         state_from: StreamState,
         state_to: StreamState,
     ) -> None:
         mock_stream_data.state = state_from
         mock_session_data.blocked_streams.add(4)
+        mock_is_peer_initiated.return_value = True
+        mock_is_unidirectional.return_value = False
+        mock_calc_stream_limit.return_value = 50
         event = UserResetStream(request_id=1, stream_id=4, error_code=100)
 
         effects = client_processor.handle_reset_stream(event=event, state=mock_state)
@@ -454,9 +538,14 @@ class TestStreamProcessor:
         assert ResetQuicStream(stream_id=4, error_code=0x52E0) in effects
         assert NotifyRequestDone(request_id=1, result=None) in effects
         assert 4 not in mock_session_data.blocked_streams
+
         if state_to == StreamState.CLOSED:
             assert 4 not in mock_session_data.active_streams
             assert EmitStreamEvent(stream_id=4, event_type=EventType.STREAM_CLOSED, data={"stream_id": 4}) in effects
+            assert mock_session_data.peer_streams_bidi_closed == 1
+            assert any(
+                isinstance(e, SendH3Capsule) and e.capsule_type == constants.WT_MAX_STREAMS_BIDI_TYPE for e in effects
+            )
 
     @pytest.mark.parametrize("state", [StreamState.HALF_CLOSED_LOCAL, StreamState.CLOSED, StreamState.RESET_SENT])
     def test_handle_reset_stream_wrong_state_no_op(
@@ -549,6 +638,16 @@ class TestStreamProcessor:
         fail_effect = effects[0]
         assert isinstance(fail_effect, NotifyRequestFailed)
         assert "write buffer full" in str(fail_effect.exception)
+
+    def test_handle_send_stream_data_dummy_state(
+        self, client_processor: StreamProcessor, mock_state: MagicMock, mock_stream_data: StreamStateData
+    ) -> None:
+        mock_stream_data.state = "DUMMY_STATE"  # type: ignore[assignment]
+        event = UserSendStreamData(request_id=1, stream_id=4, data=b"hello", end_stream=True)
+
+        effects = client_processor.handle_send_stream_data(event=event, state=mock_state)
+
+        assert not any(isinstance(e, EmitStreamEvent) for e in effects)
 
     def test_handle_send_stream_data_empty_payload_no_fin(
         self,
@@ -651,15 +750,19 @@ class TestStreamProcessor:
         assert isinstance(fail_effect.exception, StreamError)
         assert "Session not found" in fail_effect.exception.args[0]
 
-    def test_handle_send_stream_data_success_end_stream_half_closed(
+    def test_handle_send_stream_data_success_end_stream_half_closed_with_credit_update(
         self,
         client_processor: StreamProcessor,
         mock_state: MagicMock,
         mock_session_data: SessionStateData,
         mock_stream_data: StreamStateData,
+        mock_is_peer_initiated: MagicMock,
+        mock_calc_stream_limit: MagicMock,
     ) -> None:
         mock_stream_data.state = StreamState.HALF_CLOSED_REMOTE
         mock_session_data.blocked_streams.add(4)
+        mock_is_peer_initiated.return_value = True
+        mock_calc_stream_limit.return_value = 50
         event = UserSendStreamData(request_id=1, stream_id=4, data=b"hello", end_stream=True)
 
         effects = client_processor.handle_send_stream_data(event=event, state=mock_state)
@@ -669,6 +772,7 @@ class TestStreamProcessor:
         assert NotifyRequestDone(request_id=1, result=None) in effects
         assert 4 not in mock_session_data.active_streams
         assert 4 not in mock_session_data.blocked_streams
+        assert any(isinstance(e, SendH3Capsule) for e in effects)
 
     def test_handle_send_stream_data_success_end_stream_open(
         self, client_processor: StreamProcessor, mock_state: MagicMock, mock_stream_data: StreamStateData
@@ -723,6 +827,24 @@ class TestStreamProcessor:
         assert isinstance(fail_effect.exception, StreamError)
         assert "is not writable" in fail_effect.exception.args[0]
 
+    def test_handle_stop_stream_active_streams_inconsistency(
+        self,
+        client_processor: StreamProcessor,
+        mock_state: MagicMock,
+        mock_session_data: SessionStateData,
+        mock_stream_data: StreamStateData,
+        mock_is_peer_initiated: MagicMock,
+    ) -> None:
+        mock_stream_data.state = StreamState.OPEN
+        mock_session_data.active_streams = set()
+        mock_is_peer_initiated.return_value = True
+        event = UserStopStream(request_id=1, stream_id=4, error_code=100)
+
+        effects = client_processor.handle_stop_stream(event=event, state=mock_state)
+
+        assert mock_stream_data.state == StreamState.RESET_RECEIVED
+        assert EmitStreamEvent(stream_id=4, event_type=EventType.STREAM_CLOSED, data={"stream_id": 4}) not in effects
+
     def test_handle_stop_stream_fails_pending_reads(
         self,
         client_processor: StreamProcessor,
@@ -773,8 +895,8 @@ class TestStreamProcessor:
     ) -> None:
         mock_state.sessions.get.return_value = None
         mock_stream_data.state = StreamState.HALF_CLOSED_LOCAL
-
         event = UserStopStream(request_id=1, stream_id=4, error_code=0)
+
         client_processor.handle_stop_stream(event=event, state=mock_state)
 
         assert mock_stream_data.state == StreamState.CLOSED
@@ -787,7 +909,7 @@ class TestStreamProcessor:
             (StreamState.RESET_SENT, StreamState.CLOSED),
         ],
     )
-    def test_handle_stop_stream_state_transitions(
+    def test_handle_stop_stream_state_transitions_and_credit_update(
         self,
         client_processor: StreamProcessor,
         mock_state: MagicMock,
@@ -795,11 +917,15 @@ class TestStreamProcessor:
         mock_stream_data: StreamStateData,
         mock_wt_to_http_code: MagicMock,
         mock_get_timestamp: MagicMock,
+        mock_is_peer_initiated: MagicMock,
+        mock_calc_stream_limit: MagicMock,
         state_from: StreamState,
         state_to: StreamState,
     ) -> None:
         mock_stream_data.state = state_from
         mock_session_data.blocked_streams.add(4)
+        mock_is_peer_initiated.return_value = True
+        mock_calc_stream_limit.return_value = 50
         event = UserStopStream(request_id=1, stream_id=4, error_code=100)
 
         effects = client_processor.handle_stop_stream(event=event, state=mock_state)
@@ -814,6 +940,7 @@ class TestStreamProcessor:
             assert 4 not in mock_session_data.active_streams
             assert 4 not in mock_session_data.blocked_streams
             assert EmitStreamEvent(stream_id=4, event_type=EventType.STREAM_CLOSED, data={"stream_id": 4}) in effects
+            assert any(isinstance(e, SendH3Capsule) for e in effects)
 
     @pytest.mark.parametrize("state", [StreamState.HALF_CLOSED_REMOTE, StreamState.CLOSED, StreamState.RESET_RECEIVED])
     def test_handle_stop_stream_wrong_state_no_op(
@@ -885,19 +1012,6 @@ class TestStreamProcessor:
         assert fail_effect.request_id == 1
         assert isinstance(fail_effect.exception, StreamError)
 
-    def test_handle_stream_read_reads_from_buffer(
-        self, client_processor: StreamProcessor, mock_state: MagicMock, mock_stream_data: StreamStateData
-    ) -> None:
-        mock_stream_data.read_buffer = deque([b"hello", b" world"])
-        mock_stream_data.read_buffer_size = 11
-        event = UserStreamRead(request_id=1, stream_id=4, max_bytes=5)
-
-        effects = client_processor.handle_stream_read(event=event, state=mock_state)
-
-        assert effects == [NotifyRequestDone(request_id=1, result=b"hello")]
-        assert list(mock_stream_data.read_buffer) == [b" world"]
-        assert mock_stream_data.read_buffer_size == 6
-
     def test_handle_stream_read_reads_from_buffer_all(
         self, client_processor: StreamProcessor, mock_state: MagicMock, mock_stream_data: StreamStateData
     ) -> None:
@@ -907,9 +1021,64 @@ class TestStreamProcessor:
 
         effects = client_processor.handle_stream_read(event=event, state=mock_state)
 
-        assert effects == [NotifyRequestDone(request_id=1, result=b"hello world")]
+        assert isinstance(effects[0], NotifyRequestDone)
+        assert effects[0].result == b"hello world"
         assert len(mock_stream_data.read_buffer) == 0
         assert mock_stream_data.read_buffer_size == 0
+
+    def test_handle_stream_read_reads_from_buffer_and_updates_credit(
+        self,
+        client_processor: StreamProcessor,
+        mock_state: MagicMock,
+        mock_stream_data: StreamStateData,
+        mock_session_data: SessionStateData,
+        mock_calc_data_limit: MagicMock,
+        mock_buffer_cls: MagicMock,
+    ) -> None:
+        mock_stream_data.read_buffer = deque([b"hello", b" world"])
+        mock_stream_data.read_buffer_size = 11
+        mock_calc_data_limit.return_value = 200
+        event = UserStreamRead(request_id=1, stream_id=4, max_bytes=5)
+
+        effects = client_processor.handle_stream_read(event=event, state=mock_state)
+
+        assert NotifyRequestDone(request_id=1, result=b"hello") in effects
+        assert any(isinstance(e, SendH3Capsule) and e.capsule_type == constants.WT_MAX_DATA_TYPE for e in effects)
+        assert mock_session_data.local_data_consumed == 5
+        assert list(mock_stream_data.read_buffer) == [b" world"]
+        assert mock_stream_data.read_buffer_size == 6
+
+    def test_handle_stream_read_session_gone(
+        self, client_processor: StreamProcessor, mock_state: MagicMock, mock_stream_data: StreamStateData
+    ) -> None:
+        mock_stream_data.read_buffer = deque([b"data"])
+        mock_stream_data.read_buffer_size = 4
+        mock_state.sessions.get.return_value = None
+        event = UserStreamRead(request_id=1, stream_id=4, max_bytes=100)
+
+        effects = client_processor.handle_stream_read(event=event, state=mock_state)
+
+        assert isinstance(effects[0], NotifyRequestDone)
+        assert effects[0].result == b"data"
+        assert not any(isinstance(e, SendH3Capsule) for e in effects)
+
+    def test_handle_transport_stream_reset_active_streams_inconsistency(
+        self,
+        client_processor: StreamProcessor,
+        mock_state: MagicMock,
+        mock_session_data: SessionStateData,
+        mock_stream_data: StreamStateData,
+        mock_is_peer_initiated: MagicMock,
+    ) -> None:
+        mock_stream_data.state = StreamState.OPEN
+        mock_session_data.active_streams = set()
+        mock_is_peer_initiated.return_value = True
+        event = TransportStreamReset(stream_id=4, error_code=ErrorCodes.WT_APPLICATION_ERROR_FIRST)
+
+        effects = client_processor.handle_transport_stream_reset(event=event, state=mock_state)
+
+        assert mock_stream_data.state == StreamState.CLOSED
+        assert EmitStreamEvent(stream_id=4, event_type=EventType.STREAM_CLOSED, data={"stream_id": 4}) in effects
 
     def test_handle_transport_stream_reset_fails_pending_futures(
         self,
@@ -933,15 +1102,19 @@ class TestStreamProcessor:
         failed_ids = {e.request_id for e in effects if isinstance(e, NotifyRequestFailed)}
         assert {1, 2}.issubset(failed_ids)
 
-    def test_handle_transport_stream_reset_maps_app_error(
+    def test_handle_transport_stream_reset_maps_app_error_and_updates_credit(
         self,
         client_processor: StreamProcessor,
         mock_state: MagicMock,
         mock_stream_data: StreamStateData,
         mock_http_to_wt_code: MagicMock,
         mock_session_data: SessionStateData,
+        mock_is_peer_initiated: MagicMock,
+        mock_calc_stream_limit: MagicMock,
     ) -> None:
         mock_session_data.blocked_streams.add(4)
+        mock_is_peer_initiated.return_value = True
+        mock_calc_stream_limit.return_value = 50
         event = TransportStreamReset(stream_id=4, error_code=ErrorCodes.WT_APPLICATION_ERROR_FIRST)
 
         effects = client_processor.handle_transport_stream_reset(event=event, state=mock_state)
@@ -952,6 +1125,7 @@ class TestStreamProcessor:
         assert EmitStreamEvent(stream_id=4, event_type=EventType.STREAM_CLOSED, data={"stream_id": 4}) in effects
         assert 4 not in mock_session_data.active_streams
         assert 4 not in mock_session_data.blocked_streams
+        assert any(isinstance(e, SendH3Capsule) for e in effects)
 
     def test_handle_transport_stream_reset_maps_http_error_value_error(
         self,
@@ -996,66 +1170,49 @@ class TestStreamProcessor:
     ) -> None:
         mock_state.sessions.get.return_value = None
         mock_stream_data.state = StreamState.OPEN
-
         event = TransportStreamReset(stream_id=4, error_code=0)
+
         client_processor.handle_transport_stream_reset(event=event, state=mock_state)
 
         assert mock_stream_data.state == StreamState.CLOSED
 
-    def test_handle_webtransport_stream_data_autocredit_data(
+    def test_handle_transport_stream_reset_uni_stream_credit(
+        self,
+        client_processor: StreamProcessor,
+        mock_state: MagicMock,
+        mock_stream_data: StreamStateData,
+        mock_session_data: SessionStateData,
+        mock_is_peer_initiated: MagicMock,
+        mock_is_unidirectional: MagicMock,
+        mock_calc_stream_limit: MagicMock,
+        mock_buffer_cls: MagicMock,
+    ) -> None:
+        mock_is_peer_initiated.return_value = True
+        mock_is_unidirectional.return_value = True
+        mock_calc_stream_limit.return_value = 25
+        event = TransportStreamReset(stream_id=4, error_code=0)
+
+        effects = client_processor.handle_transport_stream_reset(event=event, state=mock_state)
+
+        assert mock_session_data.peer_streams_uni_closed == 1
+        assert any(
+            isinstance(e, SendH3Capsule) and e.capsule_type == constants.WT_MAX_STREAMS_UNI_TYPE for e in effects
+        )
+
+    def test_handle_webtransport_stream_data_buffers_data(
         self,
         client_processor: StreamProcessor,
         mock_state: MagicMock,
         mock_session_data: SessionStateData,
         mock_stream_data: StreamStateData,
-        mock_buffer_cls: MagicMock,
-        mock_client_config: MagicMock,
     ) -> None:
-        mock_client_config.flow_control_window_auto_scale = True
-        mock_client_config.flow_control_window_size = 100
-        mock_session_data.local_max_data = 100
-        mock_session_data.peer_data_sent = 51
         event = WebTransportStreamDataReceived(stream_id=4, session_id=0, data=b"hello", stream_ended=False)
 
         effects = client_processor.handle_webtransport_stream_data(event=event, state=mock_state)
 
-        assert mock_session_data.local_max_data == 156
-        assert any(isinstance(e, SendH3Capsule) and e.capsule_type == constants.WT_MAX_DATA_TYPE for e in effects)
+        assert mock_session_data.peer_data_sent == 5
         assert list(mock_stream_data.read_buffer) == [b"hello"]
         assert mock_stream_data.read_buffer_size == 5
-
-    def test_handle_webtransport_stream_data_autocredit_data_disabled(
-        self,
-        client_processor: StreamProcessor,
-        mock_state: MagicMock,
-        mock_session_data: SessionStateData,
-        mock_stream_data: StreamStateData,
-        mock_client_config: MagicMock,
-    ) -> None:
-        mock_client_config.flow_control_window_auto_scale = False
-        event = WebTransportStreamDataReceived(stream_id=4, session_id=0, data=b"hello", stream_ended=False)
-
-        effects = client_processor.handle_webtransport_stream_data(event=event, state=mock_state)
-
-        assert not any(isinstance(e, SendH3Capsule) for e in effects)
-
-    def test_handle_webtransport_stream_data_autocredit_data_no_increase(
-        self,
-        client_processor: StreamProcessor,
-        mock_state: MagicMock,
-        mock_session_data: SessionStateData,
-        mock_stream_data: StreamStateData,
-        mock_client_config: MagicMock,
-    ) -> None:
-        mock_client_config.flow_control_window_auto_scale = True
-        mock_client_config.flow_control_window_size = 100
-        mock_session_data.local_max_data = 100
-        mock_session_data.peer_data_sent = 40
-        event = WebTransportStreamDataReceived(stream_id=4, session_id=0, data=b"hello", stream_ended=False)
-
-        effects = client_processor.handle_webtransport_stream_data(event=event, state=mock_state)
-
-        assert mock_session_data.local_max_data == 100
         assert not any(isinstance(e, SendH3Capsule) for e in effects)
 
     def test_handle_webtransport_stream_data_client_no_session_data(
@@ -1079,18 +1236,22 @@ class TestStreamProcessor:
 
         assert effects == []
 
-    def test_handle_webtransport_stream_data_end_stream_closes_half_local(
+    def test_handle_webtransport_stream_data_end_stream_closes_half_local_updates_credit(
         self,
         client_processor: StreamProcessor,
         mock_state: MagicMock,
         mock_session_data: SessionStateData,
         mock_stream_data: StreamStateData,
         mock_get_timestamp: MagicMock,
+        mock_is_peer_initiated: MagicMock,
+        mock_calc_stream_limit: MagicMock,
     ) -> None:
         mock_stream_data.state = StreamState.HALF_CLOSED_LOCAL
         mock_stream_data.read_buffer = deque()
         mock_stream_data.read_buffer_size = 0
         mock_session_data.blocked_streams.add(4)
+        mock_is_peer_initiated.return_value = True
+        mock_calc_stream_limit.return_value = 50
         event = WebTransportStreamDataReceived(stream_id=4, session_id=0, data=b"", stream_ended=True)
 
         effects = client_processor.handle_webtransport_stream_data(event=event, state=mock_state)
@@ -1100,8 +1261,9 @@ class TestStreamProcessor:
         assert 4 not in mock_session_data.active_streams
         assert 4 not in mock_session_data.blocked_streams
         assert EmitStreamEvent(stream_id=4, event_type=EventType.STREAM_CLOSED, data={"stream_id": 4}) in effects
+        assert any(isinstance(e, SendH3Capsule) for e in effects)
 
-    def test_handle_webtransport_stream_data_end_stream_data_pending(
+    def test_handle_webtransport_stream_data_end_stream_data_pending_transition(
         self,
         client_processor: StreamProcessor,
         mock_state: MagicMock,
@@ -1118,7 +1280,19 @@ class TestStreamProcessor:
         assert mock_stream_data.state == StreamState.HALF_CLOSED_REMOTE
         assert not any(isinstance(e, EmitStreamEvent) for e in effects)
 
-    def test_handle_webtransport_stream_data_end_stream_open(
+    def test_handle_webtransport_stream_data_end_stream_duplicate_fin(
+        self, client_processor: StreamProcessor, mock_state: MagicMock, mock_stream_data: StreamStateData
+    ) -> None:
+        mock_stream_data.state = StreamState.HALF_CLOSED_REMOTE
+        mock_stream_data.read_buffer_size = 0
+        event = WebTransportStreamDataReceived(stream_id=4, session_id=0, data=b"", stream_ended=True)
+
+        effects = client_processor.handle_webtransport_stream_data(event=event, state=mock_state)
+
+        assert mock_stream_data.state == StreamState.HALF_CLOSED_REMOTE
+        assert not any(isinstance(e, EmitStreamEvent) for e in effects)
+
+    def test_handle_webtransport_stream_data_end_stream_open_transition(
         self,
         client_processor: StreamProcessor,
         mock_state: MagicMock,
@@ -1168,14 +1342,16 @@ class TestStreamProcessor:
         assert NotifyRequestDone(request_id=2, result=b"") in effects
         assert len(mock_stream_data.pending_read_requests) == 0
 
-    def test_handle_webtransport_stream_data_fulfills_multiple_reads(
+    def test_handle_webtransport_stream_data_fulfills_multiple_reads_updates_credit(
         self,
         client_processor: StreamProcessor,
         mock_state: MagicMock,
         mock_session_data: SessionStateData,
         mock_stream_data: StreamStateData,
+        mock_calc_data_limit: MagicMock,
     ) -> None:
         mock_stream_data.pending_read_requests = deque([(1, 2), (2, 2)])
+        mock_calc_data_limit.side_effect = [None, 200]
         event = WebTransportStreamDataReceived(stream_id=4, session_id=0, data=b"hello", stream_ended=False)
 
         effects = client_processor.handle_webtransport_stream_data(event=event, state=mock_state)
@@ -1183,6 +1359,8 @@ class TestStreamProcessor:
         assert NotifyRequestDone(request_id=1, result=b"he") in effects
         assert NotifyRequestDone(request_id=2, result=b"ll") in effects
         assert list(mock_stream_data.read_buffer) == [b"o"]
+        assert mock_session_data.local_data_consumed == 4
+        assert any(isinstance(e, SendH3Capsule) and e.capsule_type == constants.WT_MAX_DATA_TYPE for e in effects)
 
     def test_handle_webtransport_stream_data_ignore_if_closed(
         self, client_processor: StreamProcessor, mock_state: MagicMock, mock_stream_data: StreamStateData
@@ -1218,47 +1396,16 @@ class TestStreamProcessor:
         assert len(mock_stream_data.read_buffer) == 2
         assert mock_stream_data.read_buffer_size == 13
 
-    def test_handle_webtransport_stream_data_server_autocredit_streams(
-        self,
-        server_processor: StreamProcessor,
-        mock_state: MagicMock,
-        mock_session_data: SessionStateData,
-        mock_buffer_cls: MagicMock,
+    def test_handle_webtransport_stream_data_orphaned_stream_mid_processing(
+        self, client_processor: StreamProcessor, mock_state: MagicMock, mock_stream_data: StreamStateData
     ) -> None:
-        event = WebTransportStreamDataReceived(stream_id=8, session_id=0, data=b"hello", stream_ended=False)
-        with patch(
-            "pywebtransport._protocol.stream_processor.get_stream_direction_from_id",
-            return_value=StreamDirection.BIDIRECTIONAL,
-        ):
-            effects = server_processor.handle_webtransport_stream_data(event=event, state=mock_state)
+        mock_stream_data.session_id = 999
+        mock_state.sessions.get.return_value = None
+        event = WebTransportStreamDataReceived(stream_id=4, session_id=999, data=b"data", stream_ended=False)
 
-        assert mock_session_data.local_max_streams_bidi == 14
-        assert any(
-            isinstance(e, SendH3Capsule) and e.capsule_type == constants.WT_MAX_STREAMS_BIDI_TYPE for e in effects
-        )
+        effects = client_processor.handle_webtransport_stream_data(event=event, state=mock_state)
 
-    def test_handle_webtransport_stream_data_server_autocredit_streams_no_increase(
-        self,
-        server_processor: StreamProcessor,
-        mock_state: MagicMock,
-        mock_session_data: SessionStateData,
-        mock_server_config: MagicMock,
-    ) -> None:
-        mock_server_config.flow_control_window_auto_scale = True
-        mock_server_config.stream_flow_control_increment_bidi = 5
-        mock_session_data.local_max_streams_bidi = 20
-        mock_session_data.peer_streams_bidi_opened = 8
-        event = WebTransportStreamDataReceived(stream_id=8, session_id=0, data=b"hello", stream_ended=False)
-        with patch(
-            "pywebtransport._protocol.stream_processor.get_stream_direction_from_id",
-            return_value=StreamDirection.BIDIRECTIONAL,
-        ):
-            effects = server_processor.handle_webtransport_stream_data(event=event, state=mock_state)
-
-        assert mock_session_data.local_max_streams_bidi == 20
-        assert not any(
-            isinstance(e, SendH3Capsule) and e.capsule_type == constants.WT_MAX_STREAMS_BIDI_TYPE for e in effects
-        )
+        assert effects == []
 
     def test_handle_webtransport_stream_data_server_creates_new_stream_bidi(
         self,
@@ -1266,9 +1413,12 @@ class TestStreamProcessor:
         mock_state: MagicMock,
         mock_session_data: SessionStateData,
         mock_get_timestamp: MagicMock,
+        mock_is_unidirectional: MagicMock,
     ) -> None:
         mock_state.streams = {}
+        mock_is_unidirectional.return_value = False
         event = WebTransportStreamDataReceived(stream_id=8, session_id=0, data=b"hello", stream_ended=False)
+
         with patch(
             "pywebtransport._protocol.stream_processor.get_stream_direction_from_id",
             return_value=StreamDirection.BIDIRECTIONAL,
@@ -1295,41 +1445,18 @@ class TestStreamProcessor:
             in effects
         )
 
-    def test_handle_webtransport_stream_data_server_creates_new_stream_triggers_credit(
-        self,
-        server_processor: StreamProcessor,
-        mock_state: MagicMock,
-        mock_session_data: SessionStateData,
-        mock_server_config: MagicMock,
-    ) -> None:
-        mock_state.streams = {}
-        mock_session_data.local_max_streams_uni = 10
-        mock_session_data.peer_streams_uni_opened = 5
-        mock_server_config.stream_flow_control_increment_uni = 10
-        mock_server_config.flow_control_window_auto_scale = True
-
-        event = WebTransportStreamDataReceived(stream_id=10, session_id=0, data=b"hello", stream_ended=False)
-
-        with patch(
-            "pywebtransport._protocol.stream_processor.get_stream_direction_from_id",
-            return_value=StreamDirection.RECEIVE_ONLY,
-        ):
-            effects = server_processor.handle_webtransport_stream_data(event=event, state=mock_state)
-
-        assert mock_session_data.local_max_streams_uni == 16
-        assert any(
-            isinstance(e, SendH3Capsule) and e.capsule_type == constants.WT_MAX_STREAMS_UNI_TYPE for e in effects
-        )
-
     def test_handle_webtransport_stream_data_server_creates_new_stream_uni(
         self,
         server_processor: StreamProcessor,
         mock_state: MagicMock,
         mock_session_data: SessionStateData,
         mock_get_timestamp: MagicMock,
+        mock_is_unidirectional: MagicMock,
     ) -> None:
         mock_state.streams = {}
+        mock_is_unidirectional.return_value = True
         event = WebTransportStreamDataReceived(stream_id=10, session_id=0, data=b"hello", stream_ended=False)
+
         with patch(
             "pywebtransport._protocol.stream_processor.get_stream_direction_from_id",
             return_value=StreamDirection.RECEIVE_ONLY,
@@ -1355,6 +1482,29 @@ class TestStreamProcessor:
             )
             in effects
         )
+
+    def test_handle_webtransport_stream_data_server_creates_stream_no_credit_update(
+        self,
+        server_processor: StreamProcessor,
+        mock_state: MagicMock,
+        mock_session_data: SessionStateData,
+        mock_get_timestamp: MagicMock,
+        mock_is_unidirectional: MagicMock,
+        mock_calc_stream_limit: MagicMock,
+        mock_buffer_cls: MagicMock,
+    ) -> None:
+        mock_state.streams = {}
+        mock_is_unidirectional.return_value = True
+        mock_calc_stream_limit.return_value = 20
+        event = WebTransportStreamDataReceived(stream_id=10, session_id=0, data=b"data", stream_ended=False)
+
+        with patch(
+            "pywebtransport._protocol.stream_processor.get_stream_direction_from_id",
+            return_value=StreamDirection.RECEIVE_ONLY,
+        ):
+            effects = server_processor.handle_webtransport_stream_data(event=event, state=mock_state)
+
+        assert not any(isinstance(e, SendH3Capsule) for e in effects)
 
     def test_handle_webtransport_stream_data_server_early_buffering(
         self, server_processor: StreamProcessor, mock_state: MagicMock, mock_get_timestamp: MagicMock
@@ -1437,13 +1587,26 @@ class TestStreamProcessor:
         else:
             mock_session_data.peer_streams_uni_opened = current_opened
             mock_session_data.local_max_streams_uni = limit
-
         event = WebTransportStreamDataReceived(stream_id=8, session_id=0, data=b"hello", stream_ended=False)
 
         with patch("pywebtransport._protocol.stream_processor.get_stream_direction_from_id", return_value=direction):
             effects = server_processor.handle_webtransport_stream_data(event=event, state=mock_state)
 
         assert effects == []
+        assert 8 not in mock_state.streams
+
+    def test_handle_webtransport_stream_data_server_unknown_direction(
+        self, server_processor: StreamProcessor, mock_state: MagicMock, mock_session_data: SessionStateData
+    ) -> None:
+        mock_state.streams = {}
+        event = WebTransportStreamDataReceived(stream_id=8, session_id=0, data=b"hello", stream_ended=False)
+
+        with patch(
+            "pywebtransport._protocol.stream_processor.get_stream_direction_from_id", return_value="UNKNOWN_DIRECTION"
+        ):
+            with pytest.raises(AssertionError, match="Unreachable code: Unhandled stream direction UNKNOWN_DIRECTION"):
+                server_processor.handle_webtransport_stream_data(event=event, state=mock_state)
+
         assert 8 not in mock_state.streams
 
     def test_handle_webtransport_stream_data_server_unknown_session(
@@ -1500,6 +1663,63 @@ class TestStreamProcessor:
         assert data == b"ab"
         assert list(mock_stream_data.read_buffer) == [b"c"]
         assert mock_stream_data.read_buffer_size == 1
+
+    def test_read_from_buffer_empty(self, client_processor: StreamProcessor, mock_stream_data: StreamStateData) -> None:
+        mock_stream_data.read_buffer = deque()
+        mock_stream_data.read_buffer_size = 0
+
+        data = client_processor._read_from_buffer(stream_data=mock_stream_data, max_bytes=100)
+
+        assert data == b""
+
+    def test_read_from_buffer_exact_chunk_match(
+        self, client_processor: StreamProcessor, mock_stream_data: StreamStateData
+    ) -> None:
+        mock_stream_data.read_buffer = deque([b"exact", b"rest"])
+        mock_stream_data.read_buffer_size = 9
+
+        data = client_processor._read_from_buffer(stream_data=mock_stream_data, max_bytes=5)
+
+        assert data == b"exact"
+        assert list(mock_stream_data.read_buffer) == [b"rest"]
+        assert mock_stream_data.read_buffer_size == 4
+
+    def test_read_from_buffer_large_chunk_split(
+        self, client_processor: StreamProcessor, mock_stream_data: StreamStateData
+    ) -> None:
+        mock_stream_data.read_buffer = deque([b"large_chunk"])
+        mock_stream_data.read_buffer_size = 11
+
+        with patch("pywebtransport._protocol.stream_processor.OPTIMIZED_READ_SLICE_THRESHOLD", new=5):
+            data = client_processor._read_from_buffer(stream_data=mock_stream_data, max_bytes=2)
+
+        assert data == b"la"
+        assert list(mock_stream_data.read_buffer) == [b"rge_chunk"]
+        assert mock_stream_data.read_buffer_size == 9
+
+    def test_read_from_buffer_optimized_head(
+        self, client_processor: StreamProcessor, mock_stream_data: StreamStateData
+    ) -> None:
+        mock_stream_data.read_buffer = deque([b"hello", b"world"])
+        mock_stream_data.read_buffer_size = 10
+
+        data = client_processor._read_from_buffer(stream_data=mock_stream_data, max_bytes=5)
+
+        assert data == b"hello"
+        assert list(mock_stream_data.read_buffer) == [b"world"]
+        assert mock_stream_data.read_buffer_size == 5
+
+    def test_read_from_buffer_partial_small(
+        self, client_processor: StreamProcessor, mock_stream_data: StreamStateData
+    ) -> None:
+        mock_stream_data.read_buffer = deque([b"hello"])
+        mock_stream_data.read_buffer_size = 5
+
+        data = client_processor._read_from_buffer(stream_data=mock_stream_data, max_bytes=2)
+
+        assert data == b"he"
+        assert list(mock_stream_data.read_buffer) == [b"llo"]
+        assert mock_stream_data.read_buffer_size == 3
 
     def test_read_from_buffer_split(self, client_processor: StreamProcessor, mock_stream_data: StreamStateData) -> None:
         mock_stream_data.read_buffer = deque([b"hello"])

@@ -7,7 +7,7 @@ import urllib.parse
 from pywebtransport.constants import WEBTRANSPORT_DEFAULT_PORT, WEBTRANSPORT_SCHEME
 from pywebtransport.types import URL, Headers, URLParts
 
-__all__: list[str] = ["normalize_headers", "parse_webtransport_url", "validate_url"]
+__all__: list[str] = ["normalize_headers", "parse_webtransport_url"]
 
 
 def normalize_headers(*, headers: Headers) -> Headers:
@@ -33,12 +33,3 @@ def parse_webtransport_url(*, url: URL) -> URLParts:
         path += f"?{parsed.query}"
 
     return (parsed.hostname, port, path)
-
-
-def validate_url(*, url: URL) -> bool:
-    """Validate the format of a WebTransport URL."""
-    try:
-        parse_webtransport_url(url=url)
-        return True
-    except ValueError:
-        return False

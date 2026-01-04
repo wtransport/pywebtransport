@@ -37,7 +37,13 @@ from pywebtransport._protocol.events import (
     UserSendDatagram,
 )
 from pywebtransport._protocol.state import ProtocolState, SessionStateData
-from pywebtransport._protocol.utils import can_receive_data_on_stream
+from pywebtransport._protocol.utils import (
+    calculate_new_data_limit,
+    calculate_new_stream_limit,
+    can_receive_data_on_stream,
+    is_peer_initiated_stream,
+    is_unidirectional_stream,
+)
 from pywebtransport.constants import ErrorCodes
 from pywebtransport.exceptions import FlowControlError, ProtocolError, SessionError, StreamError
 from pywebtransport.types import EventType, SessionId, SessionState, StreamState
@@ -241,21 +247,9 @@ class SessionProcessor:
 
                 case constants.WT_DATA_BLOCKED_TYPE:
                     logger.debug("Session %s received WT_DATA_BLOCKED from peer", session_id)
-                    if self._config.flow_control_window_auto_scale:
-                        target_window = self._config.flow_control_window_size
-                        new_limit = session_data.peer_data_sent + target_window
-                        if new_limit > session_data.local_max_data:
-                            session_data.local_max_data = new_limit
-                            resp_buf = QuicBuffer(capacity=8)
-                            resp_buf.push_uint_var(new_limit)
-                            effects.append(
-                                SendH3Capsule(
-                                    stream_id=session_data.session_id,
-                                    capsule_type=constants.WT_MAX_DATA_TYPE,
-                                    capsule_data=resp_buf.data,
-                                    end_stream=False,
-                                )
-                            )
+                    credit_effect = self._check_and_send_data_credit(session_data=session_data, force_send=True)
+                    if credit_effect:
+                        effects.append(credit_effect)
                     else:
                         effects.append(
                             EmitSessionEvent(
@@ -269,39 +263,11 @@ class SessionProcessor:
                     is_uni = event.capsule_type == constants.WT_STREAMS_BLOCKED_UNI_TYPE
                     logger.debug("Session %s received WT_STREAMS_BLOCKED (uni=%s) from peer", session_id, is_uni)
 
-                    if self._config.flow_control_window_auto_scale:
-                        new_limit = 0
-                        current_limit = 0
-                        capsule_type = 0
-
-                        if is_uni:
-                            target_window = self._config.stream_flow_control_increment_uni
-                            current_usage = session_data.peer_streams_uni_opened
-                            current_limit = session_data.local_max_streams_uni
-                            new_limit = current_usage + target_window
-                            capsule_type = constants.WT_MAX_STREAMS_UNI_TYPE
-                            if new_limit > current_limit:
-                                session_data.local_max_streams_uni = new_limit
-                        else:
-                            target_window = self._config.stream_flow_control_increment_bidi
-                            current_usage = session_data.peer_streams_bidi_opened
-                            current_limit = session_data.local_max_streams_bidi
-                            new_limit = current_usage + target_window
-                            capsule_type = constants.WT_MAX_STREAMS_BIDI_TYPE
-                            if new_limit > current_limit:
-                                session_data.local_max_streams_bidi = new_limit
-
-                        if new_limit > current_limit:
-                            resp_buf = QuicBuffer(capacity=8)
-                            resp_buf.push_uint_var(new_limit)
-                            effects.append(
-                                SendH3Capsule(
-                                    stream_id=session_data.session_id,
-                                    capsule_type=capsule_type,
-                                    capsule_data=resp_buf.data,
-                                    end_stream=False,
-                                )
-                            )
+                    credit_effect = self._check_and_send_stream_credit(
+                        session_data=session_data, is_unidirectional=is_uni, force_send=True
+                    )
+                    if credit_effect:
+                        effects.append(credit_effect)
                     else:
                         effects.append(
                             EmitSessionEvent(
@@ -618,6 +584,15 @@ class SessionProcessor:
             )
             return effects
 
+        if session_data.state in (SessionState.CLOSED, SessionState.DRAINING):
+            effects.append(
+                NotifyRequestFailed(
+                    request_id=event.request_id,
+                    exception=SessionError(f"Cannot grant credit to session in state {session_data.state}"),
+                )
+            )
+            return effects
+
         if event.max_data <= session_data.local_max_data:
             logger.warning(
                 "Manual data credit grant (%d) is not greater than current limit (%d). Ignoring.",
@@ -650,6 +625,15 @@ class SessionProcessor:
             effects.append(
                 NotifyRequestFailed(
                     request_id=event.request_id, exception=SessionError(f"Session {event.session_id} not found.")
+                )
+            )
+            return effects
+
+        if session_data.state in (SessionState.CLOSED, SessionState.DRAINING):
+            effects.append(
+                NotifyRequestFailed(
+                    request_id=event.request_id,
+                    exception=SessionError(f"Cannot grant credit to session in state {session_data.state}"),
                 )
             )
             return effects
@@ -877,6 +861,9 @@ class SessionProcessor:
                         match original_state:
                             case StreamState.HALF_CLOSED_REMOTE | StreamState.RESET_RECEIVED:
                                 stream_data.state = StreamState.CLOSED
+                                effects.extend(
+                                    self._process_stream_closure(session_data=session_data, stream_id=stream_id)
+                                )
                                 effects.append(
                                     EmitStreamEvent(
                                         stream_id=stream_id,
@@ -936,11 +923,114 @@ class SessionProcessor:
             stream_data.state = StreamState.CLOSED
             stream_data.closed_at = session_data.closed_at
 
+            effects.extend(self._process_stream_closure(session_data=session_data, stream_id=stream_id))
+
             effects.append(
                 EmitStreamEvent(stream_id=stream_id, event_type=EventType.STREAM_CLOSED, data={"stream_id": stream_id})
             )
 
         session_data.active_streams.clear()
         session_data.blocked_streams.clear()
+
+        return effects
+
+    def _check_and_send_data_credit(self, *, session_data: SessionStateData, force_send: bool = False) -> Effect | None:
+        """Check session data credit and send a MAX_DATA capsule if needed."""
+        if session_data.state in (SessionState.CLOSED, SessionState.DRAINING):
+            return None
+
+        new_limit = calculate_new_data_limit(
+            current_limit=session_data.local_max_data,
+            consumed=session_data.local_data_consumed,
+            window_size=self._config.flow_control_window_size,
+            auto_scale=self._config.flow_control_window_auto_scale,
+            force_update=force_send,
+        )
+
+        if new_limit is not None:
+            logger.debug(
+                "Session %s data credit update: limit=%d new_limit=%d",
+                session_data.session_id,
+                session_data.local_max_data,
+                new_limit,
+            )
+            session_data.local_max_data = new_limit
+            buf = QuicBuffer(capacity=8)
+            buf.push_uint_var(new_limit)
+            return SendH3Capsule(
+                stream_id=session_data.session_id,
+                capsule_type=constants.WT_MAX_DATA_TYPE,
+                capsule_data=buf.data,
+                end_stream=False,
+            )
+        return None
+
+    def _check_and_send_stream_credit(
+        self, *, session_data: SessionStateData, is_unidirectional: bool, force_send: bool = False
+    ) -> Effect | None:
+        """Check stream credit and send a MAX_STREAMS capsule if needed."""
+        if session_data.state in (SessionState.CLOSED, SessionState.DRAINING):
+            return None
+
+        if is_unidirectional:
+            current_limit = session_data.local_max_streams_uni
+            closed_count = session_data.peer_streams_uni_closed
+            target_window = self._config.initial_max_streams_uni
+            capsule_type = constants.WT_MAX_STREAMS_UNI_TYPE
+        else:
+            current_limit = session_data.local_max_streams_bidi
+            closed_count = session_data.peer_streams_bidi_closed
+            target_window = self._config.initial_max_streams_bidi
+            capsule_type = constants.WT_MAX_STREAMS_BIDI_TYPE
+
+        new_limit = calculate_new_stream_limit(
+            current_limit=current_limit,
+            closed_count=closed_count,
+            initial_window=target_window,
+            auto_scale=self._config.flow_control_window_auto_scale,
+            force_update=force_send,
+        )
+
+        if new_limit is not None:
+            logger.debug(
+                "Session %s stream credit auto-increment: type=%s closed=%d limit=%d new_limit=%d",
+                session_data.session_id,
+                "uni" if is_unidirectional else "bidi",
+                current_limit,
+                new_limit,
+            )
+
+            if is_unidirectional:
+                session_data.local_max_streams_uni = new_limit
+            else:
+                session_data.local_max_streams_bidi = new_limit
+
+            buf = QuicBuffer(capacity=8)
+            buf.push_uint_var(new_limit)
+
+            return SendH3Capsule(
+                stream_id=session_data.session_id, capsule_type=capsule_type, capsule_data=buf.data, end_stream=False
+            )
+        return None
+
+    def _process_stream_closure(self, *, session_data: SessionStateData, stream_id: int) -> list[Effect]:
+        """Update stream closure counters and trigger credit checks."""
+        effects: list[Effect] = []
+
+        is_peer_initiated = is_peer_initiated_stream(stream_id=stream_id, is_client=self._is_client)
+
+        if is_peer_initiated:
+            is_uni = is_unidirectional_stream(stream_id=stream_id)
+            credit_effect: Effect | None = None
+
+            if is_uni:
+                session_data.peer_streams_uni_closed += 1
+                credit_effect = self._check_and_send_stream_credit(session_data=session_data, is_unidirectional=True)
+            else:
+                session_data.peer_streams_bidi_closed += 1
+                credit_effect = self._check_and_send_stream_credit(session_data=session_data, is_unidirectional=False)
+
+            if credit_effect is not None:
+                effects.append(credit_effect)
 
         return effects

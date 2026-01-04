@@ -15,6 +15,36 @@ H3_ERROR_RESERVED_MODULO = 0x1F
 WT_ERROR_MAP_DIVISOR = 0x1E
 
 
+def calculate_new_data_limit(
+    *, current_limit: int, consumed: int, window_size: int, auto_scale: bool, force_update: bool = False
+) -> int | None:
+    """Calculate the new flow control limit for data."""
+    if not auto_scale:
+        return None
+
+    new_limit = consumed + window_size
+    threshold = 0 if force_update else window_size // 2
+
+    if new_limit > current_limit + threshold:
+        return new_limit
+    return None
+
+
+def calculate_new_stream_limit(
+    *, current_limit: int, closed_count: int, initial_window: int, auto_scale: bool, force_update: bool = False
+) -> int | None:
+    """Calculate the new flow control limit for stream concurrency."""
+    if not auto_scale:
+        return None
+
+    new_limit = closed_count + initial_window
+    threshold = 0 if force_update else initial_window // 2
+
+    if new_limit > current_limit and (new_limit >= current_limit + threshold):
+        return new_limit
+    return None
+
+
 def can_receive_data_on_stream(*, stream_id: StreamId, is_client: bool) -> bool:
     """Check if the local endpoint can receive data on a given stream."""
     if is_bidirectional_stream(stream_id=stream_id):
@@ -67,6 +97,13 @@ def http_code_to_webtransport_code(*, http_error_code: int) -> int:
 def is_bidirectional_stream(*, stream_id: StreamId) -> bool:
     """Check if a stream is bidirectional."""
     return (stream_id & 0x2) == 0
+
+
+def is_peer_initiated_stream(*, stream_id: StreamId, is_client: bool) -> bool:
+    """Check if a stream was initiated by the remote peer."""
+    if is_client:
+        return _is_server_initiated_stream(stream_id=stream_id)
+    return _is_client_initiated_stream(stream_id=stream_id)
 
 
 def is_request_response_stream(*, stream_id: StreamId) -> bool:

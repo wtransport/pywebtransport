@@ -1,7 +1,7 @@
 <div align="center">
   <img
     src="https://raw.githubusercontent.com/wtransport/pywebtransport/main/docs/assets/favicon.svg"
-    alt="PyWebTransport Icon"
+    alt="PyWebTransport Logo"
     width="100"
   />
 
@@ -9,7 +9,7 @@
 
 _An async-native WebTransport stack for Python_
 
-<br/>
+  <br />
 
 [![PyPI version](https://badge.fury.io/py/pywebtransport.svg)](https://pypi.org/project/pywebtransport/)
 [![Python Version](https://img.shields.io/pypi/pyversions/pywebtransport)](https://pypi.org/project/pywebtransport/)
@@ -22,14 +22,12 @@ _An async-native WebTransport stack for Python_
 
 ## Features
 
-- **Pure Async**: Built entirely on `asyncio` for high-concurrency, non-blocking I/O operations.
-- **Event Architecture**: Powered by a Sans-I/O unified state machine and a strictly typed `EventEmitter`.
-- **Zero-Copy I/O**: End-to-end support for `memoryview` and buffer protocols to minimize data copying overhead.
-- **Structured Messaging**: Transmission of typed Python objects via pluggable serializers (`JSON`, `MsgPack`, `Protobuf`).
-- **High-Level Abstractions**: `ServerApp` with routing and middleware, plus `WebTransportClient` utilities for fleet management.
-- **Protocol Completeness**: Implementation of bidirectional streams, unidirectional streams, and unreliable datagrams.
-- **Resource Safety**: Async context managers for automatic connection, session, and stream lifecycle management.
-- **Type-Safe & Tested**: Fully type-annotated API with comprehensive unit, integration, end-to-end, and benchmark coverage.
+- **Sans-I/O Architecture**: Powered by a unified, deterministic state machine decoupled from the I/O runtime.
+- **Transport Primitives**: Full implementation of bidirectional streams, unidirectional streams, and unreliable datagrams.
+- **Structured Concurrency**: Deterministic lifecycle management for connections and streams via asynchronous context managers.
+- **Zero-Copy I/O**: End-to-end support for buffer protocols and `memoryview` to minimize data copying overhead.
+- **Typed Messaging**: Integrated transmission of Python objects via pluggable serializers (`JSON`, `MsgPack`, `Protobuf`).
+- **Application Framework**: Includes `ServerApp` with routing and middleware, plus a composable client suite for connection resilience and fleet management.
 
 ## Installation
 
@@ -126,24 +124,30 @@ if __name__ == "__main__":
 
 ## Interoperability
 
-[https://interop.wtransport.org](https://interop.wtransport.org)
+**Infrastructure**
+
+- [**Public Instance**](https://interop.wtransport.org): `https://interop.wtransport.org`, _Native Dual-Stack_
+- [**Container Image**](https://github.com/wtransport/pywebtransport/pkgs/container/interop-server): `ghcr.io/wtransport/interop-server:latest`, _UDP Port 4433_
+
+**Endpoints**
 
 - **/echo**: Bidirectional stream and datagram reflection.
-- **/status**: Global server health and aggregate metrics.
 - **/stats**: Current session statistics and negotiated parameters.
+- **/status**: Global server health and aggregate metrics.
 
 ## Sponsors
 
 <div>
+  <br />
   <a href="https://www.fastly.com/" target="_blank" rel="noopener noreferrer">
     <img
-      src="https://upload.wikimedia.org/wikipedia/commons/8/8a/Fastly_logo.svg"
+      src="https://raw.githubusercontent.com/wtransport/pywebtransport/main/docs/assets/sponsor-fastly.svg"
       alt="Fastly"
-      width="100"
+      width="110"
     />
   </a>
 </div>
 
 ## License
 
-This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+Distributed under the terms of the Apache License 2.0. See [`LICENSE`](https://github.com/wtransport/pywebtransport/blob/main/LICENSE) for details.

@@ -67,6 +67,7 @@ class SessionStateData:
 
     local_max_data: int
     local_data_sent: int = 0
+    local_data_consumed: int = 0
     peer_max_data: int
     peer_data_sent: int = 0
 
@@ -74,11 +75,13 @@ class SessionStateData:
     local_streams_bidi_opened: int = 0
     peer_max_streams_bidi: int
     peer_streams_bidi_opened: int = 0
+    peer_streams_bidi_closed: int = 0
 
     local_max_streams_uni: int
     local_streams_uni_opened: int = 0
     peer_max_streams_uni: int
     peer_streams_uni_opened: int = 0
+    peer_streams_uni_closed: int = 0
 
     pending_bidi_stream_requests: deque[RequestId] = field(default_factory=deque)
     pending_uni_stream_requests: deque[RequestId] = field(default_factory=deque)

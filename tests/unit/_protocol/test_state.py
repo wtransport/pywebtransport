@@ -14,7 +14,6 @@ from pywebtransport.types import ConnectionState, SessionState, StreamDirection,
 
 
 class TestProtocolState:
-
     @pytest.fixture
     def mock_connection_state(self, mocker: MockerFixture) -> MagicMock:
         return mocker.create_autospec(ConnectionState, instance=True)
@@ -30,7 +29,6 @@ class TestProtocolState:
         assert state.connection_state is mock_connection_state
         assert state.max_datagram_size == 1200
         assert state.connected_at == start_time
-
         assert state.remote_max_datagram_frame_size == 0
         assert state.handshake_complete is False
         assert state.peer_settings_received is False
@@ -40,7 +38,6 @@ class TestProtocolState:
         assert state.peer_initial_max_streams_bidi == 0
         assert state.peer_initial_max_streams_uni == 0
         assert state.closed_at is None
-
         assert state.sessions == {}
         assert state.streams == {}
         assert state.pending_requests == {}
@@ -59,7 +56,6 @@ class TestProtocolState:
 
 
 class TestSessionInitData:
-
     def test_instantiation(self) -> None:
         start_time = time.monotonic()
         headers: Headers = {b":path": b"/test"}
@@ -72,7 +68,6 @@ class TestSessionInitData:
 
 
 class TestSessionStateData:
-
     @pytest.fixture
     def mock_session_state(self, mocker: MockerFixture) -> MagicMock:
         return mocker.create_autospec(SessionState, instance=True)
@@ -104,13 +99,22 @@ class TestSessionStateData:
         assert session.local_max_data == 1024
         assert session.peer_max_data == 2048
         assert session.ready_at == start_time
-
         assert session.local_data_sent == 0
+        assert session.local_data_consumed == 0
         assert session.peer_data_sent == 0
         assert session.local_streams_bidi_opened == 0
+        assert session.peer_streams_bidi_opened == 0
+        assert session.peer_streams_bidi_closed == 0
+        assert session.local_streams_uni_opened == 0
+        assert session.peer_streams_uni_opened == 0
+        assert session.peer_streams_uni_closed == 0
         assert session.datagrams_sent == 0
+        assert session.datagram_bytes_sent == 0
+        assert session.datagrams_received == 0
+        assert session.datagram_bytes_received == 0
         assert session.closed_at is None
-
+        assert session.close_code is None
+        assert session.close_reason is None
         assert session.pending_bidi_stream_requests == deque()
         assert session.pending_uni_stream_requests == deque()
         assert session.active_streams == set()
@@ -139,7 +143,6 @@ class TestSessionStateData:
 
 
 class TestStreamStateData:
-
     @pytest.fixture
     def mock_stream_direction(self, mocker: MockerFixture) -> MagicMock:
         return mocker.create_autospec(StreamDirection, instance=True)
@@ -170,10 +173,8 @@ class TestStreamStateData:
         assert stream.close_code == 0
         assert stream.close_reason == "test"
         assert stream.closed_at == start_time
-
         assert stream.bytes_sent == 0
         assert stream.bytes_received == 0
-
         assert stream.read_buffer == deque()
         assert stream.read_buffer_size == 0
         assert stream.pending_read_requests == deque()

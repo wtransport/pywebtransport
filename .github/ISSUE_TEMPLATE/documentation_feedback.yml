@@ -1,0 +1,44 @@
+# PyWebTransport Documentation Feedback GitHub Issue Form
+
+name: "Documentation Feedback"
+description: "Report errata or propose content improvements."
+title: ""
+labels: ["documentation", "triage"]
+body:
+  - type: "markdown"
+    attributes:
+      value: |
+        Feedback on technical documentation.
+
+  - type: "input"
+    id: "url"
+    attributes:
+      label: "Page Reference"
+      description: "URL of the documentation entry."
+      placeholder: "e.g., https://python.wtransport.org/en/latest/api-reference/session/"
+    validations:
+      required: false
+
+  - type: "textarea"
+    id: "description"
+    attributes:
+      label: "Issue Description"
+      description: "Details regarding the inaccuracy, ambiguity, or omission."
+    validations:
+      required: true
+
+  - type: "textarea"
+    id: "proposal"
+    attributes:
+      label: "Proposed Correction"
+      description: "Suggested text revision or structural change."
+    validations:
+      required: false
+
+  - type: "checkboxes"
+    id: "contribution"
+    attributes:
+      label: "Contribution"
+      options:
+        - label: "Willing to submit a Pull Request."
+          required: false

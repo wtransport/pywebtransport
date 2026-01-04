@@ -2,120 +2,65 @@
 
 ## Supported Versions
 
-Only the **latest stable release** of PyWebTransport is supported with security updates.
-
-Previous versions are considered end-of-life (EOL) upon the publication of a new release and will not receive patches. To ensure system security, users must upgrade to the latest available version.
+| Version           | Supported | Notes                                                       |
+| :---------------- | :-------- | :---------------------------------------------------------- |
+| **Latest Stable** | **Yes**   | Security updates are restricted to the latest PyPI release. |
+| **< Latest**      | **No**    | Older versions are immediately End-of-Life (EOL).           |
 
 ## Reporting a Vulnerability
 
-We take the security of PyWebTransport seriously. If you believe you have found a security vulnerability, please report it to us responsibly.
+We advocate for **Responsible Disclosure**. If you discover a vulnerability, please report it privately.
 
-### How to Report
+### Reporting Process
 
-**Please do NOT report security vulnerabilities through public GitHub issues.**
+- **GitHub Security Advisories (Preferred)**: Navigate to the **[Security tab](https://github.com/wtransport/pywebtransport/security)** and click **"Report a vulnerability"** to open an encrypted draft.
 
-Instead, please report them via email to:
+- **Email (Alternative)**: Send an encrypted message to `security@wtransport.org` with the subject `[SECURITY] PyWebTransport Vulnerability Report`.
 
-**Email**: security@wtransport.org  
-**Subject**: [SECURITY] PyWebTransport Security Report
+### Report Contents
 
-### What to Include
+- **Description**: Technical details of the vulnerability.
+- **Impact**: Potential consequences and attack vectors.
+- **Reproduction**: Minimal code example or step-by-step guide.
+- **Environment**: Versions of Python, PyWebTransport, and OS.
 
-Please include the following information in your report:
+### Response SLA
 
-- **Description**: A clear description of the vulnerability
-- **Impact**: Potential impact and attack scenarios
-- **Reproduction**: Step-by-step instructions to reproduce the issue
-- **Environment**: Python version, PyWebTransport version, and operating system
-- **Proof of Concept**: If possible, include a minimal code example
+- **Acknowledgment**: Within 48 hours.
+- **Assessment**: Initial severity assessment within 5 business days.
+- **Resolution**: Critical vulnerabilities aim to be patched within 30 days.
 
-### Response Timeline
+## Shared Responsibility Model
 
-- **Acknowledgment**: We will acknowledge receipt of your report within 48 hours
-- **Initial Assessment**: We will provide an initial assessment within 5 business days
-- **Resolution**: We aim to resolve critical vulnerabilities within 30 days
+Security is a shared responsibility between the library maintainers and application developers.
 
-### Disclosure Policy
+### Library Responsibilities
 
-- We follow responsible disclosure practices
-- We will work with you to understand and resolve the issue
-- We will credit you in our security advisory (unless you prefer to remain anonymous)
-- We will coordinate public disclosure after a fix is available
+- **Transport Security**: Enforcing TLS 1.3 encryption and certificate validation by default.
+- **Protocol Compliance**: Mitigating protocol-level attacks (e.g., amplification, state exhaustion).
+- **Dependency Management**: Monitoring upstream dependencies for security advisories.
 
-## Security Considerations
+### User Responsibilities
 
-### WebTransport Protocol Security
+- **PKI Management**: Provisioning valid certificates from a trusted CA.
+- **Authentication**: Implementing application-layer authentication logic.
+- **Resource Governance**: Configuring connection, stream, and datagram limits to prevent DoS.
+- **Input Sanitization**: Validating all data payloads before processing.
 
-PyWebTransport implements the WebTransport protocol which includes several security features:
+## Supply Chain Security
 
-- **TLS 1.3 Encryption**: All connections use TLS 1.3 for transport security
-- **Certificate Validation**: Default configuration requires valid TLS certificates
-- **QUIC Security**: Built on QUIC protocol with integrated encryption
+PyWebTransport enforces a **minimal-dependency philosophy**. We actively monitor runtime dependencies for CVEs, ensuring upstream patches trigger an immediate release.
 
-### Common Security Best Practices
+## Disclosure Policy
 
-When using PyWebTransport in production:
+Upon validating a vulnerability, we will:
 
-#### Server Configuration
-
-- Use valid TLS certificates from a trusted Certificate Authority
-- Configure appropriate cipher suites and TLS versions
-- Implement proper access controls and authentication
-- Regularly update certificates before expiration
-
-#### Client Configuration
-
-- Enable certificate verification in production (`verify_mode=ssl.CERT_REQUIRED`)
-- Validate server certificates and hostnames
-- Use secure credential storage for client certificates
-- Implement connection timeouts and retry limits
-
-#### Network Security
-
-- Use firewalls to restrict access to WebTransport ports
-- Monitor connections for unusual patterns
-- Implement rate limiting and DDoS protection
-- Log security-relevant events for auditing
-
-### Known Security Considerations
-
-- **Development Certificates**: Never use self-signed certificates in production
-- **Certificate Validation**: Disabling certificate verification creates security risks
-- **Connection Limits**: Configure appropriate connection and stream limits
-- **Input Validation**: Always validate and sanitize data received over WebTransport
-
-## Dependencies
-
-PyWebTransport relies on the following security-critical dependencies:
-
-- **aioquic**: QUIC protocol implementation
-- **cryptography**: Cryptographic operations
-- **OpenSSL**: TLS/SSL functionality
-
-We monitor these dependencies for security updates and will update PyWebTransport accordingly.
-
-## Security Updates
-
-Security patches are integrated directly into the development of the next release. Upon publication, we will:
-
-- Announce the update and its security implications via GitHub Security Advisories.
-- Detail the fix in the release notes, published in the project's `CHANGELOG.md`.
-- Make the updated version immediately available on PyPI.
-
-Users are responsible for upgrading to the latest version to apply security patches.
-
-## Bug Bounty
-
-We currently do not offer a formal bug bounty program, but we greatly appreciate security researchers who help improve the security of PyWebTransport.
-
-## Contact
-
-For any security-related questions or concerns:
-
-- **Security Reports**: security@wtransport.org
-- **General Security Questions**: GitHub Discussions
-- **Project Maintainer**: The WTransport Authors
+1.  Collaborate with the reporter to verify the fix.
+2.  Reserve a CVE identifier if applicable.
+3.  Publish a security advisory on GitHub.
+4.  Release a patched version to PyPI.
+5.  Credit the reporter in the advisory and `CHANGELOG.md` (unless anonymity is requested).
 
 ---
 
-Thank you for helping keep PyWebTransport and the WebTransport ecosystem secure.
+**Note**: This project does not currently operate a financial Bug Bounty program.

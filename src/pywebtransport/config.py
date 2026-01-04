@@ -30,6 +30,7 @@ from pywebtransport.constants import (
     DEFAULT_KEEP_ALIVE,
     DEFAULT_KEYFILE,
     DEFAULT_LOG_LEVEL,
+    DEFAULT_MAX_CAPSULE_SIZE,
     DEFAULT_MAX_CONNECTION_RETRIES,
     DEFAULT_MAX_DATAGRAM_SIZE,
     DEFAULT_MAX_EVENT_HISTORY_SIZE,
@@ -50,8 +51,6 @@ from pywebtransport.constants import (
     DEFAULT_SERVER_MAX_SESSIONS,
     DEFAULT_SERVER_VERIFY_MODE,
     DEFAULT_STREAM_CREATION_TIMEOUT,
-    DEFAULT_STREAM_FLOW_CONTROL_INCREMENT_BIDI,
-    DEFAULT_STREAM_FLOW_CONTROL_INCREMENT_UNI,
     DEFAULT_WRITE_TIMEOUT,
     SUPPORTED_CONGESTION_CONTROL_ALGORITHMS,
 )
@@ -79,6 +78,7 @@ class BaseConfig(ABC):
     keep_alive: bool = DEFAULT_KEEP_ALIVE
     keyfile: str | None = DEFAULT_KEYFILE
     log_level: str = DEFAULT_LOG_LEVEL
+    max_capsule_size: int = DEFAULT_MAX_CAPSULE_SIZE
     max_connections: int
     max_datagram_size: int = DEFAULT_MAX_DATAGRAM_SIZE
     max_event_history_size: int = DEFAULT_MAX_EVENT_HISTORY_SIZE
@@ -94,8 +94,6 @@ class BaseConfig(ABC):
     read_timeout: float | None = DEFAULT_READ_TIMEOUT
     resource_cleanup_interval: float = DEFAULT_RESOURCE_CLEANUP_INTERVAL
     stream_creation_timeout: float = DEFAULT_STREAM_CREATION_TIMEOUT
-    stream_flow_control_increment_bidi: int = DEFAULT_STREAM_FLOW_CONTROL_INCREMENT_BIDI
-    stream_flow_control_increment_uni: int = DEFAULT_STREAM_FLOW_CONTROL_INCREMENT_UNI
     write_timeout: float | None = DEFAULT_WRITE_TIMEOUT
 
     @classmethod
@@ -206,6 +204,13 @@ class BaseConfig(ABC):
                 config_value=self.flow_control_window_size,
             )
 
+        if self.max_capsule_size <= 0:
+            raise ConfigurationError(
+                message="Invalid value for 'max_capsule_size': must be positive",
+                config_key="max_capsule_size",
+                config_value=self.max_capsule_size,
+            )
+
         if self.max_connections <= 0:
             raise ConfigurationError(
                 message="Invalid value for 'max_connections': must be positive",
@@ -281,20 +286,6 @@ class BaseConfig(ABC):
                 message="Invalid value for 'max_stream_write_buffer': must be positive",
                 config_key="max_stream_write_buffer",
                 config_value=self.max_stream_write_buffer,
-            )
-
-        if self.stream_flow_control_increment_bidi <= 0:
-            raise ConfigurationError(
-                message="Invalid value for 'stream_flow_control_increment_bidi': must be positive",
-                config_key="stream_flow_control_increment_bidi",
-                config_value=self.stream_flow_control_increment_bidi,
-            )
-
-        if self.stream_flow_control_increment_uni <= 0:
-            raise ConfigurationError(
-                message="Invalid value for 'stream_flow_control_increment_uni': must be positive",
-                config_key="stream_flow_control_increment_uni",
-                config_value=self.stream_flow_control_increment_uni,
             )
 
 

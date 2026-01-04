@@ -11,9 +11,9 @@ PYTHON_EXEC="python3"
 TEST_SUITES=(
     "${BENCHMARK_DIR}/test_01_throughput.py"
     "${BENCHMARK_DIR}/test_02_latency.py"
-    "${BENCHMARK_DIR}/test_03_multiplexing.py"
+    "${BENCHMARK_DIR}/test_03_concurrency.py"
     "${BENCHMARK_DIR}/test_04_datagrams.py"
-    "${BENCHMARK_DIR}/test_05_resource.py"
+    "${BENCHMARK_DIR}/test_05_resources.py"
 )
 
 mkdir -p "${OUTPUT_DIR}"

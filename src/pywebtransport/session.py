@@ -44,18 +44,21 @@ class SessionDiagnostics:
     created_at: float
     local_max_data: int
     local_data_sent: int
+    local_data_consumed: int
     peer_max_data: int
     peer_data_sent: int
     local_max_streams_bidi: int
     local_streams_bidi_opened: int
     peer_max_streams_bidi: int
     peer_streams_bidi_opened: int
+    peer_streams_bidi_closed: int
     local_max_streams_uni: int
     local_streams_uni_opened: int
     peer_max_streams_uni: int
     peer_streams_uni_opened: int
-    pending_bidi_stream_requests: list[Any]
-    pending_uni_stream_requests: list[Any]
+    peer_streams_uni_closed: int
+    pending_bidi_stream_requests: list[int]
+    pending_uni_stream_requests: list[int]
     datagrams_sent: int
     datagram_bytes_sent: int
     datagrams_received: int
