@@ -57,16 +57,26 @@ async def create_quic_endpoint(
     )
 
     quic_connection = QuicConnection(configuration=quic_config)
+    protocols: list[WebTransportClientProtocol] = []
 
     def protocol_factory() -> WebTransportClientProtocol:
-        return WebTransportClientProtocol(
+        protocol = WebTransportClientProtocol(
             quic=quic_connection, config=config, loop=loop, max_event_queue_size=config.max_event_queue_size
         )
+        protocols.append(protocol)
+        return protocol
 
     logger.debug("Creating datagram endpoint to %s:%d", host, port)
-    transport, protocol = await loop.create_datagram_endpoint(
-        protocol_factory=protocol_factory, remote_addr=(host, port)
-    )
+
+    try:
+        transport, protocol = await loop.create_datagram_endpoint(
+            protocol_factory=protocol_factory, remote_addr=(host, port)
+        )
+    except Exception:
+        for protocol in protocols:
+            protocol.close_connection(error_code=0, reason_phrase="Handshake failed")
+        raise
+
     logger.debug("Datagram endpoint created.")
 
     client_protocol = protocol

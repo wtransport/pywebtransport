@@ -1,5 +1,9 @@
 # PyWebTransport Codecov Configuration
 
+ignore:
+  - "crates/**/*"
+  - "**/*.pyi"
+
 coverage:
   status:
     project:

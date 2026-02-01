@@ -13,10 +13,8 @@ from typing import Any, Self, Union, get_args, get_origin, get_type_hints
 from pywebtransport.constants import (
     DEFAULT_ALPN_PROTOCOLS,
     DEFAULT_BIND_HOST,
-    DEFAULT_CERTFILE,
     DEFAULT_CLIENT_MAX_CONNECTIONS,
     DEFAULT_CLIENT_MAX_SESSIONS,
-    DEFAULT_CLIENT_VERIFY_MODE,
     DEFAULT_CLOSE_TIMEOUT,
     DEFAULT_CONGESTION_CONTROL_ALGORITHM,
     DEFAULT_CONNECT_TIMEOUT,
@@ -28,7 +26,6 @@ from pywebtransport.constants import (
     DEFAULT_INITIAL_MAX_STREAMS_BIDI,
     DEFAULT_INITIAL_MAX_STREAMS_UNI,
     DEFAULT_KEEP_ALIVE,
-    DEFAULT_KEYFILE,
     DEFAULT_LOG_LEVEL,
     DEFAULT_MAX_CAPSULE_SIZE,
     DEFAULT_MAX_CONNECTION_RETRIES,
@@ -49,7 +46,6 @@ from pywebtransport.constants import (
     DEFAULT_RETRY_DELAY,
     DEFAULT_SERVER_MAX_CONNECTIONS,
     DEFAULT_SERVER_MAX_SESSIONS,
-    DEFAULT_SERVER_VERIFY_MODE,
     DEFAULT_STREAM_CREATION_TIMEOUT,
     DEFAULT_WRITE_TIMEOUT,
     SUPPORTED_CONGESTION_CONTROL_ALGORITHMS,
@@ -66,7 +62,7 @@ class BaseConfig(ABC):
 
     alpn_protocols: list[str] = field(default_factory=lambda: list(DEFAULT_ALPN_PROTOCOLS))
     ca_certs: str | None = None
-    certfile: str | None = DEFAULT_CERTFILE
+    certfile: str | None = None
     close_timeout: float = DEFAULT_CLOSE_TIMEOUT
     congestion_control_algorithm: str = DEFAULT_CONGESTION_CONTROL_ALGORITHM
     connection_idle_timeout: float = DEFAULT_CONNECTION_IDLE_TIMEOUT
@@ -76,7 +72,7 @@ class BaseConfig(ABC):
     initial_max_streams_bidi: int = DEFAULT_INITIAL_MAX_STREAMS_BIDI
     initial_max_streams_uni: int = DEFAULT_INITIAL_MAX_STREAMS_UNI
     keep_alive: bool = DEFAULT_KEEP_ALIVE
-    keyfile: str | None = DEFAULT_KEYFILE
+    keyfile: str | None = None
     log_level: str = DEFAULT_LOG_LEVEL
     max_capsule_size: int = DEFAULT_MAX_CAPSULE_SIZE
     max_connections: int
@@ -302,7 +298,7 @@ class ClientConfig(BaseConfig):
     retry_backoff: float = DEFAULT_RETRY_BACKOFF
     retry_delay: float = DEFAULT_RETRY_DELAY
     user_agent: str | None = None
-    verify_mode: ssl.VerifyMode | None = DEFAULT_CLIENT_VERIFY_MODE
+    verify_mode: ssl.VerifyMode | None = ssl.CERT_REQUIRED
 
     def validate(self) -> None:
         """Validate client specific configuration."""
@@ -368,7 +364,7 @@ class ServerConfig(BaseConfig):
     bind_port: int = DEFAULT_DEV_PORT
     max_connections: int = DEFAULT_SERVER_MAX_CONNECTIONS
     max_sessions: int = DEFAULT_SERVER_MAX_SESSIONS
-    verify_mode: ssl.VerifyMode = DEFAULT_SERVER_VERIFY_MODE
+    verify_mode: ssl.VerifyMode = ssl.CERT_NONE
 
     @classmethod
     def from_dict(cls, *, config_dict: dict[str, Any]) -> Self:

@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import weakref
-from collections import deque
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Self
 
 from pywebtransport._protocol.events import (
     UserGetStreamDiagnostics,
@@ -53,10 +52,7 @@ class StreamDiagnostics:
     created_at: float
     bytes_sent: int
     bytes_received: int
-    read_buffer: bytes
     read_buffer_size: int
-    pending_read_requests: list[Any]
-    write_buffer: list[tuple[bytes, Any, bool]]
     write_buffer_size: int
     close_code: int | None
     close_reason: str | None
@@ -119,9 +115,6 @@ class _BaseStream:
         except ConnectionError as e:
             raise StreamError(f"Connection is closed, cannot get diagnostics: {e}", stream_id=self.stream_id) from e
 
-        if "write_buffer" in diag_data and isinstance(diag_data["write_buffer"], deque):
-            diag_data["write_buffer"] = list(diag_data["write_buffer"])
-
         return StreamDiagnostics(**diag_data)
 
     def _on_closed(self, event: Event) -> None:
@@ -179,7 +172,9 @@ class WebTransportReceiveStream(_BaseStream):
             raise ConnectionError("Connection is gone.")
 
         request_id, future = connection._protocol.create_request()
-        event = UserStreamRead(request_id=request_id, stream_id=self.stream_id, max_bytes=max_bytes)
+
+        limit = max_bytes if max_bytes >= 0 else None
+        event = UserStreamRead(request_id=request_id, stream_id=self.stream_id, max_bytes=limit)
         connection._protocol.send_event(event=event)
 
         try:

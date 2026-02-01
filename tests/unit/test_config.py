@@ -42,7 +42,7 @@ class TestClientConfig:
         assert config.flow_control_window_size == DEFAULT_FLOW_CONTROL_WINDOW_SIZE
         assert config.initial_max_data == DEFAULT_INITIAL_MAX_DATA
         assert config.max_capsule_size == DEFAULT_MAX_CAPSULE_SIZE
-        assert config.alpn_protocols == list(DEFAULT_ALPN_PROTOCOLS)
+        assert config.alpn_protocols == DEFAULT_ALPN_PROTOCOLS
 
     def test_from_dict_method(self) -> None:
         config_dict = {"max_connection_retries": 5, "unknown_field": "should_be_ignored"}
@@ -174,7 +174,7 @@ class TestServerConfig:
         assert config.flow_control_window_size == DEFAULT_FLOW_CONTROL_WINDOW_SIZE
         assert config.initial_max_data == DEFAULT_INITIAL_MAX_DATA
         assert config.max_capsule_size == DEFAULT_MAX_CAPSULE_SIZE
-        assert config.alpn_protocols == list(DEFAULT_ALPN_PROTOCOLS)
+        assert config.alpn_protocols == DEFAULT_ALPN_PROTOCOLS
 
     def test_from_dict_coercion(self) -> None:
         config_dict = {"bind_port": "8080", "certfile": "dummy.crt", "keyfile": "dummy.key"}

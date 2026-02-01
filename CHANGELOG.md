@@ -11,6 +11,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(No planned changes for the next release yet.)_
 
+## [0.12.0] - 2026-02-01
+
+This release marks a significant architectural milestone with the introduction of a **Rust Hybrid Architecture**. The core WebTransport protocol logic has been re-implemented in Rust using an **ownership-driven state machine** design. This transition enforces strict memory safety and allows for direct integration of underlying C libraries, while maintaining the established **Sans-I/O** design pattern. Additionally, the build system has been modernized to support the mixed Python/Rust codebase, significantly reducing runtime dependencies.
+
+### Added
+
+- **Rust Protocol Engine**: Re-implemented the internal protocol state machine (H3 framing, session management, and stream logic) in Rust using a stricter memory model and type safety. This internal engine (`wtransport-engine`) replaces the previous Python implementation.
+
+### Changed
+
+- **Build System**: Migrated the build backend from `hatchling` to **maturin** to support the compilation and packaging of the internal Rust extension module.
+- **QPACK Integration**: Switched the QPACK backend from the external `pylsqpack` binding to a bundled compilation of **ls-qpack** within the Rust extension, reducing Python-C boundary overhead.
+- **Adapter Layer**: Updated `WebTransportCommonProtocol` to drive the deterministic Rust engine by injecting the event loop time (`loop.time()`), aligning with the Sans-I/O architecture.
+- **Utility API**: Standardized header access utilities by renaming `get_header` and `get_header_as_str` to `find_header` and `find_header_str`.
+- **Certificate Generation**: The `generate_self_signed_cert` utility is now backed by Rust's `rcgen`, removing the need for Python-side cryptography logic. **Breaking Change**: The parameter `days_valid` has been renamed to `validity_days`.
+
+### Fixed
+
+- **Client Connection**: Fixed a potential resource leak in the client handshake process by ensuring the protocol instance is explicitly closed if the underlying QUIC transport creation fails.
+
+### Removed
+
+- **Dependencies**: Removed `cryptography` as a mandatory runtime dependency.
+- **Legacy Protocol**: Removed the legacy pure Python implementation of the HTTP/3 and WebTransport state machines.
+
 ## [0.11.1] - 2026-01-04
 
 This release refactors the flow control architecture to enforce a **consumption-based backpressure model**, synchronizing credit updates with application-layer data consumption to mitigate resource exhaustion vectors. Additionally, this release hardens the protocol engine against OOM attacks via mandatory capsule limits, optimizes client-side validation logic, and standardizes the performance benchmarking methodology.
@@ -676,8 +701,9 @@ This is a major release focused on enhancing runtime safety and modernizing the 
 - cryptography (>=45.0.4,<46.0.0) for SSL/TLS operations
 - typing-extensions (>=4.14.0,<5.0.0) for Python <3.10 support
 
-[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.11.1...HEAD
-[0.11.0]: https://github.com/wtransport/pywebtransport/compare/v0.11.0...v0.11.1
+[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/wtransport/pywebtransport/compare/v0.11.0...v0.12.0
+[0.11.1]: https://github.com/wtransport/pywebtransport/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/wtransport/pywebtransport/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/wtransport/pywebtransport/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/wtransport/pywebtransport/compare/v0.9.1...v0.10.0

@@ -58,7 +58,7 @@ from pywebtransport._protocol.events import (
     TransportStreamReset,
     TriggerQuicTimer,
 )
-from pywebtransport._protocol.webtransport_engine import WebTransportEngine
+from pywebtransport._wtransport import WebTransportEngine
 from pywebtransport.config import ClientConfig, ServerConfig
 from pywebtransport.constants import DEFAULT_MAX_EVENT_QUEUE_SIZE, ErrorCodes
 from pywebtransport.exceptions import ConnectionError
@@ -438,7 +438,7 @@ class WebTransportCommonProtocol(QuicConnectionProtocol):
                 self.handle_timer_now()
 
             case ProcessProtocolEvent(event=evt):
-                immediate_effects = self._engine.handle_event(event=evt)
+                immediate_effects = self._engine.handle_event(event=evt, now=self._loop.time())
                 self._pending_effects.extendleft(reversed(immediate_effects))
 
             case EmitConnectionEvent(event_type=et, data=d):
@@ -464,7 +464,7 @@ class WebTransportCommonProtocol(QuicConnectionProtocol):
 
     def _push_event_to_engine(self, *, event: ProtocolEvent) -> None:
         """Push an event to the engine and execute resulting effects."""
-        effects = self._engine.handle_event(event=event)
+        effects = self._engine.handle_event(event=event, now=self._loop.time())
         self._execute_effects(effects=effects)
         self.transmit()
 

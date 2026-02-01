@@ -2,3 +2,13 @@ PyWebTransport
 Copyright 2025-2026 The WTransport Authors
 
 This product includes software developed by The WTransport Authors.
+
+---
+
+This product bundles "ls-qpack", available under the MIT License.
+Copyright (c) 2018 - 2022 LiteSpeed Technologies Inc
+
+---
+
+This product bundles "xxHash", available under the BSD 2-Clause License.
+Copyright (c) 2012-2021 Yann Collet

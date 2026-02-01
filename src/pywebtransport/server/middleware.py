@@ -12,7 +12,7 @@ from typing import Protocol, Self, runtime_checkable
 
 from pywebtransport.exceptions import ServerError
 from pywebtransport.types import Headers, SessionProtocol
-from pywebtransport.utils import get_header_as_str, get_logger
+from pywebtransport.utils import find_header_str, get_logger
 
 __all__: list[str] = [
     "AuthHandlerProtocol",
@@ -250,7 +250,7 @@ def create_cors_middleware(*, allowed_origins: list[str]) -> MiddlewareProtocol:
     """Create a CORS middleware to validate the Origin header."""
 
     async def cors_middleware(*, session: SessionProtocol) -> None:
-        origin = get_header_as_str(headers=session.headers, key="origin")
+        origin = find_header_str(headers=session.headers, key="origin")
         if origin is None or not origin:
             logger.warning("CORS check failed: 'Origin' header missing.")
             raise MiddlewareRejected(status_code=http.HTTPStatus.FORBIDDEN)

@@ -1,6 +1,6 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["maturin>=1.11.5,<2.0"]
+build-backend = "maturin"
 
 [project]
 name = "pywebtransport"
@@ -11,7 +11,15 @@ license-expression = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.12"
 authors = [{ name = "The WTransport Authors", email = "admin@wtransport.org" }]
-keywords = ["async", "http3", "networking", "protocol", "quic", "webtransport"]
+keywords = [
+    "async",
+    "http3",
+    "networking",
+    "protocol",
+    "quic",
+    "rust",
+    "webtransport",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Framework :: AsyncIO",
@@ -21,6 +29,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
     "Topic :: Communications",
     "Topic :: Internet",
     "Topic :: Internet :: WWW/HTTP",
@@ -29,32 +38,33 @@ classifiers = [
     "Typing :: Typed",
 ]
 
-dependencies = ["aioquic>=1.3.0,<2.0.0", "cryptography>=46.0.3,<47.0.0"]
+dependencies = ["aioquic>=1.3.0,<2.0.0"]
 
 [project.optional-dependencies]
 all = ["pywebtransport[msgpack,protobuf]"]
 dev = [
-    "black>=25.12.0,<26.0.0",
+    "black>=26.1.0,<27.0.0",
     "flake8>=7.3.0,<8.0.0",
     "isort>=7.0.0,<8.0.0",
+    "maturin[patchelf]>=1.11.5,<2.0",
     "mypy>=1.19.1,<2.0.0",
     "pywebtransport[all,test]",
 ]
 docs = [
     "mkdocs>=1.6.1,<2.0.0",
     "mkdocs-material>=9.7.1,<10.0.0",
-    "mkdocstrings[python]>=1.0.0,<2.0.0",
+    "mkdocstrings[python]>=1.0.2,<2.0.0",
 ]
 msgpack = ["msgpack>=1.1.2,<2.0.0"]
-protobuf = ["protobuf>=6.33.2,<7.0.0"]
+protobuf = ["protobuf>=6.33.5,<7.0.0"]
 test = [
-    "psutil>=7.2.1,<8.0.0",
+    "psutil>=7.2.2,<8.0.0",
     "pytest>=9.0.2,<10.0.0",
     "pytest-asyncio>=1.3.0,<2.0.0",
     "pytest-benchmark>=5.2.3,<6.0.0",
     "pytest-cov>=7.0.0,<8.0.0",
     "pytest-mock>=3.15.1,<4.0.0",
-    "types-psutil>=7.2.1.20251231,<8.0.0",
+    "types-psutil>=7.2.2.20260130,<8.0.0",
     "uvloop>=0.22.1,<1.0.0",
 ]
 
@@ -65,14 +75,12 @@ Repository = "https://github.com/wtransport/pywebtransport.git"
 Issues = "https://github.com/wtransport/pywebtransport/issues"
 Changelog = "https://github.com/wtransport/pywebtransport/blob/main/CHANGELOG.md"
 
-[tool.hatch.version]
-path = "src/pywebtransport/version.py"
-
-[tool.hatch.build.targets.sdist]
-include = ["/AUTHORS", "/CHANGELOG.md", "/src"]
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/pywebtransport"]
+[tool.maturin]
+module-name = "pywebtransport._wtransport"
+features = ["pyo3/extension-module"]
+manifest-path = "crates/Cargo.toml"
+python-source = "src"
+include = ["AUTHORS", "CHANGELOG.md", "crates", "src"]
 
 [tool.black]
 line-length = 120

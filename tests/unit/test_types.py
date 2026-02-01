@@ -28,9 +28,9 @@ class TestEnumerations:
             (ConnectionState.CONNECTING, "connecting"),
             (ConnectionState.CONNECTED, "connected"),
             (ConnectionState.CLOSING, "closing"),
+            (ConnectionState.DRAINING, "draining"),
             (ConnectionState.CLOSED, "closed"),
             (ConnectionState.FAILED, "failed"),
-            (ConnectionState.DRAINING, "draining"),
         ],
     )
     def test_connection_state(self, member: ConnectionState, expected_value: str) -> None:
@@ -48,7 +48,6 @@ class TestEnumerations:
             (EventType.DATAGRAM_RECEIVED, "datagram_received"),
             (EventType.DATAGRAM_SENT, "datagram_sent"),
             (EventType.PROTOCOL_ERROR, "protocol_error"),
-            (EventType.SETTINGS_RECEIVED, "settings_received"),
             (EventType.SESSION_CLOSED, "session_closed"),
             (EventType.SESSION_DATA_BLOCKED, "session_data_blocked"),
             (EventType.SESSION_DRAINING, "session_draining"),
@@ -58,6 +57,7 @@ class TestEnumerations:
             (EventType.SESSION_READY, "session_ready"),
             (EventType.SESSION_REQUEST, "session_request"),
             (EventType.SESSION_STREAMS_BLOCKED, "session_streams_blocked"),
+            (EventType.SETTINGS_RECEIVED, "settings_received"),
             (EventType.STREAM_CLOSED, "stream_closed"),
             (EventType.STREAM_DATA_RECEIVED, "stream_data_received"),
             (EventType.STREAM_ERROR, "stream_error"),
@@ -98,9 +98,9 @@ class TestEnumerations:
             (StreamState.OPEN, "open"),
             (StreamState.HALF_CLOSED_LOCAL, "half_closed_local"),
             (StreamState.HALF_CLOSED_REMOTE, "half_closed_remote"),
-            (StreamState.CLOSED, "closed"),
             (StreamState.RESET_SENT, "reset_sent"),
             (StreamState.RESET_RECEIVED, "reset_received"),
+            (StreamState.CLOSED, "closed"),
         ],
     )
     def test_stream_state(self, member: StreamState, expected_value: str) -> None:

@@ -6,7 +6,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Final
 
-from pywebtransport import ClientConfig, ConnectionError, Event, TimeoutError, WebTransportClient
+from pywebtransport import ClientConfig, ConnectionError, Event, TimeoutError, WebTransportClient, WebTransportError
 from pywebtransport.types import EventType
 
 SERVER_HOST: Final[str] = "127.0.0.1"
@@ -138,21 +138,27 @@ async def test_datagram_sizes() -> bool:
             if local_max != 1200:
                 logger.warning("Engine state max_datagram_size (%s) mismatch config (%s)", local_max, 1200)
 
+            if remote_max is None:
+                logger.error(
+                    "FAILURE: Remote max datagram size is None (not negotiated), cannot test oversized datagram."
+                )
+                return False
+
             logger.info("Testing oversized datagram...")
             try:
                 oversized_data = b"X" * (remote_max + 1)
                 await session.send_datagram(data=oversized_data)
                 logger.error("FAILURE: Sending oversized datagram should have raised an exception.")
                 return False
-            except ValueError as e:
-                if "Datagram size" in str(e):
-                    logger.info("SUCCESS: Oversized datagram correctly raised ValueError: %s", e)
+            except WebTransportError as e:
+                if "Datagram size" in str(e) and "exceeds limit" in str(e):
+                    logger.info("SUCCESS: Oversized datagram correctly raised WebTransportError: %s", e)
                     return True
                 else:
-                    logger.error("FAILURE: Caught ValueError, but not the expected one: %s", e)
+                    logger.error("FAILURE: Caught WebTransportError, but message mismatch: %s", e)
                     return False
             except Exception as e:
-                logger.error("FAILURE: Unexpected exception for oversized datagram: %s", e)
+                logger.error("FAILURE: Unexpected exception type for oversized datagram: %s (%s)", type(e).__name__, e)
                 return False
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)

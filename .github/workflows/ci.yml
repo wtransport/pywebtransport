@@ -16,7 +16,7 @@ jobs:
   lint:
     runs-on: ubuntu-24.04
     container:
-      image: python:3.12-slim
+      image: python:3.12-slim-bookworm
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -47,7 +47,7 @@ jobs:
       matrix:
         python-version: ["3.12", "3.13"]
     container:
-      image: python:${{ matrix.python-version }}-slim
+      image: python:${{ matrix.python-version }}-slim-bookworm
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -55,20 +55,39 @@ jobs:
       - name: Cache dependencies
         uses: actions/cache@v4
         with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-test-${{ matrix.python-version }}-${{ hashFiles('dev-requirements.txt') }}
+          path: |
+            ~/.cache/pip
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-cargo-test-${{ matrix.python-version }}-${{ hashFiles('Cargo.toml') }}-${{ hashFiles('dev-requirements.txt') }}
           restore-keys: |
-            ${{ runner.os }}-pip-test-${{ matrix.python-version }}-
+            ${{ runner.os }}-cargo-test-${{ matrix.python-version }}-
 
-      - name: Install dependencies
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y curl build-essential clang
+
+      - name: Install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.0
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r dev-requirements.txt
           pip install -e .
-      - name: Run tests and generate coverage report
+
+      - name: Run Rust tests
+        run: |
+          cargo test --manifest-path crates/Cargo.toml
+
+      - name: Run Python tests
         run: |
           pytest --cov=pywebtransport --cov-report=xml:coverage-${{ matrix.python-version }}.xml
-      - name: Upload coverage reports as artifact
+      - name: Upload coverage reports
         uses: actions/upload-artifact@v4
         with:
           name: coverage-reports-${{ matrix.python-version }}
@@ -79,7 +98,7 @@ jobs:
     runs-on: ubuntu-24.04
     if: github.event_name == 'push'
     container:
-      image: python:3.12-slim
+      image: python:3.12-slim-bookworm
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

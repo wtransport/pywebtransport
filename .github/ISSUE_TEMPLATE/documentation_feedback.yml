@@ -2,7 +2,6 @@
 
 name: "Documentation Feedback"
 description: "Report errata or propose content improvements."
-title: ""
 labels: ["documentation", "triage"]
 body:
   - type: "markdown"
