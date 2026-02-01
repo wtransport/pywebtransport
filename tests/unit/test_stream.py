@@ -1,7 +1,6 @@
 """Unit tests for the pywebtransport.stream.stream module."""
 
 import asyncio
-from collections import deque
 from typing import Any, cast
 from unittest.mock import MagicMock, call
 
@@ -91,10 +90,7 @@ class TestBaseStream:
             "created_at": 0.0,
             "bytes_sent": 0,
             "bytes_received": 0,
-            "read_buffer": b"",
             "read_buffer_size": 0,
-            "pending_read_requests": [],
-            "write_buffer": deque([(b"data", None, False)]),
             "write_buffer_size": 4,
             "close_code": None,
             "close_reason": None,
@@ -102,11 +98,9 @@ class TestBaseStream:
         }
         fut.set_result(data)
 
-        diag = await stream.diagnostics()
+        await stream.diagnostics()
 
         assert isinstance(mock_protocol.send_event.call_args.kwargs["event"], UserGetStreamDiagnostics)
-        assert isinstance(diag.write_buffer, list)
-        assert diag.write_buffer == [(b"data", None, False)]
 
     @pytest.mark.asyncio
     async def test_diagnostics_success_no_conversion_needed(
@@ -124,10 +118,7 @@ class TestBaseStream:
             "created_at": 0.0,
             "bytes_sent": 0,
             "bytes_received": 0,
-            "read_buffer": b"",
             "read_buffer_size": 0,
-            "pending_read_requests": [],
-            "write_buffer": [],
             "write_buffer_size": 0,
             "close_code": None,
             "close_reason": None,
@@ -135,9 +126,7 @@ class TestBaseStream:
         }
         fut.set_result(data)
 
-        diag = await stream.diagnostics()
-
-        assert isinstance(diag.write_buffer, list)
+        await stream.diagnostics()
 
     @pytest.mark.asyncio
     async def test_is_closed(self, stream: _BaseStream) -> None:
@@ -180,10 +169,7 @@ class TestStreamDiagnostics:
             created_at=100.0,
             bytes_sent=10,
             bytes_received=20,
-            read_buffer=b"",
             read_buffer_size=0,
-            pending_read_requests=[],
-            write_buffer=[],
             write_buffer_size=0,
             close_code=None,
             close_reason=None,

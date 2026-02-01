@@ -22,8 +22,10 @@ Before contributing, review our **[Implementation Philosophy](PHILOSOPHY.md)**. 
 
 ### Prerequisites
 
+- **Clang**: Required for C-bindings generation.
 - **Git**: Version control.
 - **pyenv**: Python version management.
+- **rustup**: Rust toolchain management.
 - **tox**: Automated testing suite.
 
 ### Setup
@@ -54,15 +56,15 @@ Before contributing, review our **[Implementation Philosophy](PHILOSOPHY.md)**. 
 
 All contributions must adhere to the following style requirements:
 
-- **formatting**: black
-- **imports**: isort
-- **linting**: flake8
-- **typing**: mypy (strict mode)
+- **formatting**: `black`, `cargo fmt`
+- **imports**: `isort`
+- **linting**: `flake8`, `clippy`
+- **typing**: `mypy`
 - **documentation**: Google-style docstrings and mandatory type hints for public APIs.
 
 ## Testing
 
-Tests are structurally mirrored in the `tests/` directory (`unit`, `integration`, `e2e`, `benchmark`). Run `pytest` locally for unit verification; full matrix validation via `tox` is mandatory before submission.
+Execute `pytest` to validate full-stack behavior including the underlying Rust engine, and `cargo test` for internal state machine correctness. Full matrix validation via `tox` is mandatory before submission.
 
 **Requirement**: New features must include positive, negative, and edge-case tests.
 

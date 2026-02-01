@@ -1,11 +1,3 @@
 # PyWebTransport GitHub Issue Template Configuration
 
 blank_issues_enabled: false
-contact_links:
-  - name: "Security Vulnerabilities"
-    url: "https://github.com/wtransport/pywebtransport/security/policy"
-    about: "Report security vulnerabilities privately."
-
-  - name: "Community Support"
-    url: "https://github.com/wtransport/pywebtransport/discussions"
-    about: "Ask questions and discuss usage."

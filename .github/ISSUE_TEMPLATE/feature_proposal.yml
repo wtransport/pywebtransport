@@ -2,7 +2,6 @@
 
 name: "Feature Proposal"
 description: "Submit a technical enhancement proposal."
-title: ""
 labels: ["enhancement", "triage"]
 body:
   - type: "markdown"

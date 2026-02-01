@@ -22,7 +22,7 @@ _An async-native WebTransport stack for Python_
 
 ## Features
 
-- **Sans-I/O Architecture**: Powered by a unified, deterministic state machine decoupled from the I/O runtime.
+- **Sans-I/O Architecture**: Powered by an ownership-driven Rust state machine decoupled from the I/O runtime.
 - **Transport Primitives**: Full implementation of bidirectional streams, unidirectional streams, and unreliable datagrams.
 - **Structured Concurrency**: Deterministic lifecycle management for connections and streams via asynchronous context managers.
 - **Zero-Copy I/O**: End-to-end support for buffer protocols and `memoryview` to minimize data copying overhead.

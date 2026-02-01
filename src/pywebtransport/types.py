@@ -137,9 +137,9 @@ class ConnectionState(StrEnum):
     CONNECTING = "connecting"
     CONNECTED = "connected"
     CLOSING = "closing"
+    DRAINING = "draining"
     CLOSED = "closed"
     FAILED = "failed"
-    DRAINING = "draining"
 
 
 class EventType(StrEnum):
@@ -195,6 +195,6 @@ class StreamState(StrEnum):
     OPEN = "open"
     HALF_CLOSED_LOCAL = "half_closed_local"
     HALF_CLOSED_REMOTE = "half_closed_remote"
-    CLOSED = "closed"
     RESET_SENT = "reset_sent"
     RESET_RECEIVED = "reset_received"
+    CLOSED = "closed"

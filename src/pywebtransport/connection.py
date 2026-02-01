@@ -52,14 +52,19 @@ class ConnectionDiagnostics:
     """A snapshot of connection diagnostics."""
 
     connection_id: ConnectionId
-    state: ConnectionState
     is_client: bool
-    connected_at: float | None
-    closed_at: float | None
+    state: ConnectionState
     max_datagram_size: int
-    remote_max_datagram_frame_size: int
+    remote_max_datagram_frame_size: int | None
+    handshake_complete: bool
+    peer_settings_received: bool
+    local_goaway_sent: bool
     session_count: int
     stream_count: int
+    pending_request_count: int
+    early_event_count: int
+    connected_at: float | None
+    closed_at: float | None
     active_session_handles: int
     active_stream_handles: int
 

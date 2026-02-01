@@ -29,8 +29,13 @@ class TestConnectionDiagnostics:
             closed_at=None,
             max_datagram_size=1200,
             remote_max_datagram_frame_size=1200,
+            handshake_complete=True,
+            peer_settings_received=True,
+            local_goaway_sent=False,
             session_count=1,
             stream_count=2,
+            pending_request_count=0,
+            early_event_count=0,
             active_session_handles=1,
             active_stream_handles=2,
         )
@@ -406,8 +411,13 @@ class TestWebTransportConnection:
             "closed_at": None,
             "max_datagram_size": 1200,
             "remote_max_datagram_frame_size": 1200,
+            "handshake_complete": True,
+            "peer_settings_received": True,
+            "local_goaway_sent": False,
             "session_count": 1,
             "stream_count": 0,
+            "pending_request_count": 0,
+            "early_event_count": 0,
         }
         fut.set_result(diag_raw)
 

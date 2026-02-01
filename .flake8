@@ -1,3 +1,5 @@
+# PyWebTransport Flake8 Configuration
+
 [flake8]
 max-line-length = 120
 extend-ignore = E203, W503
@@ -19,3 +21,5 @@ exclude =
     scripts
     *.egg
     *.egg-info
+per-file-ignores =
+    *.pyi: E302

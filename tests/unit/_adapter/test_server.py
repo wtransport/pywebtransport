@@ -125,23 +125,28 @@ class TestWebTransportServerProtocol:
         return cast(MagicMock, quic)
 
     @pytest.fixture
-    def mock_server_config(self, mocker: MockerFixture) -> MagicMock:
-        config = mocker.Mock(spec=ServerConfig)
-        config.max_event_queue_size = 100
-        config.resource_cleanup_interval = 1.0
-        config.pending_event_ttl = 1.0
-        return cast(MagicMock, config)
+    def valid_cert_paths(self, tmp_path: Path) -> tuple[Path, Path]:
+        cert = tmp_path / "ca.pem"
+        key = tmp_path / "key.pem"
+        cert.touch()
+        key.touch()
+        return cert, key
+
+    @pytest.fixture
+    def server_config(self, valid_cert_paths: tuple[Path, Path]) -> ServerConfig:
+        cert, key = valid_cert_paths
+        return ServerConfig(certfile=str(cert), keyfile=str(key))
 
     @pytest.fixture
     def protocol(
         self,
         mock_quic: MagicMock,
-        mock_server_config: MagicMock,
+        server_config: ServerConfig,
         mock_connection_creator: MagicMock,
         mock_loop: MagicMock,
     ) -> WebTransportServerProtocol:
         return WebTransportServerProtocol(
-            quic=mock_quic, server_config=mock_server_config, connection_creator=mock_connection_creator, loop=mock_loop
+            quic=mock_quic, server_config=server_config, connection_creator=mock_connection_creator, loop=mock_loop
         )
 
     def test_connection_made(

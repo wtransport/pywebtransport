@@ -312,7 +312,7 @@ class UserStreamRead(UserEvent[bytes]):
     """User command to read data from a stream."""
 
     stream_id: StreamId
-    max_bytes: int
+    max_bytes: int | None
 
 
 @dataclass(kw_only=True, frozen=True, slots=True)

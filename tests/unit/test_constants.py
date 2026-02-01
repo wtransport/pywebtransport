@@ -1,6 +1,5 @@
 """Unit tests for the pywebtransport.constants module."""
 
-import ssl
 from enum import IntEnum
 
 import pytest
@@ -9,10 +8,8 @@ from pywebtransport import ErrorCodes
 from pywebtransport.constants import (
     DEFAULT_ALPN_PROTOCOLS,
     DEFAULT_BIND_HOST,
-    DEFAULT_CERTFILE,
     DEFAULT_CLIENT_MAX_CONNECTIONS,
     DEFAULT_CLIENT_MAX_SESSIONS,
-    DEFAULT_CLIENT_VERIFY_MODE,
     DEFAULT_CLOSE_TIMEOUT,
     DEFAULT_CONGESTION_CONTROL_ALGORITHM,
     DEFAULT_CONNECT_TIMEOUT,
@@ -24,7 +21,6 @@ from pywebtransport.constants import (
     DEFAULT_INITIAL_MAX_STREAMS_BIDI,
     DEFAULT_INITIAL_MAX_STREAMS_UNI,
     DEFAULT_KEEP_ALIVE,
-    DEFAULT_KEYFILE,
     DEFAULT_LOG_LEVEL,
     DEFAULT_MAX_CAPSULE_SIZE,
     DEFAULT_MAX_CONNECTION_RETRIES,
@@ -45,13 +41,14 @@ from pywebtransport.constants import (
     DEFAULT_RETRY_DELAY,
     DEFAULT_SERVER_MAX_CONNECTIONS,
     DEFAULT_SERVER_MAX_SESSIONS,
-    DEFAULT_SERVER_VERIFY_MODE,
     DEFAULT_STREAM_CREATION_TIMEOUT,
     DEFAULT_WRITE_TIMEOUT,
     H3_FRAME_TYPE_WEBTRANSPORT_STREAM,
     MAX_CLOSE_REASON_BYTES,
     MAX_PROTOCOL_STREAMS_LIMIT,
     MAX_STREAM_ID,
+    QPACK_DECODER_MAX_BLOCKED_STREAMS,
+    QPACK_DECODER_MAX_TABLE_CAPACITY,
     SETTINGS_WT_INITIAL_MAX_DATA,
     SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI,
     SETTINGS_WT_INITIAL_MAX_STREAMS_UNI,
@@ -77,6 +74,8 @@ class TestConstantsValues:
         assert MAX_CLOSE_REASON_BYTES == 1024
         assert MAX_PROTOCOL_STREAMS_LIMIT == 2**60
         assert MAX_STREAM_ID == 2**62 - 1
+        assert QPACK_DECODER_MAX_BLOCKED_STREAMS == 16
+        assert QPACK_DECODER_MAX_TABLE_CAPACITY == 4096
         assert SETTINGS_WT_INITIAL_MAX_DATA == 0x2B61
         assert SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI == 0x2B65
         assert SETTINGS_WT_INITIAL_MAX_STREAMS_UNI == 0x2B64
@@ -91,12 +90,10 @@ class TestConstantsValues:
         assert WT_STREAM_DATA_BLOCKED_TYPE == 0x190B4D42
         assert WT_STREAMS_BLOCKED_BIDI_TYPE == 0x190B4D43
         assert WT_STREAMS_BLOCKED_UNI_TYPE == 0x190B4D44
-        assert DEFAULT_ALPN_PROTOCOLS == ("h3",)
+        assert DEFAULT_ALPN_PROTOCOLS == ["h3"]
         assert DEFAULT_BIND_HOST == "::"
-        assert DEFAULT_CERTFILE is None
         assert DEFAULT_CLIENT_MAX_CONNECTIONS == 100
         assert DEFAULT_CLIENT_MAX_SESSIONS == 100
-        assert DEFAULT_CLIENT_VERIFY_MODE == ssl.CERT_REQUIRED
         assert DEFAULT_CLOSE_TIMEOUT == 5.0
         assert DEFAULT_CONGESTION_CONTROL_ALGORITHM == "cubic"
         assert DEFAULT_CONNECT_TIMEOUT == 30.0
@@ -108,7 +105,6 @@ class TestConstantsValues:
         assert DEFAULT_INITIAL_MAX_STREAMS_BIDI == 100
         assert DEFAULT_INITIAL_MAX_STREAMS_UNI == 100
         assert DEFAULT_KEEP_ALIVE is True
-        assert DEFAULT_KEYFILE is None
         assert DEFAULT_LOG_LEVEL == "INFO"
         assert DEFAULT_MAX_CAPSULE_SIZE == 65536
         assert DEFAULT_MAX_CONNECTION_RETRIES == 3
@@ -129,10 +125,9 @@ class TestConstantsValues:
         assert DEFAULT_RETRY_DELAY == 1.0
         assert DEFAULT_SERVER_MAX_CONNECTIONS == 3000
         assert DEFAULT_SERVER_MAX_SESSIONS == 10000
-        assert DEFAULT_SERVER_VERIFY_MODE == ssl.CERT_NONE
         assert DEFAULT_STREAM_CREATION_TIMEOUT == 10.0
         assert DEFAULT_WRITE_TIMEOUT == 30.0
-        assert SUPPORTED_CONGESTION_CONTROL_ALGORITHMS == ("reno", "cubic")
+        assert SUPPORTED_CONGESTION_CONTROL_ALGORITHMS == ["reno", "cubic"]
 
 
 class TestErrorCodes:
@@ -175,9 +170,9 @@ class TestErrorCodes:
             (ErrorCodes.H3_MESSAGE_ERROR, 0x10E),
             (ErrorCodes.H3_CONNECT_ERROR, 0x10F),
             (ErrorCodes.H3_VERSION_FALLBACK, 0x110),
+            (ErrorCodes.QPACK_DECODER_STREAM_ERROR, 0x202),
             (ErrorCodes.QPACK_DECOMPRESSION_FAILED, 0x200),
             (ErrorCodes.QPACK_ENCODER_STREAM_ERROR, 0x201),
-            (ErrorCodes.QPACK_DECODER_STREAM_ERROR, 0x202),
             (ErrorCodes.WT_SESSION_GONE, 0x170D7B68),
             (ErrorCodes.WT_BUFFERED_STREAM_REJECTED, 0x3994BD84),
             (ErrorCodes.WT_FLOW_CONTROL_ERROR, 0x045D4487),
@@ -189,6 +184,10 @@ class TestErrorCodes:
             (ErrorCodes.APP_RESOURCE_EXHAUSTED, 0x1003),
             (ErrorCodes.APP_INVALID_REQUEST, 0x1004),
             (ErrorCodes.APP_SERVICE_UNAVAILABLE, 0x1005),
+            (ErrorCodes.LIB_INTERNAL_ERROR, 0x10000001),
+            (ErrorCodes.LIB_CONNECTION_STATE_ERROR, 0x11000001),
+            (ErrorCodes.LIB_SESSION_STATE_ERROR, 0x12000001),
+            (ErrorCodes.LIB_STREAM_STATE_ERROR, 0x13000001),
         ],
     )
     def test_error_code_values(self, member: ErrorCodes, expected_value: int) -> None:
