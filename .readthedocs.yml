@@ -4,8 +4,13 @@ version: 2
 
 build:
   os: "ubuntu-24.04"
+  apt_packages:
+    - build-essential
+    - clang
+    - pkg-config
   tools:
     python: "3.12"
+    rust: "1.91"
 
 python:
   install:
