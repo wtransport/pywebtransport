@@ -12,6 +12,12 @@ on:
 permissions:
   contents: read
 
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PIP_NO_COLOR: "1"
+  PIP_ROOT_USER_ACTION: "ignore"
+  CARGO_HOME: ${{ github.workspace }}/.cargo
+
 jobs:
   lint:
     runs-on: ubuntu-24.04
@@ -24,7 +30,7 @@ jobs:
       - name: Cache dependencies
         uses: actions/cache@v4
         with:
-          path: ~/.cache/pip
+          path: .cache/pip
           key: ${{ runner.os }}-pip-lint-${{ hashFiles('dev-requirements.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-lint-
@@ -56,11 +62,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cache/pip
-            ~/.cargo/registry
-            ~/.cargo/git
-            target/
-          key: ${{ runner.os }}-cargo-test-${{ matrix.python-version }}-${{ hashFiles('Cargo.toml') }}-${{ hashFiles('dev-requirements.txt') }}
+            .cache/pip
+            .cargo/registry
+            crates/target/
+          key: ${{ runner.os }}-cargo-test-${{ matrix.python-version }}-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('dev-requirements.txt') }}
           restore-keys: |
             ${{ runner.os }}-cargo-test-${{ matrix.python-version }}-
 
@@ -72,7 +77,7 @@ jobs:
       - name: Install Rust toolchain
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.0
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          echo "$CARGO_HOME/bin" >> $GITHUB_PATH
 
       - name: Install Python dependencies
         run: |

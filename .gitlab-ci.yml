@@ -11,21 +11,19 @@ default:
     - wtransport
 
 variables:
-  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
   PIP_NO_COLOR: "1"
+  PIP_ROOT_USER_ACTION: "ignore"
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
   IMAGE_NAME: ghcr.io/wtransport/interop-server
-
-cache:
-  paths:
-    - .cache/pip
-    - .cargo/registry
-    - .cargo/git
-    - target/
 
 lint:
   stage: lint
   image: python:3.12-slim-bookworm
+  cache:
+    paths:
+      - .cache/pip
   before_script:
     - python -m pip install --upgrade pip
     - pip install -r dev-requirements.txt
@@ -43,10 +41,15 @@ test:
     matrix:
       - PYTHON_VERSION: ["3.12", "3.13"]
   image: python:$PYTHON_VERSION-slim-bookworm
+  cache:
+    paths:
+      - .cache/pip
+      - .cargo/registry
+      - crates/target/
   before_script:
     - apt-get update && apt-get install -y curl build-essential clang
     - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.0
-    - export PATH="$HOME/.cargo/bin:$PATH"
+    - export PATH="$CARGO_HOME/bin:$PATH"
     - python -m pip install --upgrade pip
     - pip install -r dev-requirements.txt
     - pip install -e .
@@ -63,15 +66,20 @@ build:
   image: python:3.12-slim-bookworm
   variables:
     GIT_DEPTH: 0
+  cache:
+    paths:
+      - .cache/pip
+      - .cargo/registry
+      - crates/target/
   before_script:
     - apt-get update && apt-get install -y curl build-essential clang
     - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.0
-    - export PATH="$HOME/.cargo/bin:$PATH"
+    - export PATH="$CARGO_HOME/bin:$PATH"
     - python -m pip install --upgrade pip
     - pip install maturin
   script:
-    - maturin build --release --strip --out dist
-    - maturin sdist --out dist
+    - maturin build --release --strip --out dist --manifest-path crates/Cargo.toml
+    - maturin sdist --out dist --manifest-path crates/Cargo.toml
     - echo "VERSION=$(python -c "import tomllib; print(tomllib.load(open('crates/Cargo.toml', 'rb'))['package']['version'])")" >> build.env
     - echo "Built version $(python -c "import tomllib; print(tomllib.load(open('crates/Cargo.toml', 'rb'))['package']['version'])")"
     - ls -la dist/
@@ -90,6 +98,7 @@ deploy-release:
   image: python:3.12-slim-bookworm
   variables:
     GIT_DEPTH: 0
+  cache: []
   dependencies:
     - build
   before_script:
@@ -101,14 +110,14 @@ deploy-release:
     - 'git config user.signingkey $(gpg --list-secret-keys --with-colons | grep "^sec:" | cut -d: -f5 | head -n1)'
     - git config commit.gpgsign true
     - python -m pip install --upgrade pip
-    - pip install maturin
+    - pip install twine
   script:
     - |
       if git ls-remote --tags origin | grep -q "refs/tags/v$VERSION"; then
         echo "Version v$VERSION already released - skipping"
         exit 0
       fi
-    - maturin upload dist/* --username "$MATURIN_USERNAME" --password "$MATURIN_PASSWORD" --non-interactive
+    - twine upload dist/* -u "$TWINE_USERNAME" -p "$TWINE_PASSWORD" --non-interactive
     - git config user.name "WTransport Bot"
     - git config user.email "251935624+wtransport-bot@users.noreply.github.com"
     - git tag -s -m "Release v$VERSION" "v$VERSION"
@@ -130,6 +139,7 @@ deploy-image:
   variables:
     DOCKER_DRIVER: overlay2
     DOCKER_TLS_CERTDIR: ""
+  cache: []
   dependencies:
     - build
   before_script:

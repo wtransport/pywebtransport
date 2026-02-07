@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(No planned changes for the next release yet.)_
 
+## [0.12.1] - 2026-02-07
+
+This is a maintenance release focused on stabilizing the CI/CD infrastructure and ensuring reproducible builds across all supported platforms. It standardizes the build environment configuration for mixed Python/Rust workflows and resolves upstream deprecation warnings in the deployment pipeline.
+
+### Changed
+
+- **CI/CD Infrastructure**: Standardized the build environment and caching strategy across GitHub Actions and GitLab CI to enforce reproducible builds and optimize dependency resolution for the hybrid Python/Rust architecture.
+- **Build Configuration**: Explicitly defined the `CARGO_HOME` environment variable within CI pipelines to ensure consistent Rust toolchain behavior in containerized runners.
+- **Deployment Pipeline**: Migrated the PyPI publication workflow from `maturin upload` to `twine` to align with upstream best practices and mitigate future deprecation risks.
+- **Documentation Build**: Updated Read the Docs configuration to explicitly provision the Rust toolchain and essential system dependencies (`clang`, `pkg-config`), ensuring successful compilation of native extensions during documentation generation.
+
 ## [0.12.0] - 2026-02-01
 
 This release marks a significant architectural milestone with the introduction of a **Rust Hybrid Architecture**. The core WebTransport protocol logic has been re-implemented in Rust using an **ownership-driven state machine** design. This transition enforces strict memory safety and allows for direct integration of underlying C libraries, while maintaining the established **Sans-I/O** design pattern. Additionally, the build system has been modernized to support the mixed Python/Rust codebase, significantly reducing runtime dependencies.
@@ -701,7 +712,8 @@ This is a major release focused on enhancing runtime safety and modernizing the 
 - cryptography (>=45.0.4,<46.0.0) for SSL/TLS operations
 - typing-extensions (>=4.14.0,<5.0.0) for Python <3.10 support
 
-[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.12.1...HEAD
+[0.12.1]: https://github.com/wtransport/pywebtransport/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/wtransport/pywebtransport/compare/v0.11.0...v0.12.0
 [0.11.1]: https://github.com/wtransport/pywebtransport/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/wtransport/pywebtransport/compare/v0.10.1...v0.11.0
