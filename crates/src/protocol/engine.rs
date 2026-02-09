@@ -12,7 +12,7 @@ use crate::common::constants::{
 };
 use crate::common::error::WebTransportError;
 use crate::common::types::{
-    ConnectionId, ConnectionState, ErrorCode, EventType, Headers, StreamId,
+    ConnectionId, ConnectionState, ErrorCode, ErrorSource, EventType, Headers, StreamId,
 };
 use crate::protocol::connection::Connection;
 use crate::protocol::events::{Effect, ProtocolEvent};
@@ -237,16 +237,9 @@ impl WebTransportEngine {
                 ProtocolEvent::InternalReturnStreamData { stream_id, data } => {
                     new_effects.extend(self.connection.unread_stream(stream_id, data));
                 }
-                ProtocolEvent::TransportConnectionTerminated {
-                    error_code,
-                    reason_phrase,
-                } => {
-                    new_effects.extend(self.connection.terminated(
-                        error_code,
-                        reason_phrase.clone(),
-                        now,
-                    ));
-                    let reason = format!("Connection terminated before ready: {reason_phrase}");
+                ProtocolEvent::TransportConnectionTerminated { error_code, reason } => {
+                    new_effects.extend(self.connection.terminated(error_code, reason.clone(), now));
+                    let reason = format!("Connection terminated before ready: {reason}");
                     new_effects.extend(
                         self.fail_pending_user_actions(
                             Some(ERR_LIB_CONNECTION_STATE_ERROR),
@@ -293,8 +286,8 @@ impl WebTransportEngine {
                             self.connection.state = ConnectionState::Connected;
                             self.connection.connected_at = Some(now);
                             new_effects.push(Effect::EmitConnectionEvent {
-                                event_type: EventType::ConnectionEstablished,
                                 connection_id: self.connection.id.clone(),
+                                event_type: EventType::ConnectionEstablished,
                                 error_code: None,
                                 reason: None,
                             });
@@ -318,9 +311,15 @@ impl WebTransportEngine {
                     new_effects.push(Effect::TriggerQuicTimer);
                     new_effects.push(Effect::RescheduleQuicTimer);
                 }
-                ProtocolEvent::TransportStreamReset {
-                    error_code,
+                ProtocolEvent::TransportStopSendingReceived {
                     stream_id,
+                    error_code,
+                } => {
+                    new_effects.extend(self.connection.recv_stop_sending(stream_id, error_code));
+                }
+                ProtocolEvent::TransportStreamResetReceived {
+                    stream_id,
+                    error_code,
                 } => {
                     new_effects.extend(
                         self.connection
@@ -328,9 +327,9 @@ impl WebTransportEngine {
                     );
                 }
                 ProtocolEvent::CapsuleReceived {
-                    capsule_data,
-                    capsule_type,
                     stream_id,
+                    capsule_type,
+                    capsule_data,
                 } => {
                     new_effects.extend(self.connection.recv_capsule(
                         stream_id,
@@ -342,14 +341,14 @@ impl WebTransportEngine {
                 ProtocolEvent::ConnectStreamClosed { stream_id } => {
                     new_effects.extend(self.connection.recv_connect_close(stream_id, now));
                 }
-                ProtocolEvent::DatagramReceived { data, stream_id } => {
+                ProtocolEvent::DatagramReceived { stream_id, data } => {
                     new_effects.extend(self.connection.recv_datagram(stream_id, data, now));
                 }
                 ProtocolEvent::GoawayReceived => {
                     new_effects.extend(self.connection.recv_goaway(now));
                 }
                 ProtocolEvent::HeadersReceived {
-                    headers, stream_id, ..
+                    stream_id, headers, ..
                 } => {
                     new_effects.extend(self.connection.recv_headers(stream_id, headers, now));
                 }
@@ -363,9 +362,9 @@ impl WebTransportEngine {
                     }
                 }
                 ProtocolEvent::WebTransportStreamDataReceived {
-                    data,
                     session_id,
                     stream_id,
+                    data,
                     stream_ended,
                 } => {
                     new_effects.extend(self.connection.recv_stream_data(
@@ -465,6 +464,7 @@ impl WebTransportEngine {
                     } else {
                         new_effects.push(Effect::NotifyRequestFailed {
                             request_id,
+                            source: ErrorSource::Stream,
                             error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
                             reason: "Stream not associated with any session".to_owned(),
                         });
@@ -483,14 +483,14 @@ impl WebTransportEngine {
                 ProtocolEvent::UserGrantStreamsCredit {
                     request_id,
                     session_id,
-                    max_streams,
                     is_unidirectional,
+                    max_streams,
                 } => {
                     new_effects.extend(self.connection.grant_streams_credit(
                         session_id,
                         request_id,
-                        max_streams,
                         is_unidirectional,
+                        max_streams,
                     ));
                 }
                 ProtocolEvent::UserRejectSession {
@@ -520,6 +520,7 @@ impl WebTransportEngine {
                     } else {
                         new_effects.push(Effect::NotifyRequestFailed {
                             request_id,
+                            source: ErrorSource::Stream,
                             error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
                             reason: "Stream not found".to_owned(),
                         });
@@ -549,12 +550,13 @@ impl WebTransportEngine {
                     } else {
                         new_effects.push(Effect::NotifyRequestFailed {
                             request_id,
+                            source: ErrorSource::Stream,
                             error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
                             reason: "Stream not found".to_owned(),
                         });
                     }
                 }
-                ProtocolEvent::UserStopStream {
+                ProtocolEvent::UserStopSending {
                     request_id,
                     stream_id,
                     error_code,
@@ -569,6 +571,7 @@ impl WebTransportEngine {
                     } else {
                         new_effects.push(Effect::NotifyRequestFailed {
                             request_id,
+                            source: ErrorSource::Stream,
                             error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
                             reason: "Stream not found".to_owned(),
                         });
@@ -589,6 +592,7 @@ impl WebTransportEngine {
                     } else {
                         new_effects.push(Effect::NotifyRequestFailed {
                             request_id,
+                            source: ErrorSource::Stream,
                             error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
                             reason: "Stream not found".to_owned(),
                         });
@@ -648,7 +652,7 @@ impl WebTransportEngine {
 
         let mut control_data = BytesMut::new();
         write_varint(&mut control_data, H3_STREAM_TYPE_CONTROL).map_err(|_e| {
-            WebTransportError::H3(
+            WebTransportError::Protocol(
                 Some(ERR_LIB_INTERNAL_ERROR),
                 "Failed to encode control stream type".to_owned(),
             )
@@ -657,7 +661,7 @@ impl WebTransportEngine {
 
         let mut encoder_data = BytesMut::new();
         write_varint(&mut encoder_data, H3_STREAM_TYPE_QPACK_ENCODER).map_err(|_e| {
-            WebTransportError::H3(
+            WebTransportError::Protocol(
                 Some(ERR_LIB_INTERNAL_ERROR),
                 "Failed to encode encoder stream type".to_owned(),
             )
@@ -665,7 +669,7 @@ impl WebTransportEngine {
 
         let mut decoder_data = BytesMut::new();
         write_varint(&mut decoder_data, H3_STREAM_TYPE_QPACK_DECODER).map_err(|_e| {
-            WebTransportError::H3(
+            WebTransportError::Protocol(
                 Some(ERR_LIB_INTERNAL_ERROR),
                 "Failed to encode decoder stream type".to_owned(),
             )
@@ -728,6 +732,7 @@ impl WebTransportEngine {
             if let Some(id) = req_id {
                 effects.push(Effect::NotifyRequestFailed {
                     request_id: id,
+                    source: ErrorSource::Connection,
                     error_code,
                     reason: reason.to_owned(),
                 });

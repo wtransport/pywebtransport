@@ -14,11 +14,13 @@ from aioquic.quic.events import (
     DatagramFrameReceived,
     HandshakeCompleted,
     QuicEvent,
+    StopSendingReceived,
     StreamDataReceived,
     StreamReset,
 )
 from aioquic.quic.logger import QuicLoggerTrace
 
+from pywebtransport._adapter.patches import apply_patches
 from pywebtransport._adapter.pending import PendingRequestManager
 from pywebtransport._protocol.events import (
     CloseQuicConnection,
@@ -54,8 +56,9 @@ from pywebtransport._protocol.events import (
     TransportHandshakeCompleted,
     TransportQuicParametersReceived,
     TransportQuicTimerFired,
+    TransportStopSendingReceived,
     TransportStreamDataReceived,
-    TransportStreamReset,
+    TransportStreamResetReceived,
     TriggerQuicTimer,
 )
 from pywebtransport._wtransport import WebTransportEngine
@@ -68,6 +71,8 @@ from pywebtransport.utils import get_logger
 __all__: list[str] = []
 
 logger = get_logger(name=__name__)
+
+apply_patches()
 
 
 class WebTransportCommonProtocol(QuicConnectionProtocol):
@@ -92,14 +97,10 @@ class WebTransportCommonProtocol(QuicConnectionProtocol):
         self._is_client = is_client
         self._max_event_queue_size = max_event_queue_size
         self._timer_handle: asyncio.TimerHandle | None = None
-
         self._pending_manager = PendingRequestManager()
-
         self._engine = WebTransportEngine(connection_id=str(quic.host_cid), config=config, is_client=is_client)
-
         self._resource_gc_timer: asyncio.TimerHandle | None = None
         self._early_event_cleanup_timer: asyncio.TimerHandle | None = None
-
         self._pending_effects: deque[Effect] = deque()
         self._is_processing_effects = False
         self._status_callback: Callable[[EventType, dict[str, Any]], None] | None = None
@@ -134,7 +135,7 @@ class WebTransportCommonProtocol(QuicConnectionProtocol):
             else:
                 code = ErrorCodes.NO_ERROR
                 reason = "Connection closed"
-            event_to_send = TransportConnectionTerminated(error_code=code, reason_phrase=reason)
+            event_to_send = TransportConnectionTerminated(error_code=code, reason=reason)
 
         if event_to_send is not None:
             self._push_event_to_engine(event=event_to_send)
@@ -156,7 +157,7 @@ class WebTransportCommonProtocol(QuicConnectionProtocol):
         return self._quic.get_next_available_stream_id(is_unidirectional=is_unidirectional)
 
     def get_server_name(self) -> str | None:
-        """Get the server name (SNI) from the QUIC configuration."""
+        """Get the server name from the QUIC configuration."""
         return self._quic.configuration.server_name
 
     def handle_timer_now(self) -> None:
@@ -185,16 +186,22 @@ class WebTransportCommonProtocol(QuicConnectionProtocol):
                     "QUIC ConnectionTerminated event received: code=%#x reason='%s'", error_code, reason_phrase
                 )
                 self._push_event_to_engine(
-                    event=TransportConnectionTerminated(error_code=error_code, reason_phrase=reason_phrase)
+                    event=TransportConnectionTerminated(error_code=error_code, reason=reason_phrase)
                 )
             case DatagramFrameReceived(data=data):
                 self._push_event_to_engine(event=TransportDatagramFrameReceived(data=data))
+            case StopSendingReceived(error_code=error_code, stream_id=stream_id):
+                self._push_event_to_engine(
+                    event=TransportStopSendingReceived(stream_id=stream_id, error_code=error_code)
+                )
             case StreamDataReceived(data=data, end_stream=end_stream, stream_id=stream_id):
                 self._push_event_to_engine(
-                    event=TransportStreamDataReceived(data=data, end_stream=end_stream, stream_id=stream_id)
+                    event=TransportStreamDataReceived(stream_id=stream_id, data=data, end_stream=end_stream)
                 )
             case StreamReset(error_code=error_code, stream_id=stream_id):
-                self._push_event_to_engine(event=TransportStreamReset(error_code=error_code, stream_id=stream_id))
+                self._push_event_to_engine(
+                    event=TransportStreamResetReceived(stream_id=stream_id, error_code=error_code)
+                )
             case _:
                 pass
 
@@ -219,7 +226,7 @@ class WebTransportCommonProtocol(QuicConnectionProtocol):
             self._timer_handle = self._loop.call_at(timer_at, self._handle_timer)
 
     def send_datagram_frame(self, *, data: Buffer | list[Buffer]) -> None:
-        """Send a QUIC datagram frame (supports Scatter/Gather)."""
+        """Send a QUIC datagram frame."""
         if self._quic._close_event is not None:
             logger.debug("Attempted to send datagram while connection is closing.")
             return
@@ -343,9 +350,9 @@ class WebTransportCommonProtocol(QuicConnectionProtocol):
 
         self._quic_logger = getattr(self._quic, "_quic_logger", None)
 
-        control_id = self._quic.get_next_available_stream_id(is_unidirectional=True)
-        encoder_id = self._quic.get_next_available_stream_id(is_unidirectional=True)
-        decoder_id = self._quic.get_next_available_stream_id(is_unidirectional=True)
+        control_id = self._allocate_stream_id(is_unidirectional=True)
+        encoder_id = self._allocate_stream_id(is_unidirectional=True)
+        decoder_id = self._allocate_stream_id(is_unidirectional=True)
 
         init_effects = self._engine.initialize_h3_transport(
             control_id=control_id, encoder_id=encoder_id, decoder_id=decoder_id

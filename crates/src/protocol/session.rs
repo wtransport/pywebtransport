@@ -16,8 +16,8 @@ use crate::common::constants::{
     WT_STREAMS_BLOCKED_UNI_TYPE,
 };
 use crate::common::types::{
-    ErrorCode, EventType, Headers, RequestId, SessionId, SessionState, StreamDirection, StreamId,
-    StreamState,
+    ErrorCode, ErrorSource, EventType, Headers, RequestId, SessionId, SessionState,
+    StreamDirection, StreamId, StreamState,
 };
 use crate::protocol::events::{Effect, RequestResult};
 use crate::protocol::stream::Stream;
@@ -148,6 +148,7 @@ impl Session {
             warn!("Client cannot accept sessions (request_id={request_id})");
             effects.push(Effect::NotifyRequestFailed {
                 request_id,
+                source: ErrorSource::Session,
                 error_code: None,
                 reason: "Client cannot accept sessions".to_owned(),
             });
@@ -158,6 +159,7 @@ impl Session {
             warn!("Session {} is not in connecting state", self.id);
             effects.push(Effect::NotifyRequestFailed {
                 request_id,
+                source: ErrorSource::Session,
                 error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
                 reason: format!("Session {} is not in connecting state", self.id),
             });
@@ -176,14 +178,14 @@ impl Session {
         effects.push(Effect::EmitSessionEvent {
             session_id: self.id,
             event_type: EventType::SessionReady,
-            code: None,
-            data: None,
+            path: None,
             headers: None,
+            data: None,
             is_unidirectional: None,
             max_data: None,
             max_streams: None,
-            path: None,
             ready_at: Some(now),
+            error_code: None,
             reason: None,
         });
         effects.push(Effect::NotifyRequestDone {
@@ -209,10 +211,13 @@ impl Session {
             StreamDirection::Bidirectional
         };
 
+        let is_peer_initiated = is_peer_initiated_stream(stream_id, self.is_client);
+
         let mut stream = Stream::new(
             stream_id,
             self.id,
             direction,
+            is_peer_initiated,
             now,
             self.stream_read_buffer_size,
             self.stream_write_buffer_size,
@@ -230,8 +235,10 @@ impl Session {
             Effect::EmitStreamEvent {
                 stream_id,
                 event_type: EventType::StreamOpened,
-                direction: Some(direction),
                 session_id: Some(self.id),
+                direction: Some(direction),
+                is_peer_initiated: Some(is_peer_initiated),
+                error_code: None,
             },
         ]
     }
@@ -267,36 +274,48 @@ impl Session {
 
         effects.extend(self.reset_all_streams(error_code, now));
 
-        let reason_str = reason.as_deref().unwrap_or("");
-        let reason_bytes = reason_str.as_bytes();
-        let truncated_reason = if reason_bytes.len() > 1024 {
-            reason_bytes.get(..1024).unwrap_or(reason_bytes)
+        let is_clean_close = error_code == 0 && reason.as_deref().unwrap_or("").is_empty();
+
+        if is_clean_close {
+            effects.push(Effect::SendQuicData {
+                stream_id: self.id,
+                data: Bytes::new(),
+                end_stream: true,
+            });
         } else {
-            reason_bytes
-        };
+            let reason_str = reason.as_deref().unwrap_or("");
+            let reason_bytes = reason_str.as_bytes();
+            let truncated_reason = if reason_bytes.len() > 1024 {
+                reason_bytes.get(..1024).unwrap_or(reason_bytes)
+            } else {
+                reason_bytes
+            };
 
-        let mut buf = BytesMut::with_capacity(4 + truncated_reason.len());
-        buf.extend_from_slice(&(u32::try_from(error_code).unwrap_or(u32::MAX)).to_be_bytes());
-        buf.extend_from_slice(truncated_reason);
+            let mut buf = BytesMut::with_capacity(8 + truncated_reason.len());
+            if let Err(e) = write_varint(&mut buf, error_code) {
+                error!("Internal error encoding close code: {e:?}");
+            }
+            buf.extend_from_slice(truncated_reason);
 
-        effects.push(Effect::SendH3Capsule {
-            stream_id: self.id,
-            capsule_type: CLOSE_WEBTRANSPORT_SESSION_TYPE,
-            capsule_data: buf.freeze(),
-            end_stream: true,
-        });
+            effects.push(Effect::SendH3Capsule {
+                stream_id: self.id,
+                capsule_type: CLOSE_WEBTRANSPORT_SESSION_TYPE,
+                capsule_data: buf.freeze(),
+                end_stream: true,
+            });
+        }
 
         effects.push(Effect::EmitSessionEvent {
             session_id: self.id,
             event_type: EventType::SessionClosed,
-            code: Some(error_code),
-            data: None,
+            path: None,
             headers: None,
+            data: None,
             is_unidirectional: None,
             max_data: None,
             max_streams: None,
-            path: None,
             ready_at: None,
+            error_code: Some(error_code),
             reason,
         });
 
@@ -319,6 +338,7 @@ impl Session {
         if !matches!(self.state, SessionState::Connected | SessionState::Draining) {
             effects.push(Effect::NotifyRequestFailed {
                 request_id,
+                source: ErrorSource::Session,
                 error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
                 reason: format!("Session {} is not connected or draining", self.id),
             });
@@ -332,48 +352,39 @@ impl Session {
         };
 
         if limit_exceeded {
-            if self.is_client {
-                let mut buf = BytesMut::with_capacity(8);
-                if is_unidirectional {
-                    debug!(
-                        "Client uni stream creation for session {} blocked by flow control ({} >= {})",
-                        self.id, self.local_streams_uni_opened, self.peer_max_streams_uni
-                    );
-                    self.pending_uni_stream_requests.push_back(request_id);
-                    if let Err(e) = write_varint(&mut buf, self.peer_max_streams_uni) {
-                        error!("Internal error encoding blocked limit: {e:?}");
-                    } else {
-                        effects.push(Effect::SendH3Capsule {
-                            stream_id: self.id,
-                            capsule_type: WT_STREAMS_BLOCKED_UNI_TYPE,
-                            capsule_data: buf.freeze(),
-                            end_stream: false,
-                        });
-                    }
+            let mut buf = BytesMut::with_capacity(8);
+            if is_unidirectional {
+                debug!(
+                    "Uni stream creation for session {} blocked by flow control ({} >= {})",
+                    self.id, self.local_streams_uni_opened, self.peer_max_streams_uni
+                );
+                self.pending_uni_stream_requests.push_back(request_id);
+                if let Err(e) = write_varint(&mut buf, self.peer_max_streams_uni) {
+                    error!("Internal error encoding blocked limit: {e:?}");
                 } else {
-                    debug!(
-                        "Client bidi stream creation for session {} blocked by flow control ({} >= {})",
-                        self.id, self.local_streams_bidi_opened, self.peer_max_streams_bidi
-                    );
-                    self.pending_bidi_stream_requests.push_back(request_id);
-                    if let Err(e) = write_varint(&mut buf, self.peer_max_streams_bidi) {
-                        error!("Internal error encoding blocked limit: {e:?}");
-                    } else {
-                        effects.push(Effect::SendH3Capsule {
-                            stream_id: self.id,
-                            capsule_type: WT_STREAMS_BLOCKED_BIDI_TYPE,
-                            capsule_data: buf.freeze(),
-                            end_stream: false,
-                        });
-                    }
+                    effects.push(Effect::SendH3Capsule {
+                        stream_id: self.id,
+                        capsule_type: WT_STREAMS_BLOCKED_UNI_TYPE,
+                        capsule_data: buf.freeze(),
+                        end_stream: false,
+                    });
                 }
             } else {
-                warn!("Stream limit reached for session {}", self.id);
-                effects.push(Effect::NotifyRequestFailed {
-                    request_id,
-                    error_code: None,
-                    reason: "Stream limit reached".to_owned(),
-                });
+                debug!(
+                    "Bidi stream creation for session {} blocked by flow control ({} >= {})",
+                    self.id, self.local_streams_bidi_opened, self.peer_max_streams_bidi
+                );
+                self.pending_bidi_stream_requests.push_back(request_id);
+                if let Err(e) = write_varint(&mut buf, self.peer_max_streams_bidi) {
+                    error!("Internal error encoding blocked limit: {e:?}");
+                } else {
+                    effects.push(Effect::SendH3Capsule {
+                        stream_id: self.id,
+                        capsule_type: WT_STREAMS_BLOCKED_BIDI_TYPE,
+                        capsule_data: buf.freeze(),
+                        end_stream: false,
+                    });
+                }
             }
             return effects;
         }
@@ -427,6 +438,7 @@ impl Session {
 
         vec![Effect::NotifyRequestFailed {
             request_id,
+            source: ErrorSource::Stream,
             error_code,
             reason,
         }]
@@ -454,6 +466,7 @@ impl Session {
             error!("Internal error: Granted data credit exceeds VarInt limit");
             return vec![Effect::NotifyRequestFailed {
                 request_id,
+                source: ErrorSource::Session,
                 error_code: Some(ERR_LIB_INTERNAL_ERROR),
                 reason: "Granted credit exceeds protocol limits".to_owned(),
             }];
@@ -479,12 +492,13 @@ impl Session {
     pub(crate) fn grant_streams_credit(
         &mut self,
         request_id: RequestId,
-        max_streams: u64,
         is_uni: bool,
+        max_streams: u64,
     ) -> Vec<Effect> {
         if self.state == SessionState::Closed || self.state == SessionState::Draining {
             return vec![Effect::NotifyRequestFailed {
                 request_id,
+                source: ErrorSource::Session,
                 error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
                 reason: format!("Cannot grant credit to session in state {:?}", self.state),
             }];
@@ -522,6 +536,7 @@ impl Session {
             error!("Internal error: Granted streams credit exceeds VarInt limit");
             return vec![Effect::NotifyRequestFailed {
                 request_id,
+                source: ErrorSource::Session,
                 error_code: Some(ERR_LIB_INTERNAL_ERROR),
                 reason: "Granted credit exceeds protocol limits".to_owned(),
             }];
@@ -591,14 +606,14 @@ impl Session {
                         effects.push(Effect::EmitSessionEvent {
                             session_id: self.id,
                             event_type: EventType::SessionMaxDataUpdated,
-                            max_data: Some(new_max),
-                            code: None,
-                            data: None,
-                            headers: None,
-                            is_unidirectional: None,
-                            max_streams: None,
                             path: None,
+                            headers: None,
+                            data: None,
+                            is_unidirectional: None,
+                            max_data: Some(new_max),
+                            max_streams: None,
                             ready_at: None,
+                            error_code: None,
                             reason: None,
                         });
                         effects.extend(self.flush_blocked_writes());
@@ -635,30 +650,27 @@ impl Session {
                         effects.push(Effect::EmitSessionEvent {
                             session_id: self.id,
                             event_type: EventType::SessionMaxStreamsBidiUpdated,
-                            max_streams: Some(new_max),
-                            code: None,
-                            data: None,
+                            path: None,
                             headers: None,
+                            data: None,
                             is_unidirectional: None,
                             max_data: None,
-                            path: None,
+                            max_streams: Some(new_max),
                             ready_at: None,
+                            error_code: None,
                             reason: None,
                         });
 
-                        if self.is_client {
-                            while self.local_streams_bidi_opened < self.peer_max_streams_bidi
-                                && !self.pending_bidi_stream_requests.is_empty()
-                            {
-                                if let Some(req_id) = self.pending_bidi_stream_requests.pop_front()
-                                {
-                                    self.local_streams_bidi_opened += 1;
-                                    effects.push(Effect::CreateQuicStream {
-                                        request_id: req_id,
-                                        session_id: self.id,
-                                        is_unidirectional: false,
-                                    });
-                                }
+                        while self.local_streams_bidi_opened < self.peer_max_streams_bidi
+                            && !self.pending_bidi_stream_requests.is_empty()
+                        {
+                            if let Some(req_id) = self.pending_bidi_stream_requests.pop_front() {
+                                self.local_streams_bidi_opened += 1;
+                                effects.push(Effect::CreateQuicStream {
+                                    request_id: req_id,
+                                    session_id: self.id,
+                                    is_unidirectional: false,
+                                });
                             }
                         }
                     } else if new_max < self.peer_max_streams_bidi {
@@ -694,29 +706,27 @@ impl Session {
                         effects.push(Effect::EmitSessionEvent {
                             session_id: self.id,
                             event_type: EventType::SessionMaxStreamsUniUpdated,
-                            max_streams: Some(new_max),
-                            code: None,
-                            data: None,
+                            path: None,
                             headers: None,
+                            data: None,
                             is_unidirectional: None,
                             max_data: None,
-                            path: None,
+                            max_streams: Some(new_max),
                             ready_at: None,
+                            error_code: None,
                             reason: None,
                         });
 
-                        if self.is_client {
-                            while self.local_streams_uni_opened < self.peer_max_streams_uni
-                                && !self.pending_uni_stream_requests.is_empty()
-                            {
-                                if let Some(req_id) = self.pending_uni_stream_requests.pop_front() {
-                                    self.local_streams_uni_opened += 1;
-                                    effects.push(Effect::CreateQuicStream {
-                                        request_id: req_id,
-                                        session_id: self.id,
-                                        is_unidirectional: true,
-                                    });
-                                }
+                        while self.local_streams_uni_opened < self.peer_max_streams_uni
+                            && !self.pending_uni_stream_requests.is_empty()
+                        {
+                            if let Some(req_id) = self.pending_uni_stream_requests.pop_front() {
+                                self.local_streams_uni_opened += 1;
+                                effects.push(Effect::CreateQuicStream {
+                                    request_id: req_id,
+                                    session_id: self.id,
+                                    is_unidirectional: true,
+                                });
                             }
                         }
                     } else if new_max < self.peer_max_streams_uni {
@@ -743,14 +753,14 @@ impl Session {
                     effects.push(Effect::EmitSessionEvent {
                         session_id: self.id,
                         event_type: EventType::SessionDataBlocked,
-                        code: None,
-                        data: None,
+                        path: None,
                         headers: None,
+                        data: None,
                         is_unidirectional: None,
                         max_data: None,
                         max_streams: None,
-                        path: None,
                         ready_at: None,
+                        error_code: None,
                         reason: None,
                     });
                 }
@@ -767,14 +777,14 @@ impl Session {
                     effects.push(Effect::EmitSessionEvent {
                         session_id: self.id,
                         event_type: EventType::SessionStreamsBlocked,
-                        is_unidirectional: Some(is_uni),
-                        code: None,
-                        data: None,
+                        path: None,
                         headers: None,
+                        data: None,
+                        is_unidirectional: Some(is_uni),
                         max_data: None,
                         max_streams: None,
-                        path: None,
                         ready_at: None,
+                        error_code: None,
                         reason: None,
                     });
                 }
@@ -798,15 +808,15 @@ impl Session {
                 effects.push(Effect::EmitSessionEvent {
                     session_id: self.id,
                     event_type: EventType::SessionClosed,
-                    code: Some(code),
-                    reason: Some(reason),
-                    data: None,
+                    path: None,
                     headers: None,
+                    data: None,
                     is_unidirectional: None,
                     max_data: None,
                     max_streams: None,
-                    path: None,
                     ready_at: None,
+                    error_code: Some(code),
+                    reason: Some(reason),
                 });
                 effects.extend(self.reset_all_streams(code, now));
             }
@@ -817,14 +827,14 @@ impl Session {
                     effects.push(Effect::EmitSessionEvent {
                         session_id: self.id,
                         event_type: EventType::SessionDraining,
-                        code: None,
-                        data: None,
+                        path: None,
                         headers: None,
+                        data: None,
                         is_unidirectional: None,
                         max_data: None,
                         max_streams: None,
-                        path: None,
                         ready_at: None,
+                        error_code: None,
                         reason: None,
                     });
                 }
@@ -868,14 +878,14 @@ impl Session {
         effects.push(Effect::EmitSessionEvent {
             session_id: self.id,
             event_type: EventType::SessionClosed,
-            code: Some(0),
-            data: None,
+            path: None,
             headers: None,
+            data: None,
             is_unidirectional: None,
             max_data: None,
             max_streams: None,
-            path: None,
             ready_at: None,
+            error_code: Some(0),
             reason: Some("CONNECT stream cleanly closed".to_owned()),
         });
 
@@ -891,14 +901,14 @@ impl Session {
             effects.push(Effect::EmitSessionEvent {
                 session_id: self.id,
                 event_type: EventType::DatagramReceived,
-                data: Some(data),
-                code: None,
+                path: None,
                 headers: None,
+                data: Some(data),
                 is_unidirectional: None,
                 max_data: None,
                 max_streams: None,
-                path: None,
                 ready_at: None,
+                error_code: None,
                 reason: None,
             });
         } else {
@@ -926,12 +936,8 @@ impl Session {
         }
 
         if !self.streams.contains_key(&stream_id) {
-            if self.is_client {
-                warn!("Client received WT data for unknown stream {stream_id}, ignoring.");
-                return effects;
-            }
-
             let direction = stream_dir_from_id(stream_id, self.is_client);
+            let is_peer_initiated = is_peer_initiated_stream(stream_id, self.is_client);
 
             match direction {
                 StreamDirection::SendOnly => {
@@ -970,6 +976,7 @@ impl Session {
                 stream_id,
                 self.id,
                 direction,
+                is_peer_initiated,
                 now,
                 self.stream_read_buffer_size,
                 self.stream_write_buffer_size,
@@ -979,8 +986,10 @@ impl Session {
             effects.push(Effect::EmitStreamEvent {
                 stream_id,
                 event_type: EventType::StreamOpened,
-                direction: Some(direction),
                 session_id: Some(self.id),
+                direction: Some(direction),
+                is_peer_initiated: Some(is_peer_initiated),
+                error_code: None,
             });
         }
 
@@ -1029,6 +1038,18 @@ impl Session {
         effects
     }
 
+    // Transport stream stop_sending reception handling.
+    pub(crate) fn recv_stop_sending(
+        &mut self,
+        stream_id: StreamId,
+        error_code: ErrorCode,
+    ) -> Vec<Effect> {
+        if let Some(stream) = self.streams.get_mut(&stream_id) {
+            return stream.recv_stop_sending(error_code);
+        }
+        Vec::new()
+    }
+
     // User session rejection handling.
     pub(crate) fn reject(
         &mut self,
@@ -1042,6 +1063,7 @@ impl Session {
             warn!("Client cannot reject sessions (request_id={request_id})");
             effects.push(Effect::NotifyRequestFailed {
                 request_id,
+                source: ErrorSource::Session,
                 error_code: None,
                 reason: "Client cannot reject sessions".to_owned(),
             });
@@ -1052,6 +1074,7 @@ impl Session {
             warn!("Session {} is not in connecting state", self.id);
             effects.push(Effect::NotifyRequestFailed {
                 request_id,
+                source: ErrorSource::Session,
                 error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
                 reason: format!("Session {} is not in connecting state", self.id),
             });
@@ -1071,14 +1094,14 @@ impl Session {
         effects.push(Effect::EmitSessionEvent {
             session_id: self.id,
             event_type: EventType::SessionClosed,
-            code: Some(u64::from(status_code)),
-            data: None,
+            path: None,
             headers: None,
+            data: None,
             is_unidirectional: None,
             max_data: None,
             max_streams: None,
-            path: None,
             ready_at: None,
+            error_code: Some(u64::from(status_code)),
             reason: Some("Rejected by application".to_owned()),
         });
         effects.push(Effect::NotifyRequestDone {
@@ -1126,6 +1149,7 @@ impl Session {
         if self.state != SessionState::Connected {
             effects.push(Effect::NotifyRequestFailed {
                 request_id,
+                source: ErrorSource::Session,
                 error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
                 reason: format!("Session {} is not connected", self.id),
             });
@@ -1139,6 +1163,7 @@ impl Session {
             );
             effects.push(Effect::NotifyRequestFailed {
                 request_id,
+                source: ErrorSource::Datagram,
                 error_code: None,
                 reason: format!(
                     "Datagram size {} exceeds limit {remote_max_size}",
@@ -1176,6 +1201,7 @@ impl Session {
         let Some(stream) = self.streams.get_mut(&stream_id) else {
             effects.push(Effect::NotifyRequestFailed {
                 request_id,
+                source: ErrorSource::Stream,
                 error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
                 reason: format!("Stream {stream_id} not found"),
             });
@@ -1250,6 +1276,7 @@ impl Session {
 
         vec![Effect::NotifyRequestFailed {
             request_id,
+            source: ErrorSource::Stream,
             error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
             reason: format!("Stream {stream_id} not found"),
         }]
@@ -1267,6 +1294,7 @@ impl Session {
         let Some(stream) = self.streams.get_mut(&stream_id) else {
             effects.push(Effect::NotifyRequestFailed {
                 request_id,
+                source: ErrorSource::Stream,
                 error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
                 reason: format!("Stream {stream_id} not found"),
             });
@@ -1315,15 +1343,15 @@ impl Session {
             Effect::EmitSessionEvent {
                 session_id: self.id,
                 event_type: EventType::SessionClosed,
-                code: Some(error_code),
-                reason: Some(reason),
-                data: None,
+                path: None,
                 headers: None,
+                data: None,
                 is_unidirectional: None,
                 max_data: None,
                 max_streams: None,
-                path: None,
                 ready_at: None,
+                error_code: Some(error_code),
+                reason: Some(reason),
             },
         ];
         effects.extend(self.reset_all_streams(error_code, now));
@@ -1560,6 +1588,7 @@ impl Session {
         while let Some(req_id) = self.pending_bidi_stream_requests.pop_front() {
             effects.push(Effect::NotifyRequestFailed {
                 request_id: req_id,
+                source: ErrorSource::Session,
                 error_code: Some(error_code),
                 reason: "Session closed".to_owned(),
             });
@@ -1567,6 +1596,7 @@ impl Session {
         while let Some(req_id) = self.pending_uni_stream_requests.pop_front() {
             effects.push(Effect::NotifyRequestFailed {
                 request_id: req_id,
+                source: ErrorSource::Session,
                 error_code: Some(error_code),
                 reason: "Session closed".to_owned(),
             });

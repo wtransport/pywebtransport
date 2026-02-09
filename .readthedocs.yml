@@ -10,14 +10,12 @@ build:
     - pkg-config
   tools:
     python: "3.12"
-    rust: "1.91"
-
-python:
-  install:
-    - method: pip
-      path: .
-      extra_requirements:
-        - docs
+  jobs:
+    post_create_environment:
+      - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.0
+    install:
+      - export PATH="$HOME/.cargo/bin:$PATH" && python -m pip install --upgrade --no-cache-dir pip setuptools
+      - export PATH="$HOME/.cargo/bin:$PATH" && python -m pip install --upgrade --no-cache-dir .[docs]
 
 mkdocs:
   configuration: mkdocs.yml

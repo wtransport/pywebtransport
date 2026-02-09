@@ -40,6 +40,7 @@ hide:
 - **/echo**: Bidirectional stream and datagram reflection.
 - **/stats**: Current session statistics and negotiated parameters.
 - **/status**: Global server health and aggregate metrics.
+- **/webtransport/devious-baton**: Devious Baton protocol state transition validation.
 
 ## API Reference
 

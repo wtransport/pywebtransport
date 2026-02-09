@@ -13,13 +13,13 @@ from pywebtransport._protocol.events import (
     UserGetStreamDiagnostics,
     UserResetStream,
     UserSendStreamData,
-    UserStopStream,
+    UserStopSending,
     UserStreamRead,
 )
 from pywebtransport.constants import ErrorCodes
 from pywebtransport.events import Event, EventEmitter
 from pywebtransport.exceptions import ConnectionError, StreamError, TimeoutError
-from pywebtransport.types import Buffer, SessionId, StreamDirection, StreamId, StreamState
+from pywebtransport.types import Buffer, SessionId, StreamDirection, StreamId, StreamState, EventType
 from pywebtransport.utils import ensure_buffer, get_logger
 
 if TYPE_CHECKING:
@@ -49,6 +49,7 @@ class StreamDiagnostics:
     session_id: SessionId
     direction: StreamDirection
     state: StreamState
+    is_peer_initiated: bool
     created_at: float
     bytes_sent: int
     bytes_received: int
@@ -65,22 +66,28 @@ class _BaseStream:
     _stream_id: StreamId
     events: EventEmitter
 
-    def __init__(self, *, session: WebTransportSession, stream_id: StreamId) -> None:
+    def __init__(self, *, session: WebTransportSession, stream_id: StreamId, is_remote: bool) -> None:
         """Initialize the base stream handle."""
         self._session = weakref.ref(session)
         self._stream_id = stream_id
+        self._is_remote = is_remote
         self._cached_state = StreamState.OPEN
         self.events = EventEmitter(
             max_queue_size=DEFAULT_EVENT_QUEUE_SIZE,
             max_history=DEFAULT_EVENT_HISTORY_SIZE,
             max_listeners=DEFAULT_MAX_EVENT_LISTENERS,
         )
-        self.events.on(event_type="stream_closed", handler=self._on_closed)
+        self.events.on(event_type=EventType.STREAM_CLOSED, handler=self._on_closed)
 
     @property
     def is_closed(self) -> bool:
         """Return True if the stream is fully closed."""
         return self._cached_state == StreamState.CLOSED
+
+    @property
+    def is_remote(self) -> bool:
+        """Return True if the stream was initiated by the peer."""
+        return self._is_remote
 
     @property
     def session(self) -> WebTransportSession:
@@ -129,9 +136,9 @@ class _BaseStream:
 class WebTransportReceiveStream(_BaseStream):
     """Represents the readable side of a WebTransport stream."""
 
-    def __init__(self, *, session: WebTransportSession, stream_id: StreamId) -> None:
+    def __init__(self, *, session: WebTransportSession, stream_id: StreamId, is_remote: bool) -> None:
         """Initialize the receive stream handle."""
-        super().__init__(session=session, stream_id=stream_id)
+        super().__init__(session=session, stream_id=stream_id, is_remote=is_remote)
         self._read_eof = False
 
     @property
@@ -264,7 +271,7 @@ class WebTransportReceiveStream(_BaseStream):
             return
 
         request_id, future = connection._protocol.create_request()
-        event = UserStopStream(request_id=request_id, stream_id=self.stream_id, error_code=error_code)
+        event = UserStopSending(request_id=request_id, stream_id=self.stream_id, error_code=error_code)
         connection._protocol.send_event(event=event)
         await future
         self._cached_state = StreamState.RESET_RECEIVED
@@ -314,7 +321,7 @@ class WebTransportSendStream(_BaseStream):
     async def close(self, *, error_code: int | None = None) -> None:
         """Close the sending side of the stream."""
         if error_code is not None:
-            await self.stop_sending(error_code=error_code)
+            await self.reset(error_code=error_code)
             return
 
         try:
@@ -326,8 +333,8 @@ class WebTransportSendStream(_BaseStream):
             logger.error("Unexpected error during stream %s close: %s", self.stream_id, e, exc_info=True)
             raise
 
-    async def stop_sending(self, *, error_code: int = ErrorCodes.NO_ERROR) -> None:
-        """Stop sending data and reset the stream."""
+    async def reset(self, *, error_code: int = ErrorCodes.NO_ERROR) -> None:
+        """Abruptly terminate stream transmission and signal peer to discard data."""
         connection = self.session._connection()
         if connection is None:
             raise ConnectionError("Connection is gone.")
@@ -388,11 +395,11 @@ class WebTransportSendStream(_BaseStream):
 class WebTransportStream(_BaseStream):
     """Represents the bidirectional WebTransport stream."""
 
-    def __init__(self, *, session: WebTransportSession, stream_id: StreamId) -> None:
+    def __init__(self, *, session: WebTransportSession, stream_id: StreamId, is_remote: bool) -> None:
         """Initialize the bidirectional stream handle."""
-        super().__init__(session=session, stream_id=stream_id)
-        self._reader = WebTransportReceiveStream(session=session, stream_id=stream_id)
-        self._writer = WebTransportSendStream(session=session, stream_id=stream_id)
+        super().__init__(session=session, stream_id=stream_id, is_remote=is_remote)
+        self._reader = WebTransportReceiveStream(session=session, stream_id=stream_id, is_remote=is_remote)
+        self._writer = WebTransportSendStream(session=session, stream_id=stream_id, is_remote=is_remote)
 
     @property
     def can_read(self) -> bool:
@@ -456,9 +463,9 @@ class WebTransportStream(_BaseStream):
         """Signal the peer to stop sending data."""
         await self._reader.stop_receiving(error_code=error_code)
 
-    async def stop_sending(self, *, error_code: int = ErrorCodes.NO_ERROR) -> None:
+    async def reset(self, *, error_code: int = ErrorCodes.NO_ERROR) -> None:
         """Stop sending data and reset the stream."""
-        await self._writer.stop_sending(error_code=error_code)
+        await self._writer.reset(error_code=error_code)
 
     async def write(self, *, data: Buffer, end_stream: bool = False) -> None:
         """Write data to the stream."""

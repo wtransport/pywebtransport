@@ -16,6 +16,7 @@ env:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
   PIP_NO_COLOR: "1"
   PIP_ROOT_USER_ACTION: "ignore"
+  PIP_CACHE_DIR: ${{ github.workspace }}/.cache/pip
   CARGO_HOME: ${{ github.workspace }}/.cargo
 
 jobs:

@@ -164,10 +164,12 @@ class EventType(StrEnum):
     SESSION_REQUEST = "session_request"
     SESSION_STREAMS_BLOCKED = "session_streams_blocked"
     SETTINGS_RECEIVED = "settings_received"
+    STOP_SENDING_RECEIVED = "stop_sending_received"
     STREAM_CLOSED = "stream_closed"
     STREAM_DATA_RECEIVED = "stream_data_received"
     STREAM_ERROR = "stream_error"
     STREAM_OPENED = "stream_opened"
+    STREAM_RESET_RECEIVED = "stream_reset_received"
     TIMEOUT_ERROR = "timeout_error"
 
 

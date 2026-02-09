@@ -305,7 +305,12 @@ class WebTransportConnection:
                 EventType.DATAGRAM_RECEIVED,
             ):
                 self._route_session_event(event_type=event_type, data=data)
-            elif event_type in (EventType.STREAM_OPENED, EventType.STREAM_CLOSED):
+            elif event_type in (
+                EventType.STREAM_OPENED,
+                EventType.STREAM_CLOSED,
+                EventType.STOP_SENDING_RECEIVED,
+                EventType.STREAM_RESET_RECEIVED,
+            ):
                 self._handle_stream_event(event_type=event_type, data=data)
 
             self.events.emit_nowait(event_type=event_type, data=data)
@@ -359,6 +364,7 @@ class WebTransportConnection:
         if event_type == EventType.STREAM_OPENED:
             session_id = data.get("session_id")
             direction = data.get("direction")
+            is_remote = data.get("is_remote", False)  # Extract is_remote flag, default False
 
             if session_id is not None and direction is not None and stream_id not in self._stream_handles:
                 session = self._session_handles.get(session_id)
@@ -375,7 +381,7 @@ class WebTransportConnection:
                             logger.error("Unknown stream direction: %s", direction)
                             return
 
-                    new_stream = handle_class(session=session, stream_id=stream_id)
+                    new_stream = handle_class(session=session, stream_id=stream_id, is_remote=is_remote)
                     self._stream_handles[stream_id] = new_stream
                     data["stream"] = new_stream
 
@@ -389,6 +395,14 @@ class WebTransportConnection:
                 data["stream"] = stream
                 stream.events.emit_nowait(event_type=event_type, data=data)
                 asyncio.create_task(coro=stream.events.close())
+
+        elif event_type in (EventType.STOP_SENDING_RECEIVED, EventType.STREAM_RESET_RECEIVED):
+            stream = self._stream_handles.get(stream_id)
+            if stream is not None:
+                data["stream"] = stream
+                stream.events.emit_nowait(event_type=event_type, data=data)
+            else:
+                logger.debug("Received %s for unknown or closed stream %d", event_type, stream_id)
 
     def __repr__(self) -> str:
         """Provide a developer-friendly representation."""

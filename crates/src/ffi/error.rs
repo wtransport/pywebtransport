@@ -4,20 +4,23 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use crate::common::error::WebTransportError;
-use crate::common::types::ErrorCode;
+use crate::common::types::{ErrorCode, ErrorSource};
 
 // Python exception instance creation based on error classification.
 pub(super) fn create_py_exception(
     py: Python<'_>,
+    source: ErrorSource,
     code: Option<ErrorCode>,
     reason: String,
 ) -> PyErr {
-    let class_name = match code {
-        Some(c) if (0x1000_0000..=0x10FF_FFFF).contains(&c) => "WebTransportError",
-        Some(c) if (0x1100_0000..=0x11FF_FFFF).contains(&c) => "ConnectionError",
-        Some(c) if (0x1200_0000..=0x12FF_FFFF).contains(&c) => "SessionError",
-        Some(c) if (0x1300_0000..=0x13FF_FFFF).contains(&c) => "StreamError",
-        _ => "WebTransportError",
+    let class_name = match source {
+        ErrorSource::Connection => "ConnectionError",
+        ErrorSource::Session => "SessionError",
+        ErrorSource::Stream => "StreamError",
+        ErrorSource::Datagram => "DatagramError",
+        ErrorSource::Protocol => "ProtocolError",
+        ErrorSource::FlowControl => "FlowControlError",
+        ErrorSource::Unspecified => "WebTransportError",
     };
 
     let kwargs = make_kwargs(py, code);
@@ -28,38 +31,14 @@ pub(super) fn create_py_exception(
 impl From<WebTransportError> for PyErr {
     fn from(err: WebTransportError) -> PyErr {
         Python::attach(|py| {
-            let (class_name, kwargs) = match &err {
-                WebTransportError::Authentication(code, _) => {
-                    ("AuthenticationError", make_kwargs(py, *code))
-                }
-                WebTransportError::Connection(code, _) => {
-                    ("ConnectionError", make_kwargs(py, *code))
-                }
-                WebTransportError::Datagram(code, _) => ("DatagramError", make_kwargs(py, *code)),
-                WebTransportError::FlowControl(code, _) => {
-                    ("FlowControlError", make_kwargs(py, *code))
-                }
-                WebTransportError::H3(code, _) | WebTransportError::Quic(code, _) => {
-                    ("ProtocolError", make_kwargs(py, *code))
-                }
-                WebTransportError::Io(_) => ("WebTransportError", make_kwargs(py, None)),
-                WebTransportError::Session(sid, code, _) => {
-                    let dict = make_kwargs(py, *code);
-                    dict.set_item("session_id", sid).ok();
-                    ("SessionError", dict)
-                }
-                WebTransportError::Stream(sid, code, _) => {
-                    let dict = make_kwargs(py, *code);
-                    dict.set_item("stream_id", sid).ok();
-                    ("StreamError", dict)
-                }
-                WebTransportError::Timeout(code, _) => ("TimeoutError", make_kwargs(py, *code)),
-                WebTransportError::Unknown(code, _) => {
-                    ("WebTransportError", make_kwargs(py, *code))
+            let source = err.source();
+            let (code, reason) = match &err {
+                WebTransportError::Protocol(c, r) | WebTransportError::Unknown(c, r) => {
+                    (*c, r.clone())
                 }
             };
 
-            instantiate_py_exception(py, class_name, err.to_string(), &kwargs)
+            create_py_exception(py, source, code, reason)
         })
     }
 }

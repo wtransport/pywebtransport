@@ -8,7 +8,7 @@ use crate::common::constants::{
     ERR_LIB_STREAM_STATE_ERROR, ERR_WT_APPLICATION_ERROR_FIRST, ERR_WT_FLOW_CONTROL_ERROR,
     WT_DATA_BLOCKED_TYPE,
 };
-use crate::common::types::{EventType, StreamDirection, StreamState};
+use crate::common::types::{ErrorSource, EventType, StreamDirection, StreamState};
 use crate::protocol::events::{Effect, RequestResult};
 use crate::protocol::utils::wt_to_http_error;
 
@@ -21,6 +21,7 @@ fn fixture_stream() -> Stream {
         0,
         0,
         StreamDirection::Bidirectional,
+        false,
         0.0,
         MAX_READ_BUF,
         MAX_WRITE_BUF,
@@ -53,6 +54,7 @@ fn test_diagnose_snapshot_generation_success(fixture_stream: Stream) {
     {
         assert!(json.contains("\"stream_id\":0"));
         assert!(json.contains("\"state\":\"open\""));
+        assert!(json.contains("\"is_peer_initiated\":false"));
     }
 }
 
@@ -168,6 +170,7 @@ fn test_new_stream_initialization_success(fixture_stream: Stream) {
     assert_eq!(stream.read_buffer_size, 0);
     assert_eq!(stream.write_buffer_size, 0);
     assert_eq!(stream.max_read_buffer_size, MAX_READ_BUF);
+    assert!(!stream.is_peer_initiated);
 }
 
 #[rstest]
@@ -250,7 +253,8 @@ fn test_read_on_closed_stream_with_error_fails(mut fixture_stream: Stream) {
     assert!(matches!(
         effects.as_slice(),
         [Effect::NotifyRequestFailed {
-            error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
+            source: ErrorSource::Stream,
+            error_code: Some(500),
             ..
         }]
     ));
@@ -290,7 +294,10 @@ fn test_read_on_reset_received_stream_fails_success(mut fixture_stream: Stream) 
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::NotifyRequestFailed { .. }]
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Stream,
+            ..
+        }]
     ));
 
     if let [Effect::NotifyRequestFailed { error_code, .. }] = effects.as_slice() {
@@ -447,22 +454,22 @@ fn test_recv_reset_remote_success(mut fixture_stream: Stream) {
 
     let effects = fixture_stream.recv_reset(0x100, 1.0);
 
-    assert_eq!(fixture_stream.state, StreamState::Closed);
-    assert!(fixture_stream.close_code.is_some());
+    assert_eq!(fixture_stream.state, StreamState::ResetReceived);
+    assert_eq!(fixture_stream.close_code, Some(0x100));
     assert!(effects.len() >= 2);
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::NotifyRequestFailed { .. }, ..]
-    ));
-
-    let last = effects.last();
-    assert!(matches!(
-        last,
-        Some(Effect::EmitStreamEvent {
-            event_type: EventType::StreamClosed,
-            ..
-        })
+        [
+            Effect::EmitStreamEvent {
+                event_type: EventType::StreamResetReceived,
+                ..
+            },
+            Effect::NotifyRequestFailed {
+                source: ErrorSource::Stream,
+                ..
+            }
+        ]
     ));
 }
 
@@ -471,13 +478,13 @@ fn test_recv_reset_unknown_error_code_success(mut fixture_stream: Stream) {
     let unknown_code = 0x1234_5678;
     let effects = fixture_stream.recv_reset(unknown_code, 1.0);
 
-    assert_eq!(fixture_stream.state, StreamState::Closed);
+    assert_eq!(fixture_stream.state, StreamState::ResetReceived);
     assert_eq!(fixture_stream.close_code, Some(unknown_code));
 
     assert!(matches!(
         effects.last(),
         Some(Effect::EmitStreamEvent {
-            event_type: EventType::StreamClosed,
+            event_type: EventType::StreamResetReceived,
             ..
         })
     ));
@@ -487,6 +494,21 @@ fn test_recv_reset_unknown_error_code_success(mut fixture_stream: Stream) {
 fn test_recv_reset_with_reserved_error_code(mut fixture_stream: Stream) {
     let effects = fixture_stream.recv_reset(ERR_WT_APPLICATION_ERROR_FIRST, 1.0);
     assert!(!effects.is_empty());
+}
+
+#[rstest]
+fn test_recv_stop_sending_success(mut fixture_stream: Stream) {
+    let error_code = 0x100;
+    let effects = fixture_stream.recv_stop_sending(error_code);
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::EmitStreamEvent {
+            event_type: EventType::StopSendingReceived,
+            error_code: Some(0x100),
+            ..
+        }]
+    ));
 }
 
 #[rstest]
@@ -713,6 +735,7 @@ fn test_write_buffer_full_rejects_success(mut fixture_stream: Stream) {
     assert!(matches!(
         effects.as_slice(),
         [Effect::NotifyRequestFailed {
+            source: ErrorSource::Stream,
             error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
             ..
         }]
@@ -733,7 +756,10 @@ fn test_write_buffer_overflow_error_success(mut fixture_stream: Stream) {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::NotifyRequestFailed { .. }]
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Stream,
+            ..
+        }]
     ));
 
     if let [Effect::NotifyRequestFailed { error_code, .. }] = effects.as_slice() {
@@ -850,7 +876,10 @@ fn test_write_on_closed_stream_fails_success(mut fixture_stream: Stream) {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::NotifyRequestFailed { .. }]
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Stream,
+            ..
+        }]
     ));
 
     if let [Effect::NotifyRequestFailed { error_code, .. }] = effects.as_slice() {

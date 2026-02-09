@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from pywebtransport.types import Buffer, ErrorCode, EventType, Headers, RequestId, SessionId, StreamId
+from pywebtransport.types import Buffer, ConnectionId, ErrorCode, EventType, Headers, RequestId, SessionId, StreamId
 
 __all__: list[str] = []
 
@@ -74,7 +74,7 @@ class TransportConnectionTerminated(ProtocolEvent):
     """Event indicating the underlying QUIC connection was terminated."""
 
     error_code: ErrorCode
-    reason_phrase: str
+    reason: str
 
 
 @dataclass(kw_only=True, frozen=True, slots=True)
@@ -105,17 +105,25 @@ class TransportQuicTimerFired(ProtocolEvent):
 class TransportStreamDataReceived(ProtocolEvent):
     """Event for raw stream data received from QUIC."""
 
+    stream_id: StreamId
     data: Buffer
     end_stream: bool
-    stream_id: StreamId
 
 
 @dataclass(kw_only=True, frozen=True, slots=True)
-class TransportStreamReset(ProtocolEvent):
+class TransportStopSendingReceived(ProtocolEvent):
+    """Event for a stop sending frame received from QUIC."""
+
+    stream_id: StreamId
+    error_code: ErrorCode
+
+
+@dataclass(kw_only=True, frozen=True, slots=True)
+class TransportStreamResetReceived(ProtocolEvent):
     """Event for a stream reset received from QUIC."""
 
-    error_code: ErrorCode
     stream_id: StreamId
+    error_code: ErrorCode
 
 
 @dataclass(kw_only=True, frozen=True, slots=True)
@@ -127,9 +135,9 @@ class H3Event(ProtocolEvent):
 class CapsuleReceived(H3Event):
     """Represent an HTTP Capsule received on a stream."""
 
-    capsule_data: Buffer
-    capsule_type: int
     stream_id: StreamId
+    capsule_type: int
+    capsule_data: Buffer
 
 
 @dataclass(kw_only=True, frozen=True, slots=True)
@@ -143,8 +151,8 @@ class ConnectStreamClosed(H3Event):
 class DatagramReceived(H3Event):
     """Represent a WebTransport datagram received."""
 
-    data: Buffer
     stream_id: StreamId
+    data: Buffer
 
 
 @dataclass(kw_only=True, frozen=True, slots=True)
@@ -156,8 +164,8 @@ class GoawayReceived(H3Event):
 class HeadersReceived(H3Event):
     """Represent a HEADERS frame received on a stream."""
 
-    headers: Headers
     stream_id: StreamId
+    headers: Headers
     stream_ended: bool
 
 
@@ -172,9 +180,9 @@ class SettingsReceived(H3Event):
 class WebTransportStreamDataReceived(H3Event):
     """Represent semantic data received on an established WebTransport stream."""
 
-    data: Buffer
     session_id: SessionId
     stream_id: StreamId
+    data: Buffer
     stream_ended: bool
 
 
@@ -262,8 +270,8 @@ class UserGrantStreamsCredit(UserEvent[None]):
     """User command to manually grant stream credit."""
 
     session_id: SessionId
-    max_streams: int
     is_unidirectional: bool
+    max_streams: int
 
 
 @dataclass(kw_only=True, frozen=True, slots=True)
@@ -300,7 +308,7 @@ class UserSendStreamData(UserEvent[None]):
 
 
 @dataclass(kw_only=True, frozen=True, slots=True)
-class UserStopStream(UserEvent[None]):
+class UserStopSending(UserEvent[None]):
     """User command to stop the receiving side of a stream."""
 
     stream_id: StreamId
@@ -357,6 +365,7 @@ class CreateQuicStream(Effect):
 class EmitConnectionEvent(Effect):
     """Effect to emit an event on the WebTransportConnection."""
 
+    connection_id: ConnectionId
     event_type: EventType
     data: dict[str, Any]
 

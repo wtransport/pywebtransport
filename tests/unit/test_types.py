@@ -58,10 +58,12 @@ class TestEnumerations:
             (EventType.SESSION_REQUEST, "session_request"),
             (EventType.SESSION_STREAMS_BLOCKED, "session_streams_blocked"),
             (EventType.SETTINGS_RECEIVED, "settings_received"),
+            (EventType.STOP_SENDING_RECEIVED, "stop_sending_received"),
             (EventType.STREAM_CLOSED, "stream_closed"),
             (EventType.STREAM_DATA_RECEIVED, "stream_data_received"),
             (EventType.STREAM_ERROR, "stream_error"),
             (EventType.STREAM_OPENED, "stream_opened"),
+            (EventType.STREAM_RESET_RECEIVED, "stream_reset_received"),
             (EventType.TIMEOUT_ERROR, "timeout_error"),
         ],
     )

@@ -23,7 +23,7 @@ from pywebtransport._protocol.events import (
     UserGetStreamDiagnostics,
     UserResetStream,
     UserSendStreamData,
-    UserStopStream,
+    UserStopSending,
     UserStreamRead,
 )
 from pywebtransport.connection import WebTransportConnection
@@ -57,7 +57,7 @@ class TestBaseStream:
 
     @pytest.fixture
     def stream(self, mock_session: MagicMock) -> _BaseStream:
-        return _BaseStream(session=mock_session, stream_id=1)
+        return _BaseStream(session=mock_session, stream_id=1, is_remote=False)
 
     @pytest.mark.asyncio
     async def test_diagnostics_connection_closed_error(self, stream: _BaseStream, mock_protocol: MagicMock) -> None:
@@ -87,6 +87,7 @@ class TestBaseStream:
             "session_id": 100,
             "direction": StreamDirection.BIDIRECTIONAL,
             "state": StreamState.OPEN,
+            "is_peer_initiated": False,
             "created_at": 0.0,
             "bytes_sent": 0,
             "bytes_received": 0,
@@ -98,9 +99,10 @@ class TestBaseStream:
         }
         fut.set_result(data)
 
-        await stream.diagnostics()
+        diag = await stream.diagnostics()
 
         assert isinstance(mock_protocol.send_event.call_args.kwargs["event"], UserGetStreamDiagnostics)
+        assert diag.is_peer_initiated is False
 
     @pytest.mark.asyncio
     async def test_diagnostics_success_no_conversion_needed(
@@ -115,6 +117,7 @@ class TestBaseStream:
             "session_id": 100,
             "direction": StreamDirection.BIDIRECTIONAL,
             "state": StreamState.OPEN,
+            "is_peer_initiated": True,
             "created_at": 0.0,
             "bytes_sent": 0,
             "bytes_received": 0,
@@ -126,7 +129,8 @@ class TestBaseStream:
         }
         fut.set_result(data)
 
-        await stream.diagnostics()
+        diag = await stream.diagnostics()
+        assert diag.is_peer_initiated is True
 
     @pytest.mark.asyncio
     async def test_is_closed(self, stream: _BaseStream) -> None:
@@ -137,6 +141,14 @@ class TestBaseStream:
         stream._cached_state = StreamState.CLOSED
 
         assert stream.is_closed
+
+    @pytest.mark.asyncio
+    async def test_is_remote_property(self, mock_session: MagicMock) -> None:
+        s1 = _BaseStream(session=mock_session, stream_id=1, is_remote=True)
+        assert s1.is_remote is True
+
+        s2 = _BaseStream(session=mock_session, stream_id=2, is_remote=False)
+        assert s2.is_remote is False
 
     @pytest.mark.asyncio
     async def test_on_closed_handler(self, stream: _BaseStream) -> None:
@@ -166,6 +178,7 @@ class TestStreamDiagnostics:
             session_id=100,
             direction=StreamDirection.BIDIRECTIONAL,
             state=StreamState.OPEN,
+            is_peer_initiated=True,
             created_at=100.0,
             bytes_sent=10,
             bytes_received=20,
@@ -178,6 +191,7 @@ class TestStreamDiagnostics:
 
         assert diag.stream_id == 1
         assert diag.state == StreamState.OPEN
+        assert diag.is_peer_initiated is True
 
 
 @pytest.mark.asyncio
@@ -185,7 +199,7 @@ class TestWebTransportReceiveStream(TestBaseStream):
 
     @pytest.fixture
     def stream(self, mock_session: MagicMock) -> WebTransportReceiveStream:
-        return WebTransportReceiveStream(session=mock_session, stream_id=2)
+        return WebTransportReceiveStream(session=mock_session, stream_id=2, is_remote=False)
 
     async def test_aiter(self, stream: WebTransportReceiveStream, mocker: MockerFixture) -> None:
         mocker.patch.object(stream, "read", side_effect=[b"1", b"2", b""])
@@ -378,7 +392,7 @@ class TestWebTransportReceiveStream(TestBaseStream):
 
         assert stream.state == StreamState.RESET_RECEIVED
         event = mock_protocol.send_event.call_args.kwargs["event"]
-        assert isinstance(event, UserStopStream)
+        assert isinstance(event, UserStopSending)
         assert event.error_code == 123
 
     async def test_stop_receiving_no_connection(
@@ -394,7 +408,7 @@ class TestWebTransportSendStream(TestBaseStream):
 
     @pytest.fixture
     def stream(self, mock_session: MagicMock) -> WebTransportSendStream:
-        return WebTransportSendStream(session=mock_session, stream_id=3)
+        return WebTransportSendStream(session=mock_session, stream_id=3, is_remote=False)
 
     async def test_close(self, stream: WebTransportSendStream, mocker: MockerFixture) -> None:
         spy_write = mocker.patch.object(stream, "write", new_callable=mocker.AsyncMock)
@@ -416,11 +430,11 @@ class TestWebTransportSendStream(TestBaseStream):
         await stream.close()
 
     async def test_close_with_error(self, stream: WebTransportSendStream, mocker: MockerFixture) -> None:
-        spy_stop = mocker.patch.object(stream, "stop_sending", new_callable=mocker.AsyncMock)
+        spy_reset = mocker.patch.object(stream, "reset", new_callable=mocker.AsyncMock)
 
         await stream.close(error_code=1)
 
-        spy_stop.assert_awaited_once_with(error_code=1)
+        spy_reset.assert_awaited_once_with(error_code=1)
 
     async def test_context_manager_exit_cancelled(self, stream: WebTransportSendStream, mocker: MockerFixture) -> None:
         spy_close = mocker.patch.object(stream, "close", new_callable=mocker.AsyncMock)
@@ -473,24 +487,24 @@ class TestWebTransportSendStream(TestBaseStream):
     async def test_repr(self, stream: WebTransportSendStream) -> None:  # type: ignore[override]
         assert "WebTransportSendStream" in repr(stream)
 
-    async def test_stop_sending(self, stream: WebTransportSendStream, mock_protocol: MagicMock) -> None:
+    async def test_reset(self, stream: WebTransportSendStream, mock_protocol: MagicMock) -> None:
         fut: asyncio.Future[None] = asyncio.Future()
         mock_protocol.create_request.side_effect = None
         mock_protocol.create_request.return_value = (1, fut)
         fut.set_result(None)
 
-        await stream.stop_sending(error_code=99)
+        await stream.reset(error_code=99)
 
         assert stream.state == StreamState.RESET_SENT
         event = mock_protocol.send_event.call_args.kwargs["event"]
         assert isinstance(event, UserResetStream)
         assert event.error_code == 99
 
-    async def test_stop_sending_no_connection(self, stream: WebTransportSendStream, mock_session: MagicMock) -> None:
+    async def test_reset_no_connection(self, stream: WebTransportSendStream, mock_session: MagicMock) -> None:
         mock_session._connection.return_value = None
 
         with pytest.raises(ConnectionError):
-            await stream.stop_sending()
+            await stream.reset()
 
     async def test_write(self, stream: WebTransportSendStream, mock_protocol: MagicMock) -> None:
         fut: asyncio.Future[None] = asyncio.Future()
@@ -556,7 +570,7 @@ class TestWebTransportStream(TestBaseStream):
 
     @pytest.fixture
     def stream(self, mock_session: MagicMock) -> WebTransportStream:
-        return WebTransportStream(session=mock_session, stream_id=4)
+        return WebTransportStream(session=mock_session, stream_id=4, is_remote=False)
 
     async def test_aiter(self, stream: WebTransportStream, mocker: MockerFixture) -> None:
         mocker.patch.object(stream._reader, "__anext__", side_effect=[b"1", StopAsyncIteration])
@@ -651,19 +665,19 @@ class TestWebTransportStream(TestBaseStream):
 
         assert await stream.readuntil(separator=b"t") == b"ut"
 
+    async def test_delegated_reset(self, stream: WebTransportStream, mocker: MockerFixture) -> None:
+        mocker.patch.object(stream._writer, "reset", new_callable=mocker.AsyncMock)
+
+        await stream.reset(error_code=2)
+
+        cast(MagicMock, stream._writer.reset).assert_awaited_once_with(error_code=2)
+
     async def test_delegated_stop_receiving(self, stream: WebTransportStream, mocker: MockerFixture) -> None:
         mocker.patch.object(stream._reader, "stop_receiving", new_callable=mocker.AsyncMock)
 
         await stream.stop_receiving(error_code=1)
 
         cast(MagicMock, stream._reader.stop_receiving).assert_awaited_once_with(error_code=1)
-
-    async def test_delegated_stop_sending(self, stream: WebTransportStream, mocker: MockerFixture) -> None:
-        mocker.patch.object(stream._writer, "stop_sending", new_callable=mocker.AsyncMock)
-
-        await stream.stop_sending(error_code=2)
-
-        cast(MagicMock, stream._writer.stop_sending).assert_awaited_once_with(error_code=2)
 
     async def test_delegated_write(self, stream: WebTransportStream, mocker: MockerFixture) -> None:
         mocker.patch.object(stream._writer, "write", new_callable=mocker.AsyncMock)

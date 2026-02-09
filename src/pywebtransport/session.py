@@ -25,7 +25,6 @@ from pywebtransport.utils import get_logger
 
 if TYPE_CHECKING:
     from pywebtransport.connection import WebTransportConnection
-    from pywebtransport.stream import StreamType
 
 
 __all__: list[str] = ["SessionDiagnostics", "WebTransportSession"]
@@ -201,7 +200,7 @@ class WebTransportSession:
         connection._protocol.send_event(event=event)
         await future
 
-    async def grant_streams_credit(self, *, max_streams: int, is_unidirectional: bool) -> None:
+    async def grant_streams_credit(self, *, is_unidirectional: bool, max_streams: int) -> None:
         """Manually grant stream flow control credit to the peer."""
         connection = self._connection()
         if connection is None:
@@ -211,8 +210,8 @@ class WebTransportSession:
         event = UserGrantStreamsCredit(
             request_id=request_id,
             session_id=self.session_id,
-            max_streams=max_streams,
             is_unidirectional=is_unidirectional,
+            max_streams=max_streams,
         )
         connection._protocol.send_event(event=event)
         await future
@@ -227,15 +226,6 @@ class WebTransportSession:
         event = UserSendDatagram(request_id=request_id, session_id=self.session_id, data=data)
         connection._protocol.send_event(event=event)
         await future
-
-    def _add_stream_handle(self, *, stream: StreamType, event_data: dict[str, Any]) -> None:
-        """Register an incoming stream and re-emit the STREAM_OPENED event."""
-        logger.debug("Session %s re-emitting STREAM_OPENED for stream %s", self.session_id, stream.stream_id)
-
-        event_payload = event_data.copy()
-        event_payload["stream"] = stream
-
-        self.events.emit_nowait(event_type=EventType.STREAM_OPENED, data=event_payload)
 
     async def _create_stream_internal(self, *, is_unidirectional: bool) -> WebTransportStream | WebTransportSendStream:
         """Internal logic for creating a stream with timeout handling."""

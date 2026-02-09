@@ -72,7 +72,10 @@ fn test_encode_capsule_unidirectional_failure() {
     let res = H3::encode_capsule(stream_id, 1, Bytes::new());
     assert!(matches!(
         res,
-        Err(WebTransportError::H3(Some(ERR_H3_STREAM_CREATION_ERROR), _))
+        Err(WebTransportError::Protocol(
+            Some(ERR_H3_STREAM_CREATION_ERROR),
+            _
+        ))
     ));
 }
 
@@ -103,7 +106,10 @@ fn test_encode_datagram_wrong_stream_type_failure() {
     let res = H3::encode_datagram(stream_id, Bytes::from("d"));
     assert!(matches!(
         res,
-        Err(WebTransportError::H3(Some(ERR_H3_STREAM_CREATION_ERROR), _))
+        Err(WebTransportError::Protocol(
+            Some(ERR_H3_STREAM_CREATION_ERROR),
+            _
+        ))
     ));
 }
 
@@ -240,7 +246,7 @@ fn test_parse_settings_duplicate_id_failure() {
     let res = parse_settings(&buf.freeze());
     assert!(matches!(
         res,
-        Err(WebTransportError::H3(Some(ERR_H3_SETTINGS_ERROR), _))
+        Err(WebTransportError::Protocol(Some(ERR_H3_SETTINGS_ERROR), _))
     ));
 }
 
@@ -251,7 +257,7 @@ fn test_parse_settings_reserved_id_failure() {
     let res = parse_settings(&buf.freeze());
     assert!(matches!(
         res,
-        Err(WebTransportError::H3(Some(ERR_H3_SETTINGS_ERROR), _))
+        Err(WebTransportError::Protocol(Some(ERR_H3_SETTINGS_ERROR), _))
     ));
 }
 
@@ -1008,6 +1014,69 @@ fn test_recv_uni_stream_data_wt_stream_unknown_session_ignored() {
 }
 
 #[test]
+fn test_recv_uni_stream_duplicate_control_failure() {
+    let mut h3 = create_h3(true);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+
+    h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id: 3,
+            data: Bytes::from(vec![0x00]),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    let (_, effects) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id: 7,
+            data: Bytes::from(vec![0x00]),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
+        assert_eq!(*error_code, ERR_H3_STREAM_CREATION_ERROR);
+    } else {
+        assert_eq!(
+            effects.len(),
+            0,
+            "Expected CloseQuicConnection for duplicate control stream"
+        );
+    }
+}
+
+#[test]
+fn test_recv_uni_stream_push_rejected() {
+    let mut h3 = create_h3(true);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+
+    let (_, effects) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id: 7,
+            data: Bytes::from(vec![0x01]),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
+        assert_eq!(*error_code, ERR_H3_STREAM_CREATION_ERROR);
+    } else {
+        assert_eq!(
+            effects.len(),
+            0,
+            "Expected CloseQuicConnection for push stream"
+        );
+    }
+}
+
+#[test]
 fn test_recv_uni_stream_qpack_decoder_feed() {
     let mut h3 = create_h3(true);
     let mock = MockConnectionLayout {
@@ -1221,12 +1290,33 @@ fn test_recv_wt_uni_stream_missing_id_buffer() {
 }
 
 #[test]
+fn test_set_local_stream_ids_duplicate_failure() {
+    let mut h3 = create_h3(true);
+    let res = h3.set_local_stream_ids(2, 2, 6);
+    assert!(matches!(
+        res,
+        Err(WebTransportError::Protocol(Some(ERR_LIB_INTERNAL_ERROR), _))
+    ));
+}
+
+#[test]
 fn test_set_local_stream_ids_invalid_id_failure() {
     let mut h3 = create_h3(true);
     let res = h3.set_local_stream_ids(0, 6, 10);
     assert!(matches!(
         res,
-        Err(WebTransportError::H3(Some(ERR_H3_ID_ERROR), _))
+        Err(WebTransportError::Protocol(Some(ERR_H3_ID_ERROR), _))
+    ));
+}
+
+#[test]
+fn test_set_local_stream_ids_reinit_failure() {
+    let mut h3 = create_h3(true);
+    assert!(matches!(h3.set_local_stream_ids(2, 6, 10), Ok(())));
+    let res = h3.set_local_stream_ids(14, 18, 22);
+    assert!(matches!(
+        res,
+        Err(WebTransportError::Protocol(Some(ERR_LIB_INTERNAL_ERROR), _))
     ));
 }
 
@@ -1302,7 +1392,7 @@ fn test_validate_request_headers_duplicate_pseudo() {
     let res = validate_request_headers(&headers);
     assert!(matches!(
         res,
-        Err(WebTransportError::H3(Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(WebTransportError::Protocol(Some(ERR_H3_MESSAGE_ERROR), _))
     ));
 }
 
@@ -1312,7 +1402,7 @@ fn test_validate_request_headers_missing_pseudo_failure() {
     let res = validate_request_headers(&headers);
     assert!(matches!(
         res,
-        Err(WebTransportError::H3(Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(WebTransportError::Protocol(Some(ERR_H3_MESSAGE_ERROR), _))
     ));
 }
 
@@ -1326,7 +1416,7 @@ fn test_validate_request_headers_pseudo_after_regular_failure() {
     let res = validate_request_headers(&headers);
     assert!(matches!(
         res,
-        Err(WebTransportError::H3(Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(WebTransportError::Protocol(Some(ERR_H3_MESSAGE_ERROR), _))
     ));
 }
 
@@ -1339,7 +1429,7 @@ fn test_validate_request_headers_pseudo_order() {
     let res = validate_request_headers(&headers);
     assert!(matches!(
         res,
-        Err(WebTransportError::H3(Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(WebTransportError::Protocol(Some(ERR_H3_MESSAGE_ERROR), _))
     ));
 }
 
@@ -1349,7 +1439,7 @@ fn test_validate_request_headers_unknown_pseudo() {
     let res = validate_request_headers(&headers);
     assert!(matches!(
         res,
-        Err(WebTransportError::H3(Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(WebTransportError::Protocol(Some(ERR_H3_MESSAGE_ERROR), _))
     ));
 }
 
@@ -1359,7 +1449,7 @@ fn test_validate_request_headers_unknown_pseudo_failure() {
     let res = validate_request_headers(&headers);
     assert!(matches!(
         res,
-        Err(WebTransportError::H3(Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(WebTransportError::Protocol(Some(ERR_H3_MESSAGE_ERROR), _))
     ));
 }
 
@@ -1372,7 +1462,7 @@ fn test_validate_response_headers_duplicate_status() {
     let res = validate_response_headers(&headers);
     assert!(matches!(
         res,
-        Err(WebTransportError::H3(Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(WebTransportError::Protocol(Some(ERR_H3_MESSAGE_ERROR), _))
     ));
 }
 
@@ -1382,7 +1472,7 @@ fn test_validate_response_headers_missing_status() {
     let res = validate_response_headers(&headers);
     assert!(matches!(
         res,
-        Err(WebTransportError::H3(Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(WebTransportError::Protocol(Some(ERR_H3_MESSAGE_ERROR), _))
     ));
 }
 
@@ -1392,6 +1482,6 @@ fn test_validate_response_headers_missing_status_failure() {
     let res = validate_response_headers(&headers);
     assert!(matches!(
         res,
-        Err(WebTransportError::H3(Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(WebTransportError::Protocol(Some(ERR_H3_MESSAGE_ERROR), _))
     ));
 }

@@ -134,6 +134,7 @@ if __name__ == "__main__":
 - **/echo**: Bidirectional stream and datagram reflection.
 - **/stats**: Current session statistics and negotiated parameters.
 - **/status**: Global server health and aggregate metrics.
+- **/webtransport/devious-baton**: Devious Baton protocol state transition validation.
 
 ## Sponsors
 

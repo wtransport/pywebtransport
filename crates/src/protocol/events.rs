@@ -5,7 +5,8 @@ use std::collections::HashMap;
 use bytes::Bytes;
 
 use crate::common::types::{
-    ConnectionId, ErrorCode, EventType, Headers, RequestId, SessionId, StreamDirection, StreamId,
+    ConnectionId, ErrorCode, ErrorSource, EventType, Headers, RequestId, SessionId,
+    StreamDirection, StreamId,
 };
 
 // Protocol state machine input events.
@@ -41,7 +42,7 @@ pub(crate) enum ProtocolEvent {
     },
     TransportConnectionTerminated {
         error_code: ErrorCode,
-        reason_phrase: String,
+        reason: String,
     },
     TransportDatagramFrameReceived {
         data: Bytes,
@@ -52,39 +53,43 @@ pub(crate) enum ProtocolEvent {
     },
     TransportQuicTimerFired,
     TransportStreamDataReceived {
+        stream_id: StreamId,
         data: Bytes,
         end_stream: bool,
-        stream_id: StreamId,
     },
-    TransportStreamReset {
-        error_code: ErrorCode,
+    TransportStopSendingReceived {
         stream_id: StreamId,
+        error_code: ErrorCode,
+    },
+    TransportStreamResetReceived {
+        stream_id: StreamId,
+        error_code: ErrorCode,
     },
     CapsuleReceived {
-        capsule_data: Bytes,
-        capsule_type: u64,
         stream_id: StreamId,
+        capsule_type: u64,
+        capsule_data: Bytes,
     },
     ConnectStreamClosed {
         stream_id: StreamId,
     },
     DatagramReceived {
-        data: Bytes,
         stream_id: StreamId,
+        data: Bytes,
     },
     GoawayReceived,
     HeadersReceived {
-        headers: Headers,
         stream_id: StreamId,
+        headers: Headers,
         stream_ended: bool,
     },
     SettingsReceived {
         settings: HashMap<u64, u64>,
     },
     WebTransportStreamDataReceived {
-        data: Bytes,
         session_id: SessionId,
         stream_id: StreamId,
+        data: Bytes,
         stream_ended: bool,
     },
     ConnectionClose {
@@ -134,8 +139,8 @@ pub(crate) enum ProtocolEvent {
     UserGrantStreamsCredit {
         request_id: RequestId,
         session_id: SessionId,
-        max_streams: u64,
         is_unidirectional: bool,
+        max_streams: u64,
     },
     UserRejectSession {
         request_id: RequestId,
@@ -158,7 +163,7 @@ pub(crate) enum ProtocolEvent {
         data: Bytes,
         end_stream: bool,
     },
-    UserStopStream {
+    UserStopSending {
         request_id: RequestId,
         stream_id: StreamId,
         error_code: ErrorCode,
@@ -191,29 +196,31 @@ pub(crate) enum Effect {
         is_unidirectional: bool,
     },
     EmitConnectionEvent {
-        event_type: EventType,
         connection_id: ConnectionId,
+        event_type: EventType,
         error_code: Option<ErrorCode>,
         reason: Option<String>,
     },
     EmitSessionEvent {
         session_id: SessionId,
         event_type: EventType,
-        code: Option<ErrorCode>,
-        data: Option<Bytes>,
+        path: Option<String>,
         headers: Option<Headers>,
+        data: Option<Bytes>,
         is_unidirectional: Option<bool>,
         max_data: Option<u64>,
         max_streams: Option<u64>,
-        path: Option<String>,
         ready_at: Option<f64>,
+        error_code: Option<ErrorCode>,
         reason: Option<String>,
     },
     EmitStreamEvent {
         stream_id: StreamId,
         event_type: EventType,
-        direction: Option<StreamDirection>,
         session_id: Option<SessionId>,
+        direction: Option<StreamDirection>,
+        is_peer_initiated: Option<bool>,
+        error_code: Option<ErrorCode>,
     },
     LogH3Frame {
         category: String,
@@ -226,6 +233,7 @@ pub(crate) enum Effect {
     },
     NotifyRequestFailed {
         request_id: RequestId,
+        source: ErrorSource,
         error_code: Option<ErrorCode>,
         reason: String,
     },

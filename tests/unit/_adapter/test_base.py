@@ -341,9 +341,9 @@ class TestWebTransportCommonProtocol:
         cb = MagicMock()
         protocol.set_status_callback(callback=cb)
         effects: list[Effect] = [
-            EmitConnectionEvent(event_type=cast(EventType, "conn"), data={}),
-            EmitSessionEvent(event_type=cast(EventType, "sess"), session_id=0, data={}),
-            EmitStreamEvent(event_type=cast(EventType, "stream"), stream_id=0, data={}),
+            EmitConnectionEvent(connection_id="conn-1", event_type=cast(EventType, "conn"), data={}),
+            EmitSessionEvent(session_id=0, event_type=cast(EventType, "sess"), data={}),
+            EmitStreamEvent(stream_id=0, event_type=cast(EventType, "stream"), data={}),
             cast(Effect, InternalReturnStreamData(stream_id=0, data=b"data")),
         ]
 
@@ -356,9 +356,9 @@ class TestWebTransportCommonProtocol:
     def test_process_single_effect_emit_events_no_callback(self, protocol: WebTransportCommonProtocol) -> None:
         protocol.set_status_callback(callback=cast(Any, None))
         effects: list[Effect] = [
-            EmitConnectionEvent(event_type=cast(EventType, "conn"), data={}),
-            EmitSessionEvent(event_type=cast(EventType, "sess"), session_id=0, data={}),
-            EmitStreamEvent(event_type=cast(EventType, "stream"), stream_id=0, data={}),
+            EmitConnectionEvent(connection_id="conn-1", event_type=cast(EventType, "conn"), data={}),
+            EmitSessionEvent(session_id=0, event_type=cast(EventType, "sess"), data={}),
+            EmitStreamEvent(stream_id=0, event_type=cast(EventType, "stream"), data={}),
         ]
 
         for effect in effects:
@@ -451,12 +451,13 @@ class TestWebTransportCommonProtocol:
         spy_handshake.assert_called_once()
 
     def test_quic_event_received_mapping(self, protocol: WebTransportCommonProtocol) -> None:
-        from aioquic.quic.events import DatagramFrameReceived, StreamDataReceived, StreamReset
+        from aioquic.quic.events import DatagramFrameReceived, StopSendingReceived, StreamDataReceived, StreamReset
 
         events = [
             DatagramFrameReceived(data=b"dg"),
-            StreamDataReceived(data=b"data", end_stream=False, stream_id=0),
-            StreamReset(error_code=0, stream_id=0),
+            StreamDataReceived(stream_id=0, data=b"data", end_stream=False),
+            StreamReset(stream_id=0, error_code=0),
+            StopSendingReceived(stream_id=0, error_code=0),
         ]
         handle_event_mock = cast(MagicMock, protocol._engine.handle_event)
         handle_event_mock.return_value = []
@@ -464,7 +465,7 @@ class TestWebTransportCommonProtocol:
         for event in events:
             protocol.quic_event_received(event=event)
 
-        assert handle_event_mock.call_count == 3
+        assert handle_event_mock.call_count == 4
 
     def test_quic_event_received_terminated(self, protocol: WebTransportCommonProtocol) -> None:
         from aioquic.quic.events import ConnectionTerminated

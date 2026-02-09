@@ -11,6 +11,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(No planned changes for the next release yet.)_
 
+## [0.13.0] - 2026-02-09
+
+This release establishes **Full Peer Symmetry**, enabling both clients and servers to initiate arbitrary streams, and introduces a **Modernized Error Architecture** that strictly decouples error origins for precise exception handling. It also rectifies critical QUIC flow control semantics regarding stream termination and hardens the HTTP/3 state machine against initialization race conditions.
+
+### Added
+
+- **Server-Initiated Streams**: Removed role-based constraints in the protocol engine, enabling servers to actively initiate both bidirectional and unidirectional streams.
+- **Error Source Architecture**: Introduced the `ErrorSource` enumeration to categorize errors by their architectural origin (Connection, Session, Stream), ensuring precise mapping to Python exceptions across the FFI boundary.
+- **Stream Metadata**: Injected `is_peer_initiated` metadata into stream state entities to explicitly track ownership and directionality.
+- **Interop Endpoint**: Added the `/webtransport/devious-baton` endpoint to the interoperability server to validate complex flow control interactions and state retention.
+- **Compliance Client**: Added a dedicated compliance client targeting the "Devious Baton" endpoint to verify server-initiated stream lifecycles and complex flow control scenarios.
+
+### Changed
+
+- **Stream Reset API**: Renamed `WebTransportSendStream.stop_sending()` to `reset()` to strictly align with the QUIC `RESET_STREAM` frame semantics. **Breaking Change**: Applications relying on the previous method name must be updated.
+- **H3 State Validation**: Implemented strict uniqueness validation for local infrastructure stream IDs within the H3 engine to prevent state corruption.
+- **Atomic Stream Allocation**: Enforced atomic stream ID allocation in the adapter layer to eliminate initialization race conditions during the handshake phase.
+- **Error Propagation**: Updated the FFI conversion layer to dynamically map Rust `ErrorSource` variants to specific Python exceptions, resolving ambiguity in error reporting.
+
+### Fixed
+
+- **Stream Termination & Error Locking**: Implemented a runtime patch for the underlying transport dependency. This fixes a protocol violation where terminating a finished stream could trigger an illegal `RESET_STREAM`, and simultaneously unlocks the error code handling, allowing applications to respond to `STOP_SENDING` with custom error codes instead of being locked to `NO_ERROR`.
+- **Capsule Encoding**: Corrected the error code encoding for the session termination capsule to use `VarInt` representation, complying with HTTP/3 specifications.
+- **Stream Read Errors**: Fixed error code erasure in the stream read path by correctly propagating application-specific close codes instead of generic state errors.
+- **Session Termination**: Optimized clean session termination logic to utilize `FIN` frames where applicable, reducing protocol overhead.
+
 ## [0.12.1] - 2026-02-07
 
 This is a maintenance release focused on stabilizing the CI/CD infrastructure and ensuring reproducible builds across all supported platforms. It standardizes the build environment configuration for mixed Python/Rust workflows and resolves upstream deprecation warnings in the deployment pipeline.
@@ -712,7 +738,8 @@ This is a major release focused on enhancing runtime safety and modernizing the 
 - cryptography (>=45.0.4,<46.0.0) for SSL/TLS operations
 - typing-extensions (>=4.14.0,<5.0.0) for Python <3.10 support
 
-[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.12.1...HEAD
+[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/wtransport/pywebtransport/compare/v0.12.1...v0.13.0
 [0.12.1]: https://github.com/wtransport/pywebtransport/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/wtransport/pywebtransport/compare/v0.11.0...v0.12.0
 [0.11.1]: https://github.com/wtransport/pywebtransport/compare/v0.11.0...v0.11.1

@@ -6,7 +6,9 @@ use bytes::Bytes;
 use rstest::*;
 
 use super::*;
-use crate::common::types::{ErrorCode, EventType, Headers, RequestId, SessionId, StreamId};
+use crate::common::types::{
+    ErrorCode, ErrorSource, EventType, Headers, RequestId, SessionId, StreamDirection, StreamId,
+};
 
 #[fixture]
 fn fixture_bytes() -> Bytes {
@@ -16,6 +18,11 @@ fn fixture_bytes() -> Bytes {
 #[fixture]
 fn fixture_error_code() -> ErrorCode {
     404
+}
+
+#[fixture]
+fn fixture_error_source() -> ErrorSource {
+    ErrorSource::Stream
 }
 
 #[fixture]
@@ -46,28 +53,28 @@ fn test_effect_emit_session_event_optional_fields_none_success(fixture_session_i
     let effect = Effect::EmitSessionEvent {
         session_id: fixture_session_id,
         event_type: EventType::SessionClosed,
-        code: None,
-        data: None,
+        path: None,
         headers: None,
+        data: None,
         is_unidirectional: None,
         max_data: None,
         max_streams: None,
-        path: None,
         ready_at: None,
+        error_code: None,
         reason: None,
     };
 
     assert!(matches!(effect, Effect::EmitSessionEvent { .. }));
 
     if let Effect::EmitSessionEvent {
-        code,
         headers,
+        error_code,
         reason,
         ..
     } = effect
     {
-        assert!(code.is_none());
         assert!(headers.is_none());
+        assert!(error_code.is_none());
         assert!(reason.is_none());
     }
 }
@@ -82,29 +89,57 @@ fn test_effect_emit_session_event_optional_fields_some_success(
     let effect = Effect::EmitSessionEvent {
         session_id: fixture_session_id,
         event_type: EventType::SessionReady,
-        code: Some(fixture_error_code),
-        data: Some(fixture_bytes),
+        path: Some("/test".to_owned()),
         headers: Some(fixture_headers),
+        data: Some(fixture_bytes),
         is_unidirectional: Some(true),
         max_data: Some(1024),
         max_streams: Some(10),
-        path: Some("/test".to_owned()),
         ready_at: Some(1.5),
+        error_code: Some(fixture_error_code),
         reason: Some("OK".to_owned()),
     };
 
     assert!(matches!(effect, Effect::EmitSessionEvent { .. }));
 
     if let Effect::EmitSessionEvent {
-        max_data,
         path,
+        max_data,
         ready_at,
         ..
     } = effect
     {
-        assert_eq!(max_data, Some(1024));
         assert_eq!(path, Some("/test".to_owned()));
+        assert_eq!(max_data, Some(1024));
         assert!(ready_at.is_some());
+    }
+}
+
+#[rstest]
+fn test_effect_emit_stream_event_full_fields_success(
+    fixture_stream_id: StreamId,
+    fixture_session_id: SessionId,
+    fixture_error_code: ErrorCode,
+) {
+    let effect = Effect::EmitStreamEvent {
+        stream_id: fixture_stream_id,
+        event_type: EventType::StreamOpened,
+        direction: Some(StreamDirection::Bidirectional),
+        session_id: Some(fixture_session_id),
+        is_peer_initiated: Some(true),
+        error_code: Some(fixture_error_code),
+    };
+
+    assert!(matches!(effect, Effect::EmitStreamEvent { .. }));
+
+    if let Effect::EmitStreamEvent {
+        is_peer_initiated,
+        error_code,
+        ..
+    } = effect
+    {
+        assert_eq!(is_peer_initiated, Some(true));
+        assert_eq!(error_code, Some(fixture_error_code));
     }
 }
 
@@ -120,6 +155,26 @@ fn test_effect_log_h3_frame_structure_success() {
 
     if let Effect::LogH3Frame { category, .. } = effect {
         assert_eq!(category, "TRANSPORT");
+    }
+}
+
+#[rstest]
+fn test_effect_notify_request_failed_structure_success(
+    fixture_request_id: RequestId,
+    fixture_error_source: ErrorSource,
+    fixture_error_code: ErrorCode,
+) {
+    let effect = Effect::NotifyRequestFailed {
+        request_id: fixture_request_id,
+        source: fixture_error_source,
+        error_code: Some(fixture_error_code),
+        reason: "Failed".to_owned(),
+    };
+
+    assert!(matches!(effect, Effect::NotifyRequestFailed { .. }));
+
+    if let Effect::NotifyRequestFailed { source, .. } = effect {
+        assert_eq!(source, fixture_error_source);
     }
 }
 
@@ -235,7 +290,7 @@ fn test_protocol_event_transport_connection_terminated_properties_success(
 
     let event = ProtocolEvent::TransportConnectionTerminated {
         error_code: fixture_error_code,
-        reason_phrase: reason.clone(),
+        reason: reason.clone(),
     };
 
     assert!(matches!(
@@ -245,12 +300,44 @@ fn test_protocol_event_transport_connection_terminated_properties_success(
 
     if let ProtocolEvent::TransportConnectionTerminated {
         error_code,
-        reason_phrase,
+        reason: r,
     } = event
     {
         assert_eq!(error_code, fixture_error_code);
-        assert_eq!(reason_phrase, reason);
+        assert_eq!(r, reason);
     }
+}
+
+#[rstest]
+fn test_protocol_event_transport_stop_sending_received_success(
+    fixture_stream_id: StreamId,
+    fixture_error_code: ErrorCode,
+) {
+    let event = ProtocolEvent::TransportStopSendingReceived {
+        stream_id: fixture_stream_id,
+        error_code: fixture_error_code,
+    };
+
+    let debug_output = format!("{event:?}");
+    assert!(debug_output.contains("TransportStopSendingReceived"));
+    assert!(debug_output.contains(&fixture_stream_id.to_string()));
+}
+
+#[rstest]
+fn test_protocol_event_user_stop_sending_success(
+    fixture_request_id: RequestId,
+    fixture_stream_id: StreamId,
+    fixture_error_code: ErrorCode,
+) {
+    let event = ProtocolEvent::UserStopSending {
+        request_id: fixture_request_id,
+        stream_id: fixture_stream_id,
+        error_code: fixture_error_code,
+    };
+
+    let debug_output = format!("{event:?}");
+    assert!(debug_output.contains("UserStopSending"));
+    assert!(debug_output.contains(&fixture_request_id.to_string()));
 }
 
 #[rstest]

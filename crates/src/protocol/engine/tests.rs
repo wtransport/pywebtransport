@@ -7,7 +7,7 @@ use super::*;
 use crate::common::constants::{
     ERR_LIB_CONNECTION_STATE_ERROR, ERR_LIB_STREAM_STATE_ERROR, H3_STREAM_TYPE_CONTROL,
 };
-use crate::common::types::ConnectionState;
+use crate::common::types::{ConnectionState, ErrorSource};
 use crate::protocol::events::{Effect, ProtocolEvent};
 use crate::protocol::utils::write_varint;
 
@@ -159,8 +159,8 @@ fn test_client_receives_settings_via_raw_data(mut fixture_engine_client: WebTran
     }
 
     let event = ProtocolEvent::TransportStreamDataReceived {
-        data: data.freeze(),
         stream_id: 3,
+        data: data.freeze(),
         end_stream: false,
     };
 
@@ -203,7 +203,15 @@ fn test_connection_close_event_fails_pending_actions(
 
     let failures = effects
         .iter()
-        .filter(|e| matches!(e, Effect::NotifyRequestFailed { .. }))
+        .filter(|e| {
+            matches!(
+                e,
+                Effect::NotifyRequestFailed {
+                    source: ErrorSource::Connection,
+                    ..
+                }
+            )
+        })
         .count();
     assert_eq!(failures, 2);
     assert!(fixture_engine_client.pending_user_actions.is_empty());
@@ -341,7 +349,7 @@ fn test_fail_pending_actions_on_termination(mut fixture_engine_client: WebTransp
 
     let term_event = ProtocolEvent::TransportConnectionTerminated {
         error_code: 0,
-        reason_phrase: "Stop".to_owned(),
+        reason: "Stop".to_owned(),
     };
     let effects = fixture_engine_client.handle_event(term_event, 1.0);
 
@@ -351,6 +359,7 @@ fn test_fail_pending_actions_on_termination(mut fixture_engine_client: WebTransp
         matches!(
             e,
             Effect::NotifyRequestFailed {
+                source: ErrorSource::Connection,
                 error_code: Some(ec),
                 ..
             } if *ec == ERR_LIB_CONNECTION_STATE_ERROR
@@ -406,8 +415,8 @@ fn test_handle_internal_events(mut fixture_engine_server: WebTransportEngine) {
         },
         ProtocolEvent::InternalFailH3Session {
             request_id: MOCK_REQUEST_ID,
-            reason: "fail".to_owned(),
             error_code: None,
+            reason: "fail".to_owned(),
         },
         ProtocolEvent::InternalFailQuicStream {
             request_id: MOCK_REQUEST_ID,
@@ -447,15 +456,15 @@ fn test_handle_transport_delegation(mut fixture_engine_server: WebTransportEngin
 #[rstest]
 fn test_handle_transport_delegation_coverage(mut fixture_engine_server: WebTransportEngine) {
     let capsule_event = ProtocolEvent::CapsuleReceived {
-        capsule_data: Bytes::from_static(b""),
-        capsule_type: 0,
         stream_id: 0,
+        capsule_type: 0,
+        capsule_data: Bytes::from_static(b""),
     };
     fixture_engine_server.handle_event(capsule_event, 0.0);
 
     let datagram_event = ProtocolEvent::DatagramReceived {
-        data: Bytes::from_static(b"d"),
         stream_id: 0,
+        data: Bytes::from_static(b"d"),
     };
     fixture_engine_server.handle_event(datagram_event, 0.0);
 
@@ -470,7 +479,11 @@ fn test_handle_transport_delegation_coverage(mut fixture_engine_server: WebTrans
 fn test_handle_transport_events(mut fixture_engine_server: WebTransportEngine) {
     let events = vec![
         ProtocolEvent::TransportQuicTimerFired,
-        ProtocolEvent::TransportStreamReset {
+        ProtocolEvent::TransportStreamResetReceived {
+            stream_id: 0,
+            error_code: 0,
+        },
+        ProtocolEvent::TransportStopSendingReceived {
             stream_id: 0,
             error_code: 0,
         },
@@ -484,9 +497,9 @@ fn test_handle_transport_events(mut fixture_engine_server: WebTransportEngine) {
             stream_ended: false,
         },
         ProtocolEvent::WebTransportStreamDataReceived {
-            data: Bytes::new(),
             session_id: 0,
             stream_id: 4,
+            data: Bytes::new(),
             stream_ended: false,
         },
         ProtocolEvent::GoawayReceived,
@@ -535,8 +548,8 @@ fn test_handle_user_passthrough_events(mut fixture_engine_server: WebTransportEn
         ProtocolEvent::UserGrantStreamsCredit {
             request_id: 8,
             session_id: 0,
-            max_streams: 10,
             is_unidirectional: false,
+            max_streams: 10,
         },
         ProtocolEvent::UserRejectSession {
             request_id: 9,
@@ -559,7 +572,7 @@ fn test_handle_user_passthrough_events(mut fixture_engine_server: WebTransportEn
             data: Bytes::from_static(b"s"),
             end_stream: false,
         },
-        ProtocolEvent::UserStopStream {
+        ProtocolEvent::UserStopSending {
             request_id: 13,
             stream_id: 4,
             error_code: 0,
@@ -581,11 +594,13 @@ fn test_handle_user_passthrough_events(mut fixture_engine_server: WebTransportEn
         stream_id: 999,
     };
     let effects = fixture_engine_server.handle_event(diag_fail_event, 0.0);
-    assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::NotifyRequestFailed { .. }))
-    );
+    assert!(effects.iter().any(|e| matches!(
+        e,
+        Effect::NotifyRequestFailed {
+            source: ErrorSource::Stream,
+            ..
+        }
+    )));
 }
 
 #[rstest]
@@ -705,7 +720,7 @@ fn test_server_immediate_actions(mut fixture_engine_server: WebTransportEngine) 
 #[rstest]
 #[case::reset(ProtocolEvent::UserResetStream { request_id: 1, stream_id: 999, error_code: 0 })]
 #[case::send(ProtocolEvent::UserSendStreamData { request_id: 1, stream_id: 999, data: Bytes::new(), end_stream: false })]
-#[case::stop(ProtocolEvent::UserStopStream { request_id: 1, stream_id: 999, error_code: 0 })]
+#[case::stop(ProtocolEvent::UserStopSending { request_id: 1, stream_id: 999, error_code: 0 })]
 #[case::read(ProtocolEvent::UserStreamRead { request_id: 1, stream_id: 999, max_bytes: 10 })]
 fn test_user_stream_actions_not_found(
     mut fixture_engine_server: WebTransportEngine,
@@ -717,6 +732,7 @@ fn test_user_stream_actions_not_found(
         matches!(
             e,
             Effect::NotifyRequestFailed {
+                source: ErrorSource::Stream,
                 error_code: Some(ec),
                 ..
             } if *ec == ERR_LIB_STREAM_STATE_ERROR
@@ -770,7 +786,7 @@ fn test_user_stream_operations_success(mut fixture_engine_server: WebTransportEn
             stream_id: 4,
             error_code: 100,
         },
-        ProtocolEvent::UserStopStream {
+        ProtocolEvent::UserStopSending {
             request_id: 2,
             stream_id: 5,
             error_code: 200,
@@ -795,6 +811,7 @@ fn test_user_stream_operations_success(mut fixture_engine_server: WebTransportEn
             matches!(
                 e,
                 Effect::NotifyRequestFailed {
+                    source: ErrorSource::Stream,
                     error_code: Some(ec),
                     ..
                 } if *ec == ERR_LIB_STREAM_STATE_ERROR

@@ -1,3 +1,5 @@
+"""Unit tests for the pywebtransport.connection module."""
+
 import asyncio
 import weakref
 from typing import Any, cast
@@ -544,7 +546,7 @@ class TestWebTransportConnection:
         mock_send = mocker.patch("pywebtransport.connection.WebTransportSendStream", return_value=mocker.Mock())
         mock_recv = mocker.patch("pywebtransport.connection.WebTransportReceiveStream", return_value=mocker.Mock())
 
-        data = {"stream_id": 10, "session_id": 1, "direction": direction}
+        data = {"stream_id": 10, "session_id": 1, "direction": direction, "is_remote": True}
 
         connection._notify_owner(EventType.STREAM_OPENED, data)
 
@@ -552,11 +554,11 @@ class TestWebTransportConnection:
         cast(MagicMock, session_handle.events.emit_nowait).assert_called()
 
         if direction == StreamDirection.BIDIRECTIONAL:
-            mock_bidi.assert_called_once()
+            mock_bidi.assert_called_once_with(session=session_handle, stream_id=10, is_remote=True)
         elif direction == StreamDirection.SEND_ONLY:
-            mock_send.assert_called_once()
+            mock_send.assert_called_once_with(session=session_handle, stream_id=10, is_remote=True)
         elif direction == StreamDirection.RECEIVE_ONLY:
-            mock_recv.assert_called_once()
+            mock_recv.assert_called_once_with(session=session_handle, stream_id=10, is_remote=True)
 
     def test_handle_stream_event_opened_invalid_direction(
         self, connection: WebTransportConnection, mocker: MockerFixture
@@ -565,7 +567,7 @@ class TestWebTransportConnection:
         connection._session_handles[1] = session_handle
         spy_logger = mocker.patch("pywebtransport.connection.logger")
 
-        data = {"stream_id": 10, "session_id": 1, "direction": 999}
+        data = {"stream_id": 10, "session_id": 1, "direction": 999, "is_remote": False}
 
         connection._notify_owner(EventType.STREAM_OPENED, data)
 
@@ -612,3 +614,30 @@ class TestWebTransportConnection:
 
     def test_handle_stream_event_dispatch_unknown_type(self, connection: WebTransportConnection) -> None:
         connection._handle_stream_event(event_type=EventType.DATAGRAM_RECEIVED, data={"stream_id": 1})
+
+    @pytest.mark.parametrize(
+        "event_type",
+        [EventType.STOP_SENDING_RECEIVED, EventType.STREAM_RESET_RECEIVED],
+    )
+    def test_handle_stream_event_stop_sending_reset(
+        self, connection: WebTransportConnection, mocker: MockerFixture, event_type: EventType
+    ) -> None:
+        stream_handle = mocker.Mock()
+        stream_handle.events = mocker.Mock()
+        connection._stream_handles[10] = stream_handle
+
+        data = {"stream_id": 10, "error_code": 123}
+        connection._notify_owner(event_type, data)
+
+        cast(MagicMock, stream_handle.events.emit_nowait).assert_called_with(event_type=event_type, data=data)
+
+    def test_handle_stream_event_stop_sending_reset_missing(
+        self, connection: WebTransportConnection, mocker: MockerFixture
+    ) -> None:
+        spy_logger = mocker.patch("pywebtransport.connection.logger")
+        data = {"stream_id": 999}
+        connection._notify_owner(EventType.STOP_SENDING_RECEIVED, data)
+
+        spy_logger.debug.assert_called_with(
+            "Received %s for unknown or closed stream %d", EventType.STOP_SENDING_RECEIVED, 999
+        )

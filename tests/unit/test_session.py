@@ -29,7 +29,7 @@ from pywebtransport._protocol.events import (
 )
 from pywebtransport.connection import WebTransportConnection
 from pywebtransport.session import SessionDiagnostics
-from pywebtransport.types import EventType, SessionState
+from pywebtransport.types import SessionState
 
 
 class TestSessionDiagnostics:
@@ -107,19 +107,6 @@ class TestWebTransportSession:
         return WebTransportSession(
             connection=mock_connection, session_id=1, path="/chat", headers={"User-Agent": "TestClient"}
         )
-
-    def test_add_stream_handle_emits_event(self, session: WebTransportSession, mocker: MockerFixture) -> None:
-        mock_stream = mocker.Mock(spec=WebTransportStream)
-        mock_stream.stream_id = 1
-        mock_emit = mocker.patch.object(session.events, "emit_nowait")
-
-        session._add_stream_handle(stream=mock_stream, event_data={"a": 1})
-
-        mock_emit.assert_called_once()
-        call_args = mock_emit.call_args[1]
-        assert call_args["event_type"] == EventType.STREAM_OPENED
-        assert call_args["data"]["stream"] is mock_stream
-        assert call_args["data"]["a"] == 1
 
     @pytest.mark.asyncio
     async def test_close_already_closed(self, session: WebTransportSession, mock_protocol: MagicMock) -> None:
@@ -384,7 +371,7 @@ class TestWebTransportSession:
         mock_protocol.create_request.return_value = (1, fut)
         fut.set_result(None)
 
-        await session.grant_streams_credit(max_streams=5, is_unidirectional=True)
+        await session.grant_streams_credit(is_unidirectional=True, max_streams=5)
 
         event = mock_protocol.send_event.call_args[1]["event"]
         assert isinstance(event, UserGrantStreamsCredit)
@@ -413,7 +400,7 @@ class TestWebTransportSession:
             await session.grant_data_credit(max_data=1)
 
         with pytest.raises(ConnectionError):
-            await session.grant_streams_credit(max_streams=1, is_unidirectional=True)
+            await session.grant_streams_credit(is_unidirectional=True, max_streams=1)
 
         with pytest.raises(ConnectionError):
             await session.send_datagram(data=b"")
