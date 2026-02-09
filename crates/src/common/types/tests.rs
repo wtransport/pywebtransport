@@ -40,6 +40,39 @@ fn test_connection_state_traits_behavior_success() {
 }
 
 #[rstest]
+#[case(ErrorSource::Connection, "\"connection\"")]
+#[case(ErrorSource::Datagram, "\"datagram\"")]
+#[case(ErrorSource::FlowControl, "\"flow_control\"")]
+#[case(ErrorSource::Protocol, "\"protocol\"")]
+#[case(ErrorSource::Session, "\"session\"")]
+#[case(ErrorSource::Stream, "\"stream\"")]
+#[case(ErrorSource::Unspecified, "\"unspecified\"")]
+fn test_error_source_serialization_mapping_success(
+    #[case] source: ErrorSource,
+    #[case] expected_json: &str,
+) {
+    let res = to_string(&source);
+
+    assert!(
+        res.is_ok(),
+        "Serialization failed: {:?}",
+        res.as_ref().err()
+    );
+    assert_eq!(res.unwrap_or_default(), expected_json);
+}
+
+#[test]
+fn test_error_source_traits_behavior_success() {
+    let source = ErrorSource::Protocol;
+
+    let source_copy = source;
+    let debug_output = format!("{source:?}");
+
+    assert_eq!(source, source_copy);
+    assert_eq!(debug_output, "Protocol");
+}
+
+#[rstest]
 #[case(EventType::CapsuleReceived, "\"capsule_received\"")]
 #[case(EventType::ConnectionClosed, "\"connection_closed\"")]
 #[case(EventType::ConnectionEstablished, "\"connection_established\"")]
@@ -65,10 +98,12 @@ fn test_connection_state_traits_behavior_success() {
 #[case(EventType::SessionRequest, "\"session_request\"")]
 #[case(EventType::SessionStreamsBlocked, "\"session_streams_blocked\"")]
 #[case(EventType::SettingsReceived, "\"settings_received\"")]
+#[case(EventType::StopSendingReceived, "\"stop_sending_received\"")]
 #[case(EventType::StreamClosed, "\"stream_closed\"")]
 #[case(EventType::StreamDataReceived, "\"stream_data_received\"")]
 #[case(EventType::StreamError, "\"stream_error\"")]
 #[case(EventType::StreamOpened, "\"stream_opened\"")]
+#[case(EventType::StreamResetReceived, "\"stream_reset_received\"")]
 #[case(EventType::TimeoutError, "\"timeout_error\"")]
 fn test_event_type_serialization_mapping_success(
     #[case] event: EventType,

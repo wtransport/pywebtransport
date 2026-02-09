@@ -12,7 +12,7 @@ use crate::common::constants::{
     WT_MAX_STREAMS_UNI_TYPE, WT_STREAM_DATA_BLOCKED_TYPE, WT_STREAMS_BLOCKED_BIDI_TYPE,
     WT_STREAMS_BLOCKED_UNI_TYPE,
 };
-use crate::common::types::{EventType, SessionState, StreamDirection, StreamState};
+use crate::common::types::{ErrorSource, EventType, SessionState, StreamDirection, StreamState};
 use crate::protocol::events::{Effect, RequestResult};
 use crate::protocol::utils::write_varint;
 
@@ -78,7 +78,10 @@ fn test_accept_session_client_failure(mut fixture_client_session: Session) {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::NotifyRequestFailed { .. }]
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Session,
+            ..
+        }]
     ));
 
     if let [Effect::NotifyRequestFailed { reason, .. }] = effects.as_slice() {
@@ -115,6 +118,7 @@ fn test_accept_session_wrong_state_failure(mut fixture_server_session: Session) 
     assert!(matches!(
         effects.as_slice(),
         [Effect::NotifyRequestFailed {
+            source: ErrorSource::Session,
             error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
             ..
         }]
@@ -135,6 +139,7 @@ fn test_bind_stream_success(mut fixture_server_session: Session) {
             Effect::NotifyRequestDone { .. },
             Effect::EmitStreamEvent {
                 event_type: EventType::StreamOpened,
+                is_peer_initiated: Some(true),
                 ..
             }
         ]
@@ -202,15 +207,19 @@ fn test_create_stream_limit_reached_client_blocking(mut fixture_client_session: 
 }
 
 #[rstest]
-fn test_create_stream_limit_reached_server_failure(mut fixture_server_session: Session) {
+fn test_create_stream_limit_reached_server_blocking(mut fixture_server_session: Session) {
     fixture_server_session.state = SessionState::Connected;
     fixture_server_session.local_streams_bidi_opened = INITIAL_MAX_STREAMS;
 
     let effects = fixture_server_session.create_stream(MOCK_REQUEST_ID, false);
 
+    assert_eq!(fixture_server_session.pending_bidi_stream_requests.len(), 1);
     assert!(matches!(
         effects.as_slice(),
-        [Effect::NotifyRequestFailed { .. }]
+        [Effect::SendH3Capsule {
+            capsule_type: WT_STREAMS_BLOCKED_BIDI_TYPE,
+            ..
+        }]
     ));
 }
 
@@ -238,6 +247,7 @@ fn test_create_stream_wrong_state(mut fixture_server_session: Session) {
     assert!(matches!(
         effects.as_slice(),
         [Effect::NotifyRequestFailed {
+            source: ErrorSource::Session,
             error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
             ..
         }]
@@ -374,6 +384,7 @@ fn test_grant_data_credit_varint_error(mut fixture_server_session: Session) {
     assert!(matches!(
         effects.as_slice(),
         [Effect::NotifyRequestFailed {
+            source: ErrorSource::Session,
             error_code: Some(ERR_LIB_INTERNAL_ERROR),
             ..
         }]
@@ -383,7 +394,7 @@ fn test_grant_data_credit_varint_error(mut fixture_server_session: Session) {
 #[rstest]
 fn test_grant_streams_credit_ignore_lower(mut fixture_server_session: Session) {
     let lower = INITIAL_MAX_STREAMS - 1;
-    let effects = fixture_server_session.grant_streams_credit(MOCK_REQUEST_ID, lower, false);
+    let effects = fixture_server_session.grant_streams_credit(MOCK_REQUEST_ID, false, lower);
 
     assert_eq!(
         fixture_server_session.local_max_streams_bidi,
@@ -398,7 +409,7 @@ fn test_grant_streams_credit_ignore_lower(mut fixture_server_session: Session) {
 #[rstest]
 fn test_grant_streams_credit_success(mut fixture_server_session: Session) {
     let new_credit = 100;
-    let effects = fixture_server_session.grant_streams_credit(MOCK_REQUEST_ID, new_credit, false);
+    let effects = fixture_server_session.grant_streams_credit(MOCK_REQUEST_ID, false, new_credit);
 
     assert_eq!(fixture_server_session.local_max_streams_bidi, new_credit);
     assert!(matches!(
@@ -416,7 +427,7 @@ fn test_grant_streams_credit_success(mut fixture_server_session: Session) {
 #[rstest]
 fn test_grant_streams_credit_uni_success(mut fixture_server_session: Session) {
     let new_credit = 100;
-    let effects = fixture_server_session.grant_streams_credit(MOCK_REQUEST_ID, new_credit, true);
+    let effects = fixture_server_session.grant_streams_credit(MOCK_REQUEST_ID, true, new_credit);
 
     assert_eq!(fixture_server_session.local_max_streams_uni, new_credit);
     assert!(matches!(
@@ -434,10 +445,11 @@ fn test_grant_streams_credit_uni_success(mut fixture_server_session: Session) {
 #[rstest]
 fn test_grant_streams_credit_wrong_state(mut fixture_server_session: Session) {
     fixture_server_session.state = SessionState::Closed;
-    let effects = fixture_server_session.grant_streams_credit(MOCK_REQUEST_ID, 100, false);
+    let effects = fixture_server_session.grant_streams_credit(MOCK_REQUEST_ID, false, 100);
     assert!(matches!(
         effects.as_slice(),
         [Effect::NotifyRequestFailed {
+            source: ErrorSource::Session,
             error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
             ..
         }]
@@ -810,6 +822,19 @@ fn test_recv_datagram_wrong_state(mut fixture_server_session: Session) {
 }
 
 #[rstest]
+fn test_recv_stop_sending_delegates(mut fixture_server_session: Session) {
+    fixture_server_session.bind_stream(4, MOCK_REQUEST_ID, false, 1.0);
+    let effects = fixture_server_session.recv_stop_sending(4, 0);
+    assert!(matches!(
+        effects.first(),
+        Some(Effect::EmitStreamEvent {
+            event_type: EventType::StopSendingReceived,
+            ..
+        })
+    ));
+}
+
+#[rstest]
 fn test_recv_stream_data_closed_session(mut fixture_server_session: Session) {
     fixture_server_session.state = SessionState::Closed;
     let effects = fixture_server_session.recv_stream_data(4, Bytes::new(), false, 1.0);
@@ -909,9 +934,9 @@ fn test_recv_stream_reset(mut fixture_server_session: Session) {
     fixture_server_session.bind_stream(4, MOCK_REQUEST_ID, false, 1.0);
     let effects = fixture_server_session.recv_stream_reset(4, 0, 1.0);
     assert!(matches!(
-        effects.last(),
+        effects.first(),
         Some(Effect::EmitStreamEvent {
-            event_type: EventType::StreamClosed,
+            event_type: EventType::StreamResetReceived,
             ..
         })
     ));
@@ -929,7 +954,10 @@ fn test_reject_session_client_failure(mut fixture_client_session: Session) {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::NotifyRequestFailed { .. }]
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Session,
+            ..
+        }]
     ));
 
     if let [Effect::NotifyRequestFailed { reason, .. }] = effects.as_slice() {
@@ -951,7 +979,7 @@ fn test_reject_session_server_success(mut fixture_server_session: Session) {
             Effect::SendH3Headers { status: 403, .. },
             Effect::EmitSessionEvent {
                 event_type: EventType::SessionClosed,
-                code: Some(403),
+                error_code: Some(403),
                 ..
             },
             Effect::NotifyRequestDone { .. }
@@ -991,7 +1019,10 @@ fn test_send_datagram_too_large_failure(mut fixture_server_session: Session) {
     assert_eq!(fixture_server_session.datagrams_sent, 0);
     assert!(matches!(
         effects.as_slice(),
-        [Effect::NotifyRequestFailed { .. }]
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Datagram,
+            ..
+        }]
     ));
 }
 
@@ -1004,6 +1035,7 @@ fn test_send_datagram_wrong_state(mut fixture_server_session: Session) {
     assert!(matches!(
         effects.as_slice(),
         [Effect::NotifyRequestFailed {
+            source: ErrorSource::Session,
             error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
             ..
         }]
@@ -1048,6 +1080,7 @@ fn test_send_stream_data_not_found(mut fixture_server_session: Session) {
     assert!(matches!(
         effects.as_slice(),
         [Effect::NotifyRequestFailed {
+            source: ErrorSource::Stream,
             error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
             ..
         }]
@@ -1092,7 +1125,10 @@ fn test_stream_diagnostics_not_found(fixture_server_session: Session) {
     let effects = fixture_server_session.stream_diagnostics(99, MOCK_REQUEST_ID);
     assert!(matches!(
         effects.as_slice(),
-        [Effect::NotifyRequestFailed { .. }]
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Stream,
+            ..
+        }]
     ));
 }
 
@@ -1126,7 +1162,10 @@ fn test_stream_read_not_found(mut fixture_server_session: Session) {
     let effects = fixture_server_session.stream_read(99, MOCK_REQUEST_ID, 1024);
     assert!(matches!(
         effects.as_slice(),
-        [Effect::NotifyRequestFailed { .. }]
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Stream,
+            ..
+        }]
     ));
 }
 

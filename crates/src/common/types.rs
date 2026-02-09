@@ -41,6 +41,26 @@ pub enum ConnectionState {
     Failed,
 }
 
+/// Architectural source context of an error.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorSource {
+    /// Connection-level lifecycle or state errors.
+    Connection,
+    /// Session-level management errors.
+    Session,
+    /// Stream-level data transfer or state errors.
+    Stream,
+    /// Datagram transmission errors.
+    Datagram,
+    /// Protocol violation or framing errors.
+    Protocol,
+    /// Flow control limits reached.
+    FlowControl,
+    /// Generic errors with no specific context.
+    Unspecified,
+}
+
 /// System event type definition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -83,6 +103,8 @@ pub enum EventType {
     SessionStreamsBlocked,
     /// H3 Settings received.
     SettingsReceived,
+    /// Remote requested transmission stop.
+    StopSendingReceived,
     /// Stream closed.
     StreamClosed,
     /// Stream data received.
@@ -91,6 +113,8 @@ pub enum EventType {
     StreamError,
     /// Stream opened.
     StreamOpened,
+    /// Remote reset signal received.
+    StreamResetReceived,
     /// Asynchronous operation timeout.
     TimeoutError,
 }

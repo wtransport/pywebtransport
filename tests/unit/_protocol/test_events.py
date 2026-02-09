@@ -47,8 +47,9 @@ from pywebtransport._protocol.events import (
     TransportHandshakeCompleted,
     TransportQuicParametersReceived,
     TransportQuicTimerFired,
+    TransportStopSendingReceived,
     TransportStreamDataReceived,
-    TransportStreamReset,
+    TransportStreamResetReceived,
     TriggerQuicTimer,
     UserAcceptSession,
     UserCloseSession,
@@ -65,7 +66,7 @@ from pywebtransport._protocol.events import (
     UserResetStream,
     UserSendDatagram,
     UserSendStreamData,
-    UserStopStream,
+    UserStopSending,
     UserStreamRead,
     WebTransportStreamDataReceived,
 )
@@ -94,8 +95,8 @@ class TestEffects:
             ),
             (
                 EmitConnectionEvent,
-                {"event_type": "connected", "data": {"key": "value"}},
-                {"event_type": "connected", "data": {"key": "value"}},
+                {"connection_id": "conn-1", "event_type": "connected", "data": {"key": "value"}},
+                {"connection_id": "conn-1", "event_type": "connected", "data": {"key": "value"}},
             ),
             (
                 EmitSessionEvent,
@@ -173,22 +174,22 @@ class TestH3Events:
         [
             (
                 CapsuleReceived,
-                {"capsule_data": b"capsule", "capsule_type": 0x01, "stream_id": 1},
-                {"capsule_data": b"capsule", "capsule_type": 0x01, "stream_id": 1},
+                {"stream_id": 1, "capsule_type": 0x01, "capsule_data": b"capsule"},
+                {"stream_id": 1, "capsule_type": 0x01, "capsule_data": b"capsule"},
             ),
             (ConnectStreamClosed, {"stream_id": 1}, {"stream_id": 1}),
-            (DatagramReceived, {"data": b"datagram", "stream_id": 1}, {"data": b"datagram", "stream_id": 1}),
+            (DatagramReceived, {"stream_id": 1, "data": b"datagram"}, {"stream_id": 1, "data": b"datagram"}),
             (GoawayReceived, {}, {}),
             (
                 HeadersReceived,
-                {"headers": {b":status": b"200"}, "stream_id": 1, "stream_ended": False},
-                {"headers": {b":status": b"200"}, "stream_id": 1, "stream_ended": False},
+                {"stream_id": 1, "headers": {b":status": b"200"}, "stream_ended": False},
+                {"stream_id": 1, "headers": {b":status": b"200"}, "stream_ended": False},
             ),
             (SettingsReceived, {"settings": {0x01: 0x01}}, {"settings": {0x01: 0x01}}),
             (
                 WebTransportStreamDataReceived,
-                {"data": b"data", "session_id": 1, "stream_id": 4, "stream_ended": True},
-                {"data": b"data", "session_id": 1, "stream_id": 4, "stream_ended": True},
+                {"session_id": 1, "stream_id": 4, "data": b"data", "stream_ended": True},
+                {"session_id": 1, "stream_id": 4, "data": b"data", "stream_ended": True},
             ),
         ],
     )
@@ -228,8 +229,8 @@ class TestInternalProtocolEvents:
             (InternalReturnStreamData, {"stream_id": 1, "data": b"returned"}, {"stream_id": 1, "data": b"returned"}),
             (
                 TransportConnectionTerminated,
-                {"error_code": 100, "reason_phrase": "test reason"},
-                {"error_code": 100, "reason_phrase": "test reason"},
+                {"error_code": 100, "reason": "test reason"},
+                {"error_code": 100, "reason": "test reason"},
             ),
             (TransportDatagramFrameReceived, {"data": b"datagram_data"}, {"data": b"datagram_data"}),
             (TransportHandshakeCompleted, {}, {}),
@@ -239,12 +240,13 @@ class TestInternalProtocolEvents:
                 {"remote_max_datagram_frame_size": 1500},
             ),
             (TransportQuicTimerFired, {}, {}),
+            (TransportStopSendingReceived, {"stream_id": 4, "error_code": 100}, {"stream_id": 4, "error_code": 100}),
             (
                 TransportStreamDataReceived,
-                {"data": b"stream_data", "end_stream": True, "stream_id": 4},
-                {"data": b"stream_data", "end_stream": True, "stream_id": 4},
+                {"stream_id": 4, "data": b"stream_data", "end_stream": True},
+                {"stream_id": 4, "data": b"stream_data", "end_stream": True},
             ),
-            (TransportStreamReset, {"error_code": 101, "stream_id": 4}, {"error_code": 101, "stream_id": 4}),
+            (TransportStreamResetReceived, {"stream_id": 4, "error_code": 101}, {"stream_id": 4, "error_code": 101}),
         ],
     )
     def test_instantiation(
@@ -301,8 +303,8 @@ class TestUserEvents:
             ),
             (
                 UserGrantStreamsCredit,
-                {"request_id": 1, "session_id": 1, "max_streams": 10, "is_unidirectional": False},
-                {"request_id": 1, "session_id": 1, "max_streams": 10, "is_unidirectional": False},
+                {"request_id": 1, "session_id": 1, "is_unidirectional": False, "max_streams": 10},
+                {"request_id": 1, "session_id": 1, "is_unidirectional": False, "max_streams": 10},
             ),
             (
                 UserRejectSession,
@@ -325,7 +327,7 @@ class TestUserEvents:
                 {"request_id": 1, "stream_id": 4, "data": b"data", "end_stream": True},
             ),
             (
-                UserStopStream,
+                UserStopSending,
                 {"request_id": 1, "stream_id": 4, "error_code": 100},
                 {"request_id": 1, "stream_id": 4, "error_code": 100},
             ),

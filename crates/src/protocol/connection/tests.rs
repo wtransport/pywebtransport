@@ -10,7 +10,7 @@ use crate::common::constants::{
     DRAIN_WEBTRANSPORT_SESSION_TYPE, ERR_H3_REQUEST_REJECTED, ERR_LIB_CONNECTION_STATE_ERROR,
     ERR_LIB_INTERNAL_ERROR, ERR_LIB_SESSION_STATE_ERROR, ERR_WT_BUFFERED_STREAM_REJECTED,
 };
-use crate::common::types::{ConnectionState, EventType, Headers, SessionId, StreamId};
+use crate::common::types::{ConnectionState, ErrorSource, EventType, Headers, SessionId, StreamId};
 use crate::protocol::events::{Effect, RequestResult};
 
 #[fixture]
@@ -100,6 +100,7 @@ fn test_accept_session_not_found(mut fixture_server_connection: Connection) {
     assert!(matches!(
         effects.as_slice(),
         [Effect::NotifyRequestFailed {
+            source: ErrorSource::Session,
             error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
             ..
         }]
@@ -124,7 +125,10 @@ fn test_bind_stream_not_found(mut fixture_server_connection: Connection) {
         fixture_server_connection.bind_stream(999, MOCK_STREAM_ID, MOCK_REQUEST_ID, false, 1.0);
     assert!(matches!(
         effects.as_slice(),
-        [Effect::NotifyRequestFailed { .. }]
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Session,
+            ..
+        }]
     ));
 }
 
@@ -190,6 +194,7 @@ fn test_client_create_session_wrong_state(mut fixture_client_connection: Connect
     assert!(matches!(
         effects.as_slice(),
         [Effect::NotifyRequestFailed {
+            source: ErrorSource::Connection,
             error_code: Some(ERR_LIB_CONNECTION_STATE_ERROR),
             ..
         }]
@@ -250,6 +255,7 @@ fn test_client_recv_headers_missing_config(mut fixture_client_connection: Connec
     assert!(matches!(
         effects.as_slice(),
         [Effect::NotifyRequestFailed {
+            source: ErrorSource::Unspecified,
             error_code: Some(ERR_LIB_INTERNAL_ERROR),
             ..
         }]
@@ -283,6 +289,7 @@ fn test_client_recv_headers_rejects_non_200(
     assert!(matches!(
         effects.as_slice(),
         [Effect::NotifyRequestFailed {
+            source: ErrorSource::Session,
             error_code: Some(ERR_H3_REQUEST_REJECTED),
             ..
         }]
@@ -346,7 +353,11 @@ fn test_create_session_server_failure(mut fixture_server_connection: Connection)
         fixture_server_connection.create_session(MOCK_REQUEST_ID, "/".to_owned(), vec![], 1.0);
     assert!(matches!(
         effects.as_slice(),
-        [Effect::NotifyRequestFailed { reason, .. }] if reason.contains("Server cannot create")
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Connection,
+            reason,
+            ..
+        }] if reason.contains("Server cannot create")
     ));
 }
 
@@ -375,7 +386,10 @@ fn test_create_stream_not_found(mut fixture_server_connection: Connection) {
     let effects = fixture_server_connection.create_stream(999, MOCK_REQUEST_ID, false);
     assert!(matches!(
         effects.as_slice(),
-        [Effect::NotifyRequestFailed { .. }]
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Session,
+            ..
+        }]
     ));
 }
 
@@ -406,7 +420,10 @@ fn test_fail_session_cleans_pending(mut fixture_client_connection: Connection) {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::NotifyRequestFailed { .. }]
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Session,
+            ..
+        }]
     ));
 }
 
@@ -426,7 +443,10 @@ fn test_fail_stream_delegates(mut fixture_server_connection: Connection, fixture
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::NotifyRequestFailed { .. }]
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Stream,
+            ..
+        }]
     ));
 }
 
@@ -436,7 +456,10 @@ fn test_fail_stream_not_found(mut fixture_server_connection: Connection) {
         fixture_server_connection.fail_stream(999, MOCK_REQUEST_ID, false, None, String::new());
     assert!(matches!(
         effects.as_slice(),
-        [Effect::NotifyRequestFailed { .. }]
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Stream,
+            ..
+        }]
     ));
 }
 
@@ -468,8 +491,8 @@ fn test_grant_credits_delegate(
     let effects_streams = fixture_server_connection.grant_streams_credit(
         MOCK_SESSION_ID,
         MOCK_REQUEST_ID + 2,
-        100,
         false,
+        100,
     );
     assert!(!effects_streams.is_empty());
 }
@@ -479,13 +502,19 @@ fn test_grant_credits_not_found(mut fixture_server_connection: Connection) {
     let e1 = fixture_server_connection.grant_data_credit(999, MOCK_REQUEST_ID, 100);
     assert!(matches!(
         e1.as_slice(),
-        [Effect::NotifyRequestFailed { .. }]
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Session,
+            ..
+        }]
     ));
 
-    let e2 = fixture_server_connection.grant_streams_credit(999, MOCK_REQUEST_ID, 10, false);
+    let e2 = fixture_server_connection.grant_streams_credit(999, MOCK_REQUEST_ID, false, 10);
     assert!(matches!(
         e2.as_slice(),
-        [Effect::NotifyRequestFailed { .. }]
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Session,
+            ..
+        }]
     ));
 }
 
@@ -633,6 +662,39 @@ fn test_recv_settings_triggers_ready(mut fixture_client_connection: Connection) 
 }
 
 #[rstest]
+fn test_recv_stop_sending_delegates(
+    mut fixture_server_connection: Connection,
+    fixture_headers: Headers,
+) {
+    fixture_server_connection.state = ConnectionState::Connected;
+    let _unused = fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, 1.0);
+    fixture_server_connection.accept_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, 1.0);
+    fixture_server_connection.bind_stream(
+        MOCK_SESSION_ID,
+        MOCK_STREAM_ID,
+        MOCK_REQUEST_ID + 1,
+        false,
+        2.0,
+    );
+
+    let effects = fixture_server_connection.recv_stop_sending(MOCK_STREAM_ID, 0);
+    assert!(!effects.is_empty());
+    assert!(matches!(
+        effects.first(),
+        Some(Effect::EmitStreamEvent {
+            event_type: EventType::StopSendingReceived,
+            ..
+        })
+    ));
+}
+
+#[rstest]
+fn test_recv_stop_sending_not_found(mut fixture_server_connection: Connection) {
+    let effects = fixture_server_connection.recv_stop_sending(999, 0);
+    assert!(effects.is_empty());
+}
+
+#[rstest]
 fn test_recv_stream_data_routes_and_buffers(
     mut fixture_server_connection: Connection,
     fixture_headers: Headers,
@@ -715,7 +777,10 @@ fn test_reject_session_not_found(mut fixture_server_connection: Connection) {
     let effects = fixture_server_connection.reject_session(999, MOCK_REQUEST_ID, 403, 1.0);
     assert!(matches!(
         effects.as_slice(),
-        [Effect::NotifyRequestFailed { .. }]
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Session,
+            ..
+        }]
     ));
 }
 
@@ -739,7 +804,10 @@ fn test_reset_stream_not_found(mut fixture_server_connection: Connection) {
     let effects = fixture_server_connection.reset_stream(999, MOCK_STREAM_ID, MOCK_REQUEST_ID, 0);
     assert!(matches!(
         effects.as_slice(),
-        [Effect::NotifyRequestFailed { .. }]
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Stream,
+            ..
+        }]
     ));
 }
 
@@ -770,7 +838,10 @@ fn test_send_datagram_not_found(mut fixture_server_connection: Connection) {
         fixture_server_connection.send_datagram(999, MOCK_REQUEST_ID, Bytes::from_static(b"d"));
     assert!(matches!(
         effects.as_slice(),
-        [Effect::NotifyRequestFailed { .. }]
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Session,
+            ..
+        }]
     ));
 }
 
@@ -785,7 +856,10 @@ fn test_send_stream_data_not_found(mut fixture_server_connection: Connection) {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::NotifyRequestFailed { .. }]
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Stream,
+            ..
+        }]
     ));
 }
 
@@ -896,7 +970,10 @@ fn test_session_diagnostics_not_found(fixture_server_connection: Connection) {
     let effects = fixture_server_connection.session_diagnostics(999, MOCK_REQUEST_ID);
     assert!(matches!(
         effects.as_slice(),
-        [Effect::NotifyRequestFailed { .. }]
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Session,
+            ..
+        }]
     ));
 }
 
@@ -927,7 +1004,10 @@ fn test_stop_stream_not_found(mut fixture_server_connection: Connection) {
     let effects = fixture_server_connection.stop_stream(999, MOCK_STREAM_ID, MOCK_REQUEST_ID, 0);
     assert!(matches!(
         effects.as_slice(),
-        [Effect::NotifyRequestFailed { .. }]
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Stream,
+            ..
+        }]
     ));
 }
 
@@ -949,7 +1029,10 @@ fn test_stream_diagnostics_not_found(fixture_server_connection: Connection) {
         fixture_server_connection.stream_diagnostics(999, MOCK_STREAM_ID, MOCK_REQUEST_ID);
     assert!(matches!(
         effects.as_slice(),
-        [Effect::NotifyRequestFailed { .. }]
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Stream,
+            ..
+        }]
     ));
 }
 
@@ -971,7 +1054,10 @@ fn test_stream_read_not_found(mut fixture_server_connection: Connection) {
     let effects = fixture_server_connection.stream_read(999, MOCK_STREAM_ID, MOCK_REQUEST_ID, 1024);
     assert!(matches!(
         effects.as_slice(),
-        [Effect::NotifyRequestFailed { .. }]
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Stream,
+            ..
+        }]
     ));
 }
 

@@ -11,7 +11,7 @@ use crate::common::constants::{
     ERR_WT_FLOW_CONTROL_ERROR, WT_DATA_BLOCKED_TYPE,
 };
 use crate::common::types::{
-    ErrorCode, EventType, RequestId, SessionId, StreamDirection, StreamId, StreamState,
+    ErrorCode, ErrorSource, EventType, RequestId, SessionId, StreamDirection, StreamId, StreamState,
 };
 use crate::protocol::events::{Effect, RequestResult};
 use crate::protocol::utils::{http_to_wt_error, write_varint, wt_to_http_error};
@@ -26,6 +26,7 @@ pub(crate) struct Stream {
     pub(crate) session_id: SessionId,
     pub(crate) direction: StreamDirection,
     pub(crate) state: StreamState,
+    pub(crate) is_peer_initiated: bool,
     pub(crate) created_at: f64,
     pub(crate) bytes_sent: u64,
     pub(crate) bytes_received: u64,
@@ -47,6 +48,7 @@ impl Stream {
         id: StreamId,
         session_id: SessionId,
         direction: StreamDirection,
+        is_peer_initiated: bool,
         created_at: f64,
         max_read_buffer_size: u64,
         max_write_buffer_size: u64,
@@ -56,6 +58,7 @@ impl Stream {
             session_id,
             direction,
             state: StreamState::Open,
+            is_peer_initiated,
             created_at,
             bytes_sent: 0,
             bytes_received: 0,
@@ -122,8 +125,10 @@ impl Stream {
                             effects.push(Effect::EmitStreamEvent {
                                 stream_id: self.id,
                                 event_type: EventType::StreamClosed,
-                                direction: None,
                                 session_id: None,
+                                direction: None,
+                                is_peer_initiated: None,
+                                error_code: None,
                             });
                         }
                         StreamState::Open => {
@@ -205,12 +210,15 @@ impl Stream {
         }
 
         if matches!(self.state, StreamState::ResetReceived | StreamState::Closed) {
+            let error_to_return = self.close_code.unwrap_or(ERR_LIB_STREAM_STATE_ERROR);
+
             effects.push(Effect::NotifyRequestFailed {
                 request_id,
-                error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
+                source: ErrorSource::Stream,
+                error_code: Some(error_to_return),
                 reason: format!(
-                    "Stream {} receive side closed (state: {:?})",
-                    self.id, self.state
+                    "Stream {} receive side closed (state: {:?}, code: {:?})",
+                    self.id, self.state, error_to_return
                 ),
             });
             return (effects, 0);
@@ -292,8 +300,10 @@ impl Stream {
                         effects.push(Effect::EmitStreamEvent {
                             stream_id: self.id,
                             event_type: EventType::StreamClosed,
-                            direction: None,
                             session_id: None,
+                            direction: None,
+                            is_peer_initiated: None,
+                            error_code: None,
                         });
                     } else {
                         self.state = StreamState::HalfClosedRemote;
@@ -344,32 +354,92 @@ impl Stream {
             }
         }
 
-        self.closed_at = Some(now);
-        self.close_code = Some(app_error_code);
+        effects.push(Effect::EmitStreamEvent {
+            stream_id: self.id,
+            event_type: EventType::StreamResetReceived,
+            session_id: None,
+            direction: None,
+            is_peer_initiated: None,
+            error_code: Some(app_error_code),
+        });
 
         while let Some((req_id, _)) = self.pending_read_requests.pop_front() {
             effects.push(Effect::NotifyRequestFailed {
                 request_id: req_id,
+                source: ErrorSource::Stream,
                 error_code: Some(app_error_code),
                 reason: format!("Stream {} reset by peer", self.id),
             });
         }
 
-        while let Some((_, req_id, _)) = self.write_buffer.pop_front() {
-            effects.push(Effect::NotifyRequestFailed {
-                request_id: req_id,
-                error_code: Some(app_error_code),
-                reason: format!("Stream {} reset by peer", self.id),
-            });
-        }
-        self.write_buffer_size = 0;
+        match self.state {
+            StreamState::Open | StreamState::HalfClosedLocal => {
+                self.close_code = Some(app_error_code);
+                self.state = StreamState::ResetReceived;
+            }
+            StreamState::HalfClosedRemote | StreamState::ResetSent => {
+                self.closed_at = Some(now);
+                self.close_code = Some(app_error_code);
+                self.state = StreamState::Closed;
 
-        self.state = StreamState::Closed;
+                while let Some((_, req_id, _)) = self.write_buffer.pop_front() {
+                    effects.push(Effect::NotifyRequestFailed {
+                        request_id: req_id,
+                        source: ErrorSource::Stream,
+                        error_code: Some(app_error_code),
+                        reason: format!("Stream {} fully closed after reset", self.id),
+                    });
+                }
+                self.write_buffer_size = 0;
+
+                effects.push(Effect::EmitStreamEvent {
+                    stream_id: self.id,
+                    event_type: EventType::StreamClosed,
+                    session_id: None,
+                    direction: None,
+                    is_peer_initiated: None,
+                    error_code: None,
+                });
+            }
+            _ => {}
+        }
+
+        effects
+    }
+
+    // Network stop_sending reception handling.
+    pub(crate) fn recv_stop_sending(&mut self, error_code: ErrorCode) -> Vec<Effect> {
+        let mut effects = Vec::new();
+
+        if self.state == StreamState::Closed {
+            return effects;
+        }
+
+        debug!(
+            "Stream {} received STOP_SENDING with code {}",
+            self.id, error_code
+        );
+
+        let mut app_error_code = error_code;
+        if (ERR_WT_APPLICATION_ERROR_FIRST..=ERR_WT_APPLICATION_ERROR_LAST).contains(&error_code) {
+            match http_to_wt_error(error_code) {
+                Some(code) => app_error_code = code,
+                None => {
+                    warn!(
+                        "Received reserved H3 error code {:x} on stream {}, using as-is.",
+                        error_code, self.id
+                    );
+                }
+            }
+        }
+
         effects.push(Effect::EmitStreamEvent {
             stream_id: self.id,
-            event_type: EventType::StreamClosed,
-            direction: None,
+            event_type: EventType::StopSendingReceived,
             session_id: None,
+            direction: None,
+            is_peer_initiated: None,
+            error_code: Some(app_error_code),
         });
 
         effects
@@ -384,10 +454,7 @@ impl Stream {
     ) -> Vec<Effect> {
         let mut effects = Vec::new();
 
-        if matches!(
-            self.state,
-            StreamState::HalfClosedLocal | StreamState::Closed | StreamState::ResetSent
-        ) {
+        if matches!(self.state, StreamState::Closed | StreamState::ResetSent) {
             effects.push(Effect::NotifyRequestDone {
                 request_id,
                 result: RequestResult::None,
@@ -410,6 +477,7 @@ impl Stream {
         while let Some((_, req_id, _)) = self.write_buffer.pop_front() {
             effects.push(Effect::NotifyRequestFailed {
                 request_id: req_id,
+                source: ErrorSource::Stream,
                 error_code: Some(error_code),
                 reason: format!("Stream {} reset by application", self.id),
             });
@@ -422,8 +490,10 @@ impl Stream {
                 effects.push(Effect::EmitStreamEvent {
                     stream_id: self.id,
                     event_type: EventType::StreamClosed,
-                    direction: None,
                     session_id: None,
+                    direction: None,
+                    is_peer_initiated: None,
+                    error_code: None,
                 });
             }
             _ => {}
@@ -477,6 +547,7 @@ impl Stream {
         while let Some((req_id, _)) = self.pending_read_requests.pop_front() {
             effects.push(Effect::NotifyRequestFailed {
                 request_id: req_id,
+                source: ErrorSource::Stream,
                 error_code: Some(error_code),
                 reason: format!("Stream {} stopped by application", self.id),
             });
@@ -488,8 +559,10 @@ impl Stream {
                 effects.push(Effect::EmitStreamEvent {
                     stream_id: self.id,
                     event_type: EventType::StreamClosed,
-                    direction: None,
                     session_id: None,
+                    direction: None,
+                    is_peer_initiated: None,
+                    error_code: None,
                 });
             }
             _ => {}
@@ -543,6 +616,7 @@ impl Stream {
 
             effects.push(Effect::NotifyRequestFailed {
                 request_id,
+                source: ErrorSource::Stream,
                 error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
                 reason: format!(
                     "Stream {} is not writable (state: {:?})",
@@ -558,6 +632,7 @@ impl Stream {
         if current_buffer_size + data_len > self.max_write_buffer_size {
             effects.push(Effect::NotifyRequestFailed {
                 request_id,
+                source: ErrorSource::Stream,
                 error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
                 reason: format!(
                     "Stream {} write buffer full ({} + {} > {} bytes)",
@@ -593,8 +668,10 @@ impl Stream {
                         effects.push(Effect::EmitStreamEvent {
                             stream_id: self.id,
                             event_type: EventType::StreamClosed,
-                            direction: None,
                             session_id: None,
+                            direction: None,
+                            is_peer_initiated: None,
+                            error_code: None,
                         });
                     }
                     StreamState::Open => {
@@ -673,6 +750,7 @@ impl Stream {
             session_id: self.session_id,
             direction: self.direction,
             state: self.state,
+            is_peer_initiated: self.is_peer_initiated,
             created_at: self.created_at,
             bytes_sent: self.bytes_sent,
             bytes_received: self.bytes_received,
@@ -764,6 +842,7 @@ pub(crate) struct StreamDiagnostics {
     pub(crate) session_id: SessionId,
     pub(crate) direction: StreamDirection,
     pub(crate) state: StreamState,
+    pub(crate) is_peer_initiated: bool,
     pub(crate) created_at: f64,
     pub(crate) bytes_sent: u64,
     pub(crate) bytes_received: u64,

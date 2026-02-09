@@ -13,8 +13,8 @@ use crate::common::constants::{
     SETTINGS_WT_INITIAL_MAX_STREAMS_UNI,
 };
 use crate::common::types::{
-    ConnectionId, ConnectionState, ErrorCode, EventType, Headers, RequestId, SessionId,
-    SessionState, StreamId,
+    ConnectionId, ConnectionState, ErrorCode, ErrorSource, EventType, Headers, RequestId,
+    SessionId, SessionState, StreamId,
 };
 use crate::protocol::events::{Effect, ProtocolEvent, RequestResult};
 use crate::protocol::session::Session;
@@ -113,6 +113,7 @@ impl Connection {
         }
         vec![Effect::NotifyRequestFailed {
             request_id,
+            source: ErrorSource::Session,
             error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
             reason: "Session not found".to_owned(),
         }]
@@ -144,6 +145,7 @@ impl Connection {
         }
         vec![Effect::NotifyRequestFailed {
             request_id,
+            source: ErrorSource::Session,
             error_code: None,
             reason: format!("Session {session_id} not found during stream bind"),
         }]
@@ -199,6 +201,7 @@ impl Connection {
         if !self.is_client {
             return vec![Effect::NotifyRequestFailed {
                 request_id,
+                source: ErrorSource::Connection,
                 error_code: None,
                 reason: "Server cannot create sessions using this method".to_owned(),
             }];
@@ -207,6 +210,7 @@ impl Connection {
         if self.state != ConnectionState::Connected {
             return vec![Effect::NotifyRequestFailed {
                 request_id,
+                source: ErrorSource::Connection,
                 error_code: Some(ERR_LIB_CONNECTION_STATE_ERROR),
                 reason: format!(
                     "Cannot create session, connection state is {:?}",
@@ -243,6 +247,7 @@ impl Connection {
         }
         vec![Effect::NotifyRequestFailed {
             request_id,
+            source: ErrorSource::Session,
             error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
             reason: "Session not found".to_owned(),
         }]
@@ -264,6 +269,7 @@ impl Connection {
         self.pending_session_configs.remove(&request_id);
         vec![Effect::NotifyRequestFailed {
             request_id,
+            source: ErrorSource::Session,
             error_code: None,
             reason,
         }]
@@ -283,6 +289,7 @@ impl Connection {
         }
         vec![Effect::NotifyRequestFailed {
             request_id,
+            source: ErrorSource::Stream,
             error_code,
             reason,
         }]
@@ -321,6 +328,7 @@ impl Connection {
         }
         vec![Effect::NotifyRequestFailed {
             request_id,
+            source: ErrorSource::Session,
             error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
             reason: "Session not found".to_owned(),
         }]
@@ -331,14 +339,15 @@ impl Connection {
         &mut self,
         session_id: SessionId,
         request_id: RequestId,
-        max_streams: u64,
         is_uni: bool,
+        max_streams: u64,
     ) -> Vec<Effect> {
         if let Some(session) = self.sessions.get_mut(&session_id) {
-            return session.grant_streams_credit(request_id, max_streams, is_uni);
+            return session.grant_streams_credit(request_id, is_uni, max_streams);
         }
         vec![Effect::NotifyRequestFailed {
             request_id,
+            source: ErrorSource::Session,
             error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
             reason: "Session not found".to_owned(),
         }]
@@ -505,14 +514,14 @@ impl Connection {
                 effects.push(Effect::EmitSessionEvent {
                     session_id,
                     event_type: EventType::SessionDraining,
-                    code: None,
-                    data: None,
+                    path: None,
                     headers: None,
+                    data: None,
                     is_unidirectional: None,
                     max_data: None,
                     max_streams: None,
-                    path: None,
                     ready_at: None,
+                    error_code: None,
                     reason: None,
                 });
             }
@@ -539,6 +548,7 @@ impl Connection {
                 error!("Internal State Error: Missing init data for request {request_id:?}");
                 return vec![Effect::NotifyRequestFailed {
                     request_id,
+                    source: ErrorSource::Unspecified,
                     error_code: Some(ERR_LIB_INTERNAL_ERROR),
                     reason: "Internal state inconsistency: Session init data missing".to_owned(),
                 }];
@@ -571,14 +581,14 @@ impl Connection {
                 effects.push(Effect::EmitSessionEvent {
                     session_id: stream_id,
                     event_type: EventType::SessionReady,
-                    code: None,
-                    data: None,
+                    path: Some(init_data.path),
                     headers: Some(init_data.headers),
+                    data: None,
                     is_unidirectional: None,
                     max_data: None,
                     max_streams: None,
-                    path: Some(init_data.path),
                     ready_at: Some(now),
+                    error_code: None,
                     reason: None,
                 });
                 effects.push(Effect::NotifyRequestDone {
@@ -601,6 +611,7 @@ impl Connection {
                 let reason = format!("Session creation failed with status {status_val:?}");
                 effects.push(Effect::NotifyRequestFailed {
                     request_id,
+                    source: ErrorSource::Session,
                     error_code: Some(ERR_H3_REQUEST_REJECTED),
                     reason,
                 });
@@ -681,12 +692,12 @@ impl Connection {
                 event_type: EventType::SessionRequest,
                 path: Some(path),
                 headers: Some(headers),
-                code: None,
                 data: None,
                 is_unidirectional: None,
                 max_data: None,
                 max_streams: None,
                 ready_at: None,
+                error_code: None,
                 reason: None,
             });
 
@@ -754,7 +765,7 @@ impl Connection {
     pub(crate) fn recv_stream_reset(
         &mut self,
         stream_id: StreamId,
-        code: ErrorCode,
+        error_code: ErrorCode,
         now: f64,
     ) -> Vec<Effect> {
         if let Some(session) = self
@@ -762,7 +773,23 @@ impl Connection {
             .get(&stream_id)
             .and_then(|sid| self.sessions.get_mut(sid))
         {
-            return session.recv_stream_reset(stream_id, code, now);
+            return session.recv_stream_reset(stream_id, error_code, now);
+        }
+        Vec::new()
+    }
+
+    // Transport stream stop_sending reception handling (delegated).
+    pub(crate) fn recv_stop_sending(
+        &mut self,
+        stream_id: StreamId,
+        error_code: ErrorCode,
+    ) -> Vec<Effect> {
+        if let Some(session) = self
+            .stream_map
+            .get(&stream_id)
+            .and_then(|sid| self.sessions.get_mut(sid))
+        {
+            return session.recv_stop_sending(stream_id, error_code);
         }
         Vec::new()
     }
@@ -792,6 +819,7 @@ impl Connection {
         }
         vec![Effect::NotifyRequestFailed {
             request_id,
+            source: ErrorSource::Session,
             error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
             reason: "Session not found".to_owned(),
         }]
@@ -811,6 +839,7 @@ impl Connection {
         }
         vec![Effect::NotifyRequestFailed {
             request_id,
+            source: ErrorSource::Stream,
             error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
             reason: "Session not found".to_owned(),
         }]
@@ -829,6 +858,7 @@ impl Connection {
         }
         vec![Effect::NotifyRequestFailed {
             request_id,
+            source: ErrorSource::Session,
             error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
             reason: "Session not found".to_owned(),
         }]
@@ -848,6 +878,7 @@ impl Connection {
         }
         vec![Effect::NotifyRequestFailed {
             request_id,
+            source: ErrorSource::Stream,
             error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
             reason: "Session not found".to_owned(),
         }]
@@ -864,6 +895,7 @@ impl Connection {
         }
         vec![Effect::NotifyRequestFailed {
             request_id,
+            source: ErrorSource::Session,
             error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
             reason: "Session not found".to_owned(),
         }]
@@ -883,6 +915,7 @@ impl Connection {
         }
         vec![Effect::NotifyRequestFailed {
             request_id,
+            source: ErrorSource::Stream,
             error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
             reason: "Session not found".to_owned(),
         }]
@@ -900,6 +933,7 @@ impl Connection {
         }
         vec![Effect::NotifyRequestFailed {
             request_id,
+            source: ErrorSource::Stream,
             error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
             reason: "Session not found".to_owned(),
         }]
@@ -918,6 +952,7 @@ impl Connection {
         }
         vec![Effect::NotifyRequestFailed {
             request_id,
+            source: ErrorSource::Stream,
             error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
             reason: "Session not found".to_owned(),
         }]
@@ -953,8 +988,8 @@ impl Connection {
         }
 
         effects.push(Effect::EmitConnectionEvent {
-            event_type: EventType::ConnectionClosed,
             connection_id: self.id.clone(),
+            event_type: EventType::ConnectionClosed,
             error_code: Some(error_code),
             reason: Some(reason_phrase),
         });
@@ -994,8 +1029,8 @@ impl Connection {
             self.connected_at = Some(now);
 
             let effects = vec![Effect::EmitConnectionEvent {
-                event_type: EventType::ConnectionEstablished,
                 connection_id: self.id.clone(),
+                event_type: EventType::ConnectionEstablished,
                 error_code: None,
                 reason: None,
             }];

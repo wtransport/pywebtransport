@@ -55,10 +55,12 @@ impl<'py> IntoPyObject<'py> for EventType {
             Self::SessionRequest => "session_request",
             Self::SessionStreamsBlocked => "session_streams_blocked",
             Self::SettingsReceived => "settings_received",
+            Self::StopSendingReceived => "stop_sending_received",
             Self::StreamClosed => "stream_closed",
             Self::StreamDataReceived => "stream_data_received",
             Self::StreamError => "stream_error",
             Self::StreamOpened => "stream_opened",
+            Self::StreamResetReceived => "stream_reset_received",
             Self::TimeoutError => "timeout_error",
         };
 
