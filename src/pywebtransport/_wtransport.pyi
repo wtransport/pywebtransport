@@ -145,7 +145,9 @@ ERR_WT_BUFFERED_STREAM_REJECTED: int
 ERR_WT_FLOW_CONTROL_ERROR: int
 ERR_WT_SESSION_GONE: int
 
-def generate_self_signed_cert(*, hostname: str, output_dir: str = ".", validity_days: int = 365) -> tuple[str, str]:
+def generate_self_signed_cert(
+    *, hostname: str, output_dir: str = ".", validity_days: int = 365
+) -> tuple[str, str, str]:
     """Generate a self-signed certificate and key for testing."""
     ...
 

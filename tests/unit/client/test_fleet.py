@@ -146,9 +146,11 @@ class TestClientFleet:
     def test_init_success(self, mock_clients: list[Any]) -> None:
         fleet = ClientFleet(clients=mock_clients, max_concurrent_handshakes=10)
 
-        assert fleet.get_client_count() == len(mock_clients)
-        assert not fleet._active
+        assert fleet._clients == mock_clients
+        assert fleet._max_concurrent_handshakes == 10
+        assert fleet._active is False
         assert fleet._connect_sem._value == 10
+        assert fleet._current_index == 0
 
     def test_init_with_no_clients(self) -> None:
         with pytest.raises(ValueError, match="ClientFleet requires at least one client instance"):

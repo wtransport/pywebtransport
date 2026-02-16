@@ -5,13 +5,17 @@ import pytest
 from pywebtransport._adapter.pending import PendingRequestManager
 
 
-@pytest.mark.asyncio
 class TestPendingRequestManager:
 
     @pytest.fixture
     def manager(self) -> PendingRequestManager:
         return PendingRequestManager()
 
+    def test_init(self, manager: PendingRequestManager) -> None:
+        assert manager._requests == {}
+        assert not hasattr(manager, "__dict__")
+
+    @pytest.mark.asyncio
     async def test_complete_request_already_done(self, manager: PendingRequestManager) -> None:
         request_id, future = manager.create_request()
         future.set_result("initial")
@@ -21,11 +25,13 @@ class TestPendingRequestManager:
         assert future.result() == "initial"
         assert request_id not in manager._requests
 
+    @pytest.mark.asyncio
     async def test_complete_request_nonexistent(self, manager: PendingRequestManager) -> None:
         manager.complete_request(request_id=999, result="data")
 
         assert True
 
+    @pytest.mark.asyncio
     async def test_complete_request_success(self, manager: PendingRequestManager) -> None:
         request_id, future = manager.create_request()
 
@@ -35,6 +41,7 @@ class TestPendingRequestManager:
         assert future.result() == "success_payload"
         assert request_id not in manager._requests
 
+    @pytest.mark.asyncio
     async def test_create_request_generates_unique_ids(self, manager: PendingRequestManager) -> None:
         id1, _ = manager.create_request()
         id2, _ = manager.create_request()
@@ -42,6 +49,7 @@ class TestPendingRequestManager:
         assert id1 != id2
         assert len(manager._requests) == 2
 
+    @pytest.mark.asyncio
     async def test_fail_all_with_mixed_states(self, manager: PendingRequestManager) -> None:
         id1, fut1 = manager.create_request()
         id2, fut2 = manager.create_request()
@@ -55,6 +63,7 @@ class TestPendingRequestManager:
         assert fut2.exception() == exc
         assert len(manager._requests) == 0
 
+    @pytest.mark.asyncio
     async def test_fail_request_already_done(self, manager: PendingRequestManager) -> None:
         request_id, future = manager.create_request()
         future.set_result("done")
@@ -65,11 +74,13 @@ class TestPendingRequestManager:
         assert future.result() == "done"
         assert request_id not in manager._requests
 
+    @pytest.mark.asyncio
     async def test_fail_request_nonexistent(self, manager: PendingRequestManager) -> None:
         manager.fail_request(request_id=888, exception=RuntimeError())
 
         assert True
 
+    @pytest.mark.asyncio
     async def test_fail_request_success(self, manager: PendingRequestManager) -> None:
         request_id, future = manager.create_request()
         exc = ValueError("invalid request")

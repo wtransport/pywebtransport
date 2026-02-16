@@ -48,7 +48,7 @@ test:
       - crates/target/
   before_script:
     - apt-get update && apt-get install -y curl build-essential clang
-    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.0
+    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.1
     - export PATH="$CARGO_HOME/bin:$PATH"
     - python -m pip install --upgrade pip
     - pip install -r dev-requirements.txt
@@ -73,7 +73,7 @@ build:
       - crates/target/
   before_script:
     - apt-get update && apt-get install -y curl build-essential clang
-    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.0
+    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.1
     - export PATH="$CARGO_HOME/bin:$PATH"
     - python -m pip install --upgrade pip
     - pip install maturin

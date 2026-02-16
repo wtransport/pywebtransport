@@ -163,7 +163,7 @@ fn test_protocol_identification_values_are_valid() {
 
 #[test]
 fn test_qpack_decoder_constants_integrity() {
-    assert_eq!(QPACK_DECODER_MAX_TABLE_CAPACITY, 4096);
+    assert_eq!(QPACK_DECODER_MAX_TABLE_CAPACITY, 65536);
     assert_eq!(QPACK_DECODER_MAX_BLOCKED_STREAMS, 16);
 }
 

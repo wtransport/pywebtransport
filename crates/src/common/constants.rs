@@ -76,7 +76,7 @@ pub const MAX_STREAM_ID: u64 = (1 << 62) - 1;
 pub const QPACK_DECODER_MAX_BLOCKED_STREAMS: u64 = 16;
 
 /// QPACK maximum dynamic table capacity.
-pub const QPACK_DECODER_MAX_TABLE_CAPACITY: u64 = 4096;
+pub const QPACK_DECODER_MAX_TABLE_CAPACITY: u64 = 65536;
 
 /// HTTP/3 Setting: `ENABLE_CONNECT_PROTOCOL`.
 pub const SETTINGS_ENABLE_CONNECT_PROTOCOL: u64 = 0x8;

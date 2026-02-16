@@ -38,7 +38,7 @@ class TestStructuredDatagramTransport:
     async def transport(
         self, mock_session: Mock, mock_serializer: Mock, registry: dict[int, type[Any]]
     ) -> StructuredDatagramTransport:
-        transport = StructuredDatagramTransport(session=mock_session, serializer=mock_serializer, registry=registry)
+        transport = StructuredDatagramTransport(session=mock_session, registry=registry, serializer=mock_serializer)
         transport.initialize()
         return transport
 
@@ -46,7 +46,7 @@ class TestStructuredDatagramTransport:
     async def test_aenter_aexit(
         self, mock_session: Mock, mock_serializer: Mock, registry: dict[int, type[Any]]
     ) -> None:
-        transport = StructuredDatagramTransport(session=mock_session, serializer=mock_serializer, registry=registry)
+        transport = StructuredDatagramTransport(session=mock_session, registry=registry, serializer=mock_serializer)
 
         async with transport as t:
             assert t is transport
@@ -97,7 +97,7 @@ class TestStructuredDatagramTransport:
     async def test_close_uninitialized_transport(
         self, mock_session: Mock, mock_serializer: Mock, registry: dict[int, type[Any]]
     ) -> None:
-        transport = StructuredDatagramTransport(session=mock_session, serializer=mock_serializer, registry=registry)
+        transport = StructuredDatagramTransport(session=mock_session, registry=registry, serializer=mock_serializer)
 
         await transport.close()
 
@@ -108,20 +108,25 @@ class TestStructuredDatagramTransport:
     async def test_handler_delegates_to_internal_method(
         self, mock_session: Mock, mock_serializer: Mock, registry: dict[int, type[Any]]
     ) -> None:
-        transport = StructuredDatagramTransport(session=mock_session, serializer=mock_serializer, registry=registry)
+        transport = StructuredDatagramTransport(session=mock_session, registry=registry, serializer=mock_serializer)
         transport.initialize()
         handler = mock_session.events.on.call_args.kwargs["handler"]
-        event = Event(type=EventType.DATAGRAM_RECEIVED, data={"data": b"dummy"})
 
-        with patch.object(transport, "_on_datagram_received", new_callable=AsyncMock) as mock_method:
-            await handler(event)
-            mock_method.assert_awaited_once_with(event=event)
+        header = struct.pack("!H", 1)
+        payload = b"123"
+        event = Event(type=EventType.DATAGRAM_RECEIVED, data={"data": header + payload})
+
+        await handler(event)
+
+        mock_serializer.deserialize.assert_called_once()
+        assert transport._incoming_obj_queue is not None
+        assert transport._incoming_obj_queue.qsize() == 1
 
     @pytest.mark.asyncio
     async def test_handler_weakref_behavior(
         self, mock_session: Mock, mock_serializer: Mock, registry: dict[int, type[Any]]
     ) -> None:
-        transport = StructuredDatagramTransport(session=mock_session, serializer=mock_serializer, registry=registry)
+        transport = StructuredDatagramTransport(session=mock_session, registry=registry, serializer=mock_serializer)
         mock_weakref = Mock(return_value=None)
 
         with patch("weakref.ref", return_value=mock_weakref):
@@ -130,22 +135,35 @@ class TestStructuredDatagramTransport:
         handler = mock_session.events.on.call_args.kwargs["handler"]
         event = Event(type=EventType.DATAGRAM_RECEIVED, data={"data": b"dummy"})
 
-        with patch.object(transport, "_on_datagram_received", new_callable=AsyncMock) as mock_method:
-            await handler(event)
-            mock_method.assert_not_called()
+        await handler(event)
 
-    def test_init_raises_configuration_error_on_duplicate_types(
-        self, mock_session: Mock, mock_serializer: Mock
-    ) -> None:
+        mock_serializer.deserialize.assert_not_called()
+
+    def test_init(self, mock_session: Mock, mock_serializer: Mock, registry: dict[int, type[Any]]) -> None:
+        transport = StructuredDatagramTransport(session=mock_session, registry=registry, serializer=mock_serializer)
+
+        assert transport._session() is mock_session
+        assert transport._registry is registry
+        assert transport._serializer is mock_serializer
+        assert transport._class_to_id == {int: 1, str: 2}
+        assert transport._closed is False
+        assert transport._handler_ref is None
+        assert transport._incoming_obj_queue is None
+        assert transport._is_initialized is False
+        assert transport._sentinel is not None
+
+        assert not hasattr(transport, "__dict__")
+
+    def test_init_duplicate_registry_types_raises_error(self, mock_session: Mock, mock_serializer: Mock) -> None:
         registry: dict[int, type[Any]] = {1: int, 2: int}
 
         with pytest.raises(ConfigurationError):
-            StructuredDatagramTransport(session=mock_session, serializer=mock_serializer, registry=registry)
+            StructuredDatagramTransport(session=mock_session, registry=registry, serializer=mock_serializer)
 
     def test_initialize_garbage_collected_session_raises_error(
         self, mock_session: Mock, mock_serializer: Mock, registry: dict[int, type[Any]]
     ) -> None:
-        transport = StructuredDatagramTransport(session=mock_session, serializer=mock_serializer, registry=registry)
+        transport = StructuredDatagramTransport(session=mock_session, registry=registry, serializer=mock_serializer)
 
         with patch.object(transport, "_session", return_value=None):
             with pytest.raises(SessionError, match="parent session is already gone"):
@@ -155,7 +173,7 @@ class TestStructuredDatagramTransport:
         self, mock_session: Mock, mock_serializer: Mock, registry: dict[int, type[Any]]
     ) -> None:
         mock_session.is_closed = True
-        transport = StructuredDatagramTransport(session=mock_session, serializer=mock_serializer, registry=registry)
+        transport = StructuredDatagramTransport(session=mock_session, registry=registry, serializer=mock_serializer)
 
         with pytest.raises(SessionError, match="parent session is closed"):
             transport.initialize()
@@ -204,7 +222,7 @@ class TestStructuredDatagramTransport:
         event = Event(type=EventType.DATAGRAM_RECEIVED, data={"data": header + payload})
         mock_serializer.deserialize.side_effect = RuntimeError("Generic failure")
 
-        with patch("pywebtransport.messaging.datagram.logger") as mock_logger:
+        with patch("pywebtransport.messaging.datagram._logger") as mock_logger:
             await transport._on_datagram_received(event=event)
             mock_logger.error.assert_called_once()
 
@@ -243,13 +261,13 @@ class TestStructuredDatagramTransport:
     async def test_on_datagram_received_queue_full(
         self, mock_session: Mock, mock_serializer: Mock, registry: dict[int, type[Any]]
     ) -> None:
-        transport = StructuredDatagramTransport(session=mock_session, serializer=mock_serializer, registry=registry)
+        transport = StructuredDatagramTransport(session=mock_session, registry=registry, serializer=mock_serializer)
         transport.initialize(queue_size=1)
         header = struct.pack("!H", 1)
         payload = b"123"
         event = Event(type=EventType.DATAGRAM_RECEIVED, data={"data": header + payload})
 
-        with patch("pywebtransport.messaging.datagram.logger") as mock_logger:
+        with patch("pywebtransport.messaging.datagram._logger") as mock_logger:
             await transport._on_datagram_received(event=event)
             await transport._on_datagram_received(event=event)
             mock_logger.warning.assert_called()
@@ -258,13 +276,13 @@ class TestStructuredDatagramTransport:
     async def test_on_datagram_received_queue_full_session_collected(
         self, mock_session: Mock, mock_serializer: Mock, registry: dict[int, type[Any]]
     ) -> None:
-        transport = StructuredDatagramTransport(session=mock_session, serializer=mock_serializer, registry=registry)
+        transport = StructuredDatagramTransport(session=mock_session, registry=registry, serializer=mock_serializer)
         transport.initialize(queue_size=1)
         header = struct.pack("!H", 1)
         payload = b"123"
         event = Event(type=EventType.DATAGRAM_RECEIVED, data={"data": header + payload})
 
-        with patch("pywebtransport.messaging.datagram.logger") as mock_logger:
+        with patch("pywebtransport.messaging.datagram._logger") as mock_logger:
             await transport._on_datagram_received(event=event)
             with patch.object(transport, "_session", return_value=None):
                 await transport._on_datagram_received(event=event)
@@ -293,7 +311,7 @@ class TestStructuredDatagramTransport:
         header = struct.pack("!H", header_val)
         event = Event(type=EventType.DATAGRAM_RECEIVED, data={"data": header + payload})
 
-        with patch("pywebtransport.messaging.datagram.logger") as mock_logger:
+        with patch("pywebtransport.messaging.datagram._logger") as mock_logger:
             await transport._on_datagram_received(event=event)
             mock_logger.warning.assert_called()
 
@@ -319,7 +337,7 @@ class TestStructuredDatagramTransport:
         expected_error: type[Exception],
         match: str,
     ) -> None:
-        transport = StructuredDatagramTransport(session=mock_session, serializer=mock_serializer, registry=registry)
+        transport = StructuredDatagramTransport(session=mock_session, registry=registry, serializer=mock_serializer)
 
         if scenario != "uninitialized":
             transport.initialize()
@@ -369,7 +387,7 @@ class TestStructuredDatagramTransport:
         expected_error: type[Exception],
         match: str,
     ) -> None:
-        transport = StructuredDatagramTransport(session=mock_session, serializer=mock_serializer, registry=registry)
+        transport = StructuredDatagramTransport(session=mock_session, registry=registry, serializer=mock_serializer)
 
         if scenario != "uninitialized":
             transport.initialize()

@@ -1,4 +1,7 @@
+"""Unit tests for the pywebtransport._adapter.base module."""
+
 import asyncio
+from collections import deque
 from typing import Any, cast
 from unittest.mock import MagicMock
 
@@ -39,6 +42,7 @@ from pywebtransport._protocol.events import (
     TransportQuicTimerFired,
     TriggerQuicTimer,
 )
+from pywebtransport.constants import DEFAULT_MAX_EVENT_QUEUE_SIZE
 from pywebtransport.types import EventType
 
 
@@ -242,6 +246,23 @@ class TestWebTransportCommonProtocol:
 
         mock_quic.handle_timer.assert_called_once_with(now=1000.0)
         spy_received.assert_called_once_with(event=mock_event)
+
+    def test_init(self, protocol: WebTransportCommonProtocol, mock_config: ClientConfig, mock_loop: MagicMock) -> None:
+        assert protocol._config is mock_config
+        assert protocol._is_client is True
+        assert protocol._max_event_queue_size == DEFAULT_MAX_EVENT_QUEUE_SIZE
+        assert protocol._loop is mock_loop
+
+        assert protocol._engine is not None
+        assert protocol._pending_manager is not None
+        assert isinstance(protocol._pending_effects, deque)
+        assert protocol._is_processing_effects is False
+
+        assert protocol._early_event_cleanup_timer is None
+        assert protocol._quic_logger is None
+        assert protocol._resource_gc_timer is None
+        assert protocol._status_callback is None
+        assert protocol._timer_handle is None
 
     def test_log_event_no_logger(self, protocol: WebTransportCommonProtocol) -> None:
         protocol._quic_logger = None
@@ -521,6 +542,11 @@ class TestWebTransportCommonProtocol:
         protocol.schedule_timer_now()
 
         assert mock_loop.call_at.call_count == 0
+
+    def test_send_datagram_frame_bytes_input(self, protocol: WebTransportCommonProtocol, mock_quic: MagicMock) -> None:
+        protocol.send_datagram_frame(data=b"ab")
+
+        mock_quic.send_datagram_frame.assert_called_with(data=b"ab")
 
     def test_send_datagram_frame_closing(self, protocol: WebTransportCommonProtocol, mock_quic: MagicMock) -> None:
         mock_quic._close_event = object()

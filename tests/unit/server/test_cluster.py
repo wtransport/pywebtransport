@@ -139,9 +139,8 @@ class TestServerCluster:
         mock_instance.close = mocker.AsyncMock()
 
         async def create_and_stop_cluster(*args: Any, **kwargs: Any) -> Any:
-            if cluster._lock:
-                async with cluster._lock:
-                    cluster._running = False
+            async with cluster._lock:
+                cluster._running = False
             return mock_instance
 
         mocker.patch.object(cluster, "_create_and_start_server", side_effect=create_and_stop_cluster)
@@ -175,9 +174,11 @@ class TestServerCluster:
         mock_stop = mocker.patch.object(cluster, "stop_all", new_callable=mocker.AsyncMock)
 
         async with cluster:
+            assert cluster._active
             mock_start.assert_awaited_once()
             mock_stop.assert_not_called()
 
+        assert not cast(bool, cluster._active)
         mock_stop.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -193,6 +194,7 @@ class TestServerCluster:
     @pytest.mark.asyncio
     async def test_get_cluster_stats_empty(self, mocker: MockerFixture) -> None:
         cluster = ServerCluster(configs=[])
+
         async with cluster:
             stats = await cluster.get_cluster_stats()
             assert stats == {
@@ -228,6 +230,8 @@ class TestServerCluster:
         assert cluster._configs is not server_configs
         assert not cluster.is_running
         assert not cluster._servers
+        assert isinstance(cluster._lock, asyncio.Lock)
+        assert not cluster._active
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -312,12 +316,14 @@ class TestServerCluster:
     @pytest.mark.asyncio
     async def test_serve_forever_not_activated(self, server_configs: list[ServerConfig]) -> None:
         cluster = ServerCluster(configs=server_configs)
+
         with pytest.raises(ServerError, match="Cluster not activated"):
             await cluster.serve_forever()
 
     @pytest.mark.asyncio
     async def test_serve_forever_not_running(self, cluster: ServerCluster) -> None:
         await cluster.stop_all()
+
         with pytest.raises(ServerError, match="Cluster is not running"):
             await cluster.serve_forever()
 
@@ -325,7 +331,7 @@ class TestServerCluster:
     async def test_serve_forever_wait_exception(self, cluster: ServerCluster, mocker: MockerFixture) -> None:
         await cluster.start_all()
         mocker.patch.object(cluster._shutdown_event, "wait", side_effect=ValueError("Unexpected error"))
-        mock_logger = mocker.patch("pywebtransport.server.cluster.logger")
+        mock_logger = mocker.patch("pywebtransport.server.cluster._logger")
 
         await cluster.serve_forever()
 
@@ -347,7 +353,7 @@ class TestServerCluster:
 
         mock_webtransport_server_class.side_effect = [mock_server_fail, mock_server_ok]
         cluster = ServerCluster(configs=server_configs)
-        cluster._lock = asyncio.Lock()
+        cluster._active = True
 
         await cluster.start_all()
 
@@ -372,7 +378,7 @@ class TestServerCluster:
 
         mock_webtransport_server_class.side_effect = [mock_server_fail, mock_server_ok]
         cluster = ServerCluster(configs=server_configs)
-        cluster._lock = asyncio.Lock()
+        cluster._active = True
 
         await cluster.start_all()
 

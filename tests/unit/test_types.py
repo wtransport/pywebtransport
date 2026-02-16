@@ -111,13 +111,18 @@ class TestEnumerations:
 
 class TestRuntimeCheckableProtocols:
 
+    def test_protocol_slots(self) -> None:
+        assert Serializer.__slots__ == ()
+        assert SessionProtocol.__slots__ == ()
+        assert WebTransportProtocol.__slots__ == ()
+
     def test_serializer_protocol_conformance(self) -> None:
         class GoodSerializer:
-            def serialize(self, *, obj: Any) -> bytes:
-                return b"serialized"
-
             def deserialize(self, *, data: Buffer, obj_type: Any = None) -> Any:
                 return "deserialized"
+
+            def serialize(self, *, obj: Any) -> bytes:
+                return b"serialized"
 
         assert isinstance(GoodSerializer(), Serializer)
 
@@ -130,6 +135,9 @@ class TestRuntimeCheckableProtocols:
 
     def test_session_protocol_conformance(self) -> None:
         class GoodSession:
+            async def close(self, *, error_code: int = 0, reason: str | None = None) -> None:
+                pass
+
             @property
             def headers(self) -> Headers:
                 return {}
@@ -149,9 +157,6 @@ class TestRuntimeCheckableProtocols:
             @property
             def state(self) -> SessionState:
                 return SessionState.CONNECTED
-
-            async def close(self, *, error_code: int = 0, reason: str | None = None) -> None:
-                pass
 
         assert isinstance(GoodSession(), SessionProtocol)
 

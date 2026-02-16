@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from types import TracebackType
-from typing import Self
+from typing import Final, Self
 
 from pywebtransport.client.client import WebTransportClient
 from pywebtransport.exceptions import ClientError
@@ -14,28 +14,30 @@ from pywebtransport.utils import get_logger
 
 __all__: list[str] = ["ClientFleet"]
 
-logger = get_logger(name=__name__)
+_DEFAULT_MAX_CONCURRENT_HANDSHAKES: Final[int] = 50
 
-DEFAULT_MAX_CONCURRENT_HANDSHAKES: int = 50
+_logger = get_logger(name=__name__)
 
 
 class ClientFleet:
-    """Manages a fleet of WebTransportClient instances to distribute load."""
+    """Manage a fleet of WebTransportClient instances to distribute load."""
 
     def __init__(
-        self, *, clients: list[WebTransportClient], max_concurrent_handshakes: int = DEFAULT_MAX_CONCURRENT_HANDSHAKES
+        self, *, clients: list[WebTransportClient], max_concurrent_handshakes: int = _DEFAULT_MAX_CONCURRENT_HANDSHAKES
     ) -> None:
-        """Initialize the client fleet."""
+        """Initialize the instance."""
         if not clients:
             raise ValueError("ClientFleet requires at least one client instance.")
 
         self._clients = clients
-        self._current_index = 0
+        self._max_concurrent_handshakes = max_concurrent_handshakes
+
         self._active = False
         self._connect_sem = asyncio.Semaphore(max_concurrent_handshakes)
+        self._current_index = 0
 
     async def __aenter__(self) -> Self:
-        """Enter the async context and activate all clients in the fleet."""
+        """Enter the asynchronous context."""
         self._active = True
         successful_clients: list[WebTransportClient] = []
 
@@ -48,7 +50,7 @@ class ClientFleet:
                 for client in self._clients:
                     tg.create_task(coro=_startup_wrapper(client))
         except* Exception as eg:
-            logger.error("Failed to activate clients in fleet: %s", eg.exceptions, exc_info=eg)
+            _logger.error("Failed to activate clients in fleet: %s", eg.exceptions, exc_info=eg)
             self._active = False
 
             if successful_clients:
@@ -57,27 +59,27 @@ class ClientFleet:
                         for client in successful_clients:
                             cleanup_tg.create_task(coro=client.__aexit__(None, None, None))
                 except* Exception as cleanup_eg:
-                    logger.error(
+                    _logger.error(
                         "Error during fleet cleanup after activation failure: %s",
                         cleanup_eg.exceptions,
                         exc_info=cleanup_eg,
                     )
             raise eg
 
-        logger.info("ClientFleet activated with %d clients", len(self._clients))
+        _logger.info("ClientFleet activated with %d clients", len(self._clients))
         return self
 
     async def __aexit__(
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
     ) -> None:
-        """Exit the async context and close all clients in the fleet."""
+        """Exit the asynchronous context."""
         self._active = False
         try:
             async with asyncio.TaskGroup() as tg:
                 for client in self._clients:
                     tg.create_task(coro=client.__aexit__(exc_type, exc_val, exc_tb))
         except* Exception as eg:
-            logger.error("Error closing clients in fleet: %s", eg.exceptions, exc_info=eg)
+            _logger.error("Error closing clients in fleet: %s", eg.exceptions, exc_info=eg)
 
     async def connect_all(self, *, url: URL) -> list[WebTransportSession]:
         """Connect all clients in the fleet to the specified URL."""
@@ -88,7 +90,7 @@ class ClientFleet:
                 async with self._connect_sem:
                     return await client.connect(url=url)
             except Exception as e:
-                logger.warning("Client failed to connect: %s", e)
+                _logger.warning("Client failed to connect: %s", e)
                 return None
 
         tasks: list[asyncio.Task[WebTransportSession | None]] = []
@@ -105,7 +107,7 @@ class ClientFleet:
         return sessions
 
     def get_client(self) -> WebTransportClient:
-        """Get an active client from the fleet using a round-robin strategy."""
+        """Return an active client from the fleet using a round-robin strategy."""
         self._check_active()
 
         client = self._clients[self._current_index]
@@ -113,11 +115,11 @@ class ClientFleet:
         return client
 
     def get_client_count(self) -> int:
-        """Get the number of clients currently in the fleet."""
+        """Return the number of clients currently in the fleet."""
         return len(self._clients)
 
     def _check_active(self) -> None:
-        """Check if the fleet is active."""
+        """Verify that the fleet is currently active."""
         if not self._active:
             raise ClientError(
                 message=(

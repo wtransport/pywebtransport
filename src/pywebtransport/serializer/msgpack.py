@@ -24,6 +24,8 @@ __all__: list[str] = ["MsgPackSerializer"]
 class MsgPackSerializer(BaseDataclassSerializer, Serializer):
     """Serializer for encoding and decoding using the MsgPack format."""
 
+    __slots__ = ("_pack_kwargs", "_unpack_kwargs", "_user_default")
+
     def __init__(
         self, *, pack_kwargs: dict[str, Any] | None = None, unpack_kwargs: dict[str, Any] | None = None
     ) -> None:

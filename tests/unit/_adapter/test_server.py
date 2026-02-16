@@ -75,14 +75,14 @@ class TestCreateServer:
 
         assert result == mock_quic_serve.return_value
         mock_create_quic_config.assert_called_once_with(
+            is_client=False,
             alpn_protocols=server_config.alpn_protocols,
+            congestion_control_algorithm=server_config.congestion_control_algorithm,
+            max_datagram_size=server_config.max_datagram_size,
+            idle_timeout=server_config.connection_idle_timeout,
             ca_certs=None,
             certfile=server_config.certfile,
-            congestion_control_algorithm=server_config.congestion_control_algorithm,
-            idle_timeout=server_config.connection_idle_timeout,
-            is_client=False,
             keyfile=server_config.keyfile,
-            max_datagram_size=server_config.max_datagram_size,
             verify_mode=server_config.verify_mode,
         )
         mock_quic_serve.assert_awaited_once()

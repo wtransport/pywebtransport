@@ -1,8 +1,8 @@
 [package]
 name = "wtransport-engine"
-version = "0.13.0"
+version = "0.13.1"
 edition = "2024"
-rust-version = "1.93.0"
+rust-version = "1.93.1"
 publish = false
 build = "build.rs"
 

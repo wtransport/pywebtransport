@@ -62,7 +62,7 @@ class TestPatches:
         assert event.error_code == 123
 
     def test_is_finished_replacement_bidirectional(self) -> None:
-        with patch("pywebtransport._adapter.patches.ORIGINAL_IS_FINISHED_GETTER") as mock_getter:
+        with patch("pywebtransport._adapter.patches._ORIGINAL_IS_FINISHED_GETTER") as mock_getter:
             mock_getter.return_value = True
             mock_stream = MagicMock()
             mock_stream.stream_id = 0
@@ -72,7 +72,7 @@ class TestPatches:
             assert result is True
 
     def test_is_finished_replacement_not_finished(self) -> None:
-        with patch("pywebtransport._adapter.patches.ORIGINAL_IS_FINISHED_GETTER") as mock_getter:
+        with patch("pywebtransport._adapter.patches._ORIGINAL_IS_FINISHED_GETTER") as mock_getter:
             mock_getter.return_value = False
             mock_stream = MagicMock()
 
@@ -82,7 +82,7 @@ class TestPatches:
             mock_getter.assert_called_once_with(mock_stream)
 
     def test_is_finished_replacement_uni_active_retention(self) -> None:
-        with patch("pywebtransport._adapter.patches.ORIGINAL_IS_FINISHED_GETTER") as mock_getter:
+        with patch("pywebtransport._adapter.patches._ORIGINAL_IS_FINISHED_GETTER") as mock_getter:
             mock_getter.return_value = True
             mock_stream = MagicMock()
             mock_stream.stream_id = 2
@@ -94,7 +94,7 @@ class TestPatches:
             assert result is False
 
     def test_is_finished_replacement_uni_reset_code_set(self) -> None:
-        with patch("pywebtransport._adapter.patches.ORIGINAL_IS_FINISHED_GETTER") as mock_getter:
+        with patch("pywebtransport._adapter.patches._ORIGINAL_IS_FINISHED_GETTER") as mock_getter:
             mock_getter.return_value = True
             mock_stream = MagicMock()
             mock_stream.stream_id = 2
@@ -106,7 +106,7 @@ class TestPatches:
             assert result is True
 
     def test_is_finished_replacement_uni_reset_pending(self) -> None:
-        with patch("pywebtransport._adapter.patches.ORIGINAL_IS_FINISHED_GETTER") as mock_getter:
+        with patch("pywebtransport._adapter.patches._ORIGINAL_IS_FINISHED_GETTER") as mock_getter:
             mock_getter.return_value = True
             mock_stream = MagicMock()
             mock_stream.stream_id = 2

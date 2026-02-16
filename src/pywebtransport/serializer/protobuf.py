@@ -23,6 +23,8 @@ __all__: list[str] = ["ProtobufSerializer"]
 class ProtobufSerializer(Serializer):
     """Serializer for encoding and decoding using the Protobuf format."""
 
+    __slots__ = ()
+
     def __init__(self) -> None:
         """Initialize the Protobuf serializer."""
         if Message is None:

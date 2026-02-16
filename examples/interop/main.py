@@ -5,7 +5,8 @@ import http
 import logging
 import random
 from collections import deque
-from typing import Any, Optional, Union
+from pathlib import Path
+from typing import Any, Final, Optional, Union
 from urllib.parse import parse_qs, urlparse
 
 import uvloop
@@ -25,19 +26,23 @@ from pywebtransport.server.middleware import MiddlewareRejected
 from pywebtransport.types import EventType, SessionProtocol, StreamDirection
 from pywebtransport.utils import generate_self_signed_cert
 
-HOST = "::"
-PORT = 4433
+CERT_HOSTNAME: Final[str] = "localhost"
+CERT_PATH: Final[Path] = Path(f"{CERT_HOSTNAME}.crt")
+KEY_PATH: Final[Path] = Path(f"{CERT_HOSTNAME}.key")
 
-BATON_TIMEOUT = 10.0
-MAX_PADDING = 65536
+HOST: Final[str] = "::"
+PORT: Final[int] = 4433
 
-ERR_BORED = 0x04
-ERR_BRUH = 0x02
-ERR_DA_YAMN = 0x01
-ERR_IDC = 0x01
-ERR_I_LIED = 0x03
-ERR_SUS = 0x03
-ERR_WHATEVER = 0x02
+BATON_TIMEOUT: Final[float] = 10.0
+MAX_PADDING: Final[int] = 65536
+
+ERR_BORED: Final[int] = 0x04
+ERR_BRUH: Final[int] = 0x02
+ERR_DA_YAMN: Final[int] = 0x01
+ERR_IDC: Final[int] = 0x01
+ERR_I_LIED: Final[int] = 0x03
+ERR_SUS: Final[int] = 0x03
+ERR_WHATEVER: Final[int] = 0x02
 
 logging.basicConfig(
     level=logging.INFO,
@@ -472,13 +477,14 @@ class InteropServer(ServerApp):
 
 async def main() -> None:
     """Configure and start the server."""
-    generate_self_signed_cert(hostname="localhost")
+    if not CERT_PATH.exists() or not KEY_PATH.exists():
+        generate_self_signed_cert(hostname=CERT_HOSTNAME, output_dir=".")
 
     config = ServerConfig(
         bind_host=HOST,
         bind_port=PORT,
-        certfile="localhost.crt",
-        keyfile="localhost.key",
+        certfile=str(CERT_PATH),
+        keyfile=str(KEY_PATH),
     )
 
     app = InteropServer(config=config)

@@ -5,29 +5,21 @@ from __future__ import annotations
 import types
 from dataclasses import fields, is_dataclass
 from enum import Enum
-from typing import Any, Union, get_args, get_origin
+from typing import Any, Final, Union, get_args, get_origin, get_type_hints
 
 from pywebtransport.exceptions import SerializationError
 
 __all__: list[str] = []
 
-
-_FIELDS_CACHE: dict[type[Any], tuple[Any, ...]] = {}
-
-
-def _get_cached_fields(*, cls: type[Any]) -> tuple[Any, ...]:
-    if cls in _FIELDS_CACHE:
-        return _FIELDS_CACHE[cls]
-
-    cls_fields = fields(cls)
-    _FIELDS_CACHE[cls] = cls_fields
-    return cls_fields
+_FIELDS_CACHE: dict[type[Any], tuple[tuple[str, Any], ...]] = {}
 
 
 class BaseDataclassSerializer:
     """Base class providing recursive dict-to-dataclass conversion."""
 
-    _MAX_RECURSION_DEPTH = 64
+    __slots__ = ()
+
+    _MAX_RECURSION_DEPTH: Final[int] = 64
 
     def convert_to_type(self, *, data: Any, target_type: Any, depth: int = 0) -> Any:
         """Recursively convert a decoded object to a specific target type."""
@@ -105,11 +97,11 @@ class BaseDataclassSerializer:
             raise SerializationError(message="Maximum recursion depth exceeded during dataclass unpacking.")
 
         constructor_args = {}
-        for field in _get_cached_fields(cls=cls):
-            if field.name in data:
-                field_value = data[field.name]
-                constructor_args[field.name] = self.convert_to_type(
-                    data=field_value, target_type=field.type, depth=depth + 1
+        for field_name, field_type in _get_cached_fields(cls=cls):
+            if field_name in data:
+                field_value = data[field_name]
+                constructor_args[field_name] = self.convert_to_type(
+                    data=field_value, target_type=field_type, depth=depth + 1
                 )
 
         try:
@@ -118,3 +110,23 @@ class BaseDataclassSerializer:
             raise SerializationError(
                 message=f"Failed to unpack dictionary to dataclass {cls.__name__}.", original_exception=e
             ) from e
+
+
+def _get_cached_fields(*, cls: type[Any]) -> tuple[tuple[str, Any], ...]:
+    """Retrieve dataclass fields and resolve their type hints."""
+    if cls in _FIELDS_CACHE:
+        return _FIELDS_CACHE[cls]
+
+    try:
+        resolved_hints = get_type_hints(cls)
+    except Exception:
+        resolved_hints = {}
+
+    resolved_fields = []
+    for field in fields(cls):
+        resolved_type = resolved_hints.get(field.name, field.type)
+        resolved_fields.append((field.name, resolved_type))
+
+    cached_tuple = tuple(resolved_fields)
+    _FIELDS_CACHE[cls] = cached_tuple
+    return cached_tuple

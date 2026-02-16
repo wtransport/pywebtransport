@@ -28,11 +28,14 @@ from pywebtransport.serializer import JSONSerializer, MsgPackSerializer
 from pywebtransport.types import ConnectionState, EventType, SessionState
 from pywebtransport.utils import generate_self_signed_cert, get_timestamp
 
-CERT_PATH: Final[Path] = Path("localhost.crt")
-KEY_PATH: Final[Path] = Path("localhost.key")
+CERT_HOSTNAME: Final[str] = "localhost"
+CERT_PATH: Final[Path] = Path(f"{CERT_HOSTNAME}.crt")
+KEY_PATH: Final[Path] = Path(f"{CERT_HOSTNAME}.key")
+
 DEBUG_MODE: Final[bool] = "--debug" in sys.argv
 SERVER_HOST: Final[str] = "::"
 SERVER_PORT: Final[int] = 4433
+
 JSON_SERIALIZER = JSONSerializer()
 MSGPACK_SERIALIZER = MsgPackSerializer()
 
@@ -305,7 +308,7 @@ async def handle_structured_datagram(*, session: WebTransportSession, serializer
 
     try:
         structured_datagram_transport = StructuredDatagramTransport(
-            session=session, serializer=serializer, registry=MESSAGE_REGISTRY
+            session=session, registry=MESSAGE_REGISTRY, serializer=serializer
         )
         structured_datagram_transport.initialize()
 
@@ -330,8 +333,8 @@ async def handle_structured_stream(*, stream: WebTransportStream, serializer: An
     try:
         structured_stream = StructuredStream(
             stream=raw_stream,
-            serializer=serializer,
             registry=MESSAGE_REGISTRY,
+            serializer=serializer,
             max_message_size=DEFAULT_MAX_MESSAGE_SIZE,
         )
         async for obj in structured_stream:
@@ -361,8 +364,8 @@ async def main() -> None:
     logger.info("Starting WebTransport E2E Test Server...")
 
     if not CERT_PATH.exists() or not KEY_PATH.exists():
-        logger.info("Generating self-signed certificate for %s...", CERT_PATH.stem)
-        generate_self_signed_cert(hostname=CERT_PATH.stem, output_dir=".")
+        logger.info("Generating self-signed certificate for %s...", CERT_HOSTNAME)
+        generate_self_signed_cert(hostname=CERT_HOSTNAME, output_dir=".")
 
     config = ServerConfig(
         bind_host=SERVER_HOST,

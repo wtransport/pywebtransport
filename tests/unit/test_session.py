@@ -1,6 +1,7 @@
 """Unit tests for the pywebtransport.session module."""
 
 import asyncio
+import dataclasses
 from typing import Any, cast
 from unittest.mock import MagicMock
 
@@ -75,6 +76,11 @@ class TestSessionDiagnostics:
         assert diag.local_data_consumed == 40
         assert diag.peer_streams_bidi_closed == 1
 
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cast(Any, diag).state = SessionState.CLOSED
+
+        assert not hasattr(diag, "__dict__")
+
 
 class TestWebTransportSession:
 
@@ -132,7 +138,7 @@ class TestWebTransportSession:
         mock_protocol.create_request.side_effect = None
         mock_protocol.create_request.return_value = (1, fut)
         fut.set_exception(ConnectionError("Gone"))
-        spy_logger = mocker.patch("pywebtransport.session.logger")
+        spy_logger = mocker.patch("pywebtransport.session._logger")
 
         await session.close()
 
@@ -157,7 +163,7 @@ class TestWebTransportSession:
 
     @pytest.mark.asyncio
     async def test_context_manager(self, session: WebTransportSession, mocker: MockerFixture) -> None:
-        spy_close = mocker.patch.object(session, "close", new_callable=mocker.AsyncMock)
+        spy_close = mocker.patch.object(WebTransportSession, "close", new_callable=mocker.AsyncMock)
 
         async with session as s:
             assert s is session
@@ -279,7 +285,7 @@ class TestWebTransportSession:
         mock_protocol.create_request.side_effect = None
         mock_protocol.create_request.return_value = (1, fut)
         mocker.patch("asyncio.timeout", side_effect=asyncio.TimeoutError)
-        spy_logger = mocker.patch("pywebtransport.session.logger")
+        spy_logger = mocker.patch("pywebtransport.session._logger")
 
         with pytest.raises(TimeoutError, match="timed out creating stream"):
             await session.create_bidirectional_stream()
@@ -385,12 +391,16 @@ class TestWebTransportSession:
 
         assert "New" not in internal_headers
 
-    def test_init(self, session: WebTransportSession) -> None:
-        assert session.session_id == 1
-        assert session.path == "/chat"
-        assert session.headers == {"User-Agent": "TestClient"}
-        assert session.state == SessionState.CONNECTING
-        assert session.is_closed is False
+    def test_init(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
+        assert session._connection() is mock_connection
+        assert session._session_id == 1
+        assert session._path == "/chat"
+        assert session._headers == {"User-Agent": "TestClient"}
+
+        assert session._cached_state == SessionState.CONNECTING
+        assert session.events is not None
+
+        assert not hasattr(session, "__dict__")
 
     @pytest.mark.asyncio
     async def test_methods_connection_gone(self, session: WebTransportSession) -> None:
@@ -414,6 +424,12 @@ class TestWebTransportSession:
         session._on_session_ready(event=MagicMock())
 
         assert session.state == SessionState.CONNECTED
+
+    def test_properties(self, session: WebTransportSession) -> None:
+        assert session.path == "/chat"
+        assert session.is_closed is False
+        assert session.session_id == 1
+        assert session.state == SessionState.CONNECTING
 
     def test_remote_address(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
         assert session.remote_address == ("127.0.0.1", 443)

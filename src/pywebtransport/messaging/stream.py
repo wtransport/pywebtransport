@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import struct
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final, Self
 
 from pywebtransport.constants import ErrorCodes
 from pywebtransport.exceptions import ConfigurationError, SerializationError, StreamError
@@ -20,15 +20,17 @@ __all__: list[str] = ["StructuredStream"]
 class StructuredStream:
     """A high-level wrapper for sending and receiving structured objects."""
 
-    _HEADER_FORMAT = "!HI"
-    _HEADER_SIZE = struct.calcsize(_HEADER_FORMAT)
+    __slots__ = ("_stream", "_registry", "_serializer", "_max_message_size", "_class_to_id", "_write_lock")
+
+    _HEADER_FORMAT: Final[str] = "!HI"
+    _HEADER_SIZE: Final[int] = struct.calcsize(_HEADER_FORMAT)
 
     def __init__(
         self,
         *,
         stream: WebTransportStream,
-        serializer: Serializer,
         registry: dict[int, type[Any]],
+        serializer: Serializer,
         max_message_size: int,
     ) -> None:
         """Initialize the structured stream wrapper."""
@@ -36,9 +38,10 @@ class StructuredStream:
             raise ConfigurationError(message="Types in the structured stream registry must be unique.")
 
         self._stream = stream
-        self._serializer = serializer
         self._registry = registry
+        self._serializer = serializer
         self._max_message_size = max_message_size
+
         self._class_to_id = {v: k for k, v in registry.items()}
         self._write_lock = asyncio.Lock()
 
@@ -109,7 +112,7 @@ class StructuredStream:
         async with self._write_lock:
             await self._stream.write(data=full_packet)
 
-    def __aiter__(self) -> StructuredStream:
+    def __aiter__(self) -> Self:
         """Return self as the asynchronous iterator."""
         return self
 

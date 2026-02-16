@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from types import TracebackType
-from typing import Any, Self, cast
+from typing import Any, Self
 
 from pywebtransport.config import ServerConfig
 from pywebtransport.exceptions import ServerError
@@ -14,40 +14,43 @@ from pywebtransport.utils import get_logger
 
 __all__: list[str] = ["ServerCluster"]
 
-logger = get_logger(name=__name__)
+_logger = get_logger(name=__name__)
 
 
 class ServerCluster:
-    """Manages the lifecycle of multiple WebTransport server instances."""
+    """Manage the lifecycle of multiple WebTransport server instances."""
 
     def __init__(self, *, configs: list[ServerConfig]) -> None:
-        """Initialize the server cluster."""
+        """Initialize the instance."""
         self._configs = list(configs)
-        self._servers: list[WebTransportServer] = []
+
+        self._active = False
+        self._lock = asyncio.Lock()
         self._running = False
-        self._lock: asyncio.Lock | None = None
+        self._servers: list[WebTransportServer] = []
         self._shutdown_event = asyncio.Event()
 
-    @property
-    def is_running(self) -> bool:
-        """Check if the cluster is currently running."""
-        return self._running
-
     async def __aenter__(self) -> Self:
-        """Enter the async context and start all servers."""
-        self._lock = asyncio.Lock()
+        """Enter the asynchronous context."""
+        self._active = True
         await self.start_all()
         return self
 
     async def __aexit__(
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
     ) -> None:
-        """Exit the async context and stop all servers."""
+        """Exit the asynchronous context."""
         await self.stop_all()
+        self._active = False
+
+    @property
+    def is_running(self) -> bool:
+        """Return True if the cluster is currently running."""
+        return self._running
 
     async def add_server(self, *, config: ServerConfig) -> WebTransportServer | None:
-        """Add and start a new server in the running cluster."""
-        if self._lock is None:
+        """Instantiate and start a new server dynamically."""
+        if not self._active:
             raise ServerError(
                 message=(
                     "ServerCluster has not been activated. It must be used as an "
@@ -58,20 +61,20 @@ class ServerCluster:
         async with self._lock:
             if not self._running:
                 self._configs.append(config)
-                logger.info("Cluster not running. Server config added for next start.")
+                _logger.info("Cluster not running. Server config added for next start.")
                 return None
 
         try:
             server = await self._create_and_start_server(config=config)
         except Exception as e:
-            logger.error("Failed to add server to cluster: %s", e, exc_info=True)
+            _logger.error("Failed to add server to cluster: %s", e, exc_info=True)
             return None
 
         return await self._finalize_added_server(server=server, config=config)
 
     async def get_cluster_stats(self) -> dict[str, Any]:
-        """Get deeply aggregated statistics for the entire cluster."""
-        if self._lock is None:
+        """Retrieve aggregated statistics for the entire cluster."""
+        if not self._active:
             raise ServerError(
                 message=(
                     "ServerCluster has not been activated. It must be used as an "
@@ -98,7 +101,7 @@ class ServerCluster:
                 for s in servers_snapshot:
                     tasks.append(tg.create_task(coro=s.diagnostics()))
         except* Exception as eg:
-            logger.error("Failed to fetch stats from some servers: %s", eg.exceptions, exc_info=True)
+            _logger.error("Failed to fetch stats from some servers: %s", eg.exceptions, exc_info=True)
             raise eg
 
         diagnostics_list = [task.result() for task in tasks if task.done() and not task.exception()]
@@ -119,22 +122,22 @@ class ServerCluster:
         return agg_stats
 
     async def get_server_count(self) -> int:
-        """Get the number of running servers in the cluster."""
-        if self._lock is None:
+        """Return the number of running servers in the cluster."""
+        if not self._active:
             raise ServerError("Cluster not activated.")
         async with self._lock:
             return len(self._servers)
 
     async def get_servers(self) -> list[WebTransportServer]:
-        """Get a thread-safe copy of all active servers in the cluster."""
-        if self._lock is None:
+        """Return a copy of all active servers in the cluster."""
+        if not self._active:
             raise ServerError("Cluster not activated.")
         async with self._lock:
             return list(self._servers)
 
     async def remove_server(self, *, host: str, port: int) -> bool:
-        """Remove and stop a specific server from the cluster by its config address."""
-        if self._lock is None:
+        """Terminate and remove a specific server configuration."""
+        if not self._active:
             raise ServerError(
                 message=(
                     "ServerCluster has not been activated. It must be used as an "
@@ -153,34 +156,34 @@ class ServerCluster:
                 self._servers.remove(server_to_remove)
                 self._configs = [c for c in self._configs if not (c.bind_host == host and c.bind_port == port)]
             else:
-                logger.warning("Server with config %s:%s not found in cluster.", host, port)
+                _logger.warning("Server with config %s:%s not found in cluster.", host, port)
                 return False
 
         await server_to_remove.close()
-        logger.info("Removed server from cluster: %s:%s", host, port)
+        _logger.info("Removed server from cluster: %s:%s", host, port)
         return True
 
     async def serve_forever(self) -> None:
-        """Run the cluster indefinitely until interrupted."""
-        if self._lock is None:
+        """Execute the cluster run loop indefinitely."""
+        if not self._active:
             raise ServerError("Cluster not activated.")
 
         if not self._running:
             raise ServerError("Cluster is not running.")
 
-        logger.info("Cluster serving forever. Press Ctrl+C to stop.")
+        _logger.info("Cluster serving forever. Press Ctrl+C to stop.")
         try:
             await self._shutdown_event.wait()
         except asyncio.CancelledError:
-            logger.info("serve_forever cancelled.")
+            _logger.info("serve_forever cancelled.")
         except Exception as e:
-            logger.error("Error during serve_forever wait: %s", e)
+            _logger.error("Error during serve_forever wait: %s", e)
         finally:
-            logger.info("serve_forever loop finished.")
+            _logger.info("serve_forever loop finished.")
 
     async def start_all(self) -> None:
-        """Start all servers in the cluster concurrently."""
-        if self._lock is None:
+        """Activate all configured servers concurrently."""
+        if not self._active:
             raise ServerError(
                 message=(
                     "ServerCluster has not been activated. It must be used as an "
@@ -200,7 +203,7 @@ class ServerCluster:
             try:
                 return await self._create_and_start_server(config=config)
             except Exception as e:
-                logger.error(
+                _logger.error(
                     "Failed to start server on %s:%s: %s", config.bind_host, config.bind_port, e, exc_info=True
                 )
                 return None
@@ -218,11 +221,11 @@ class ServerCluster:
 
         async with self._lock:
             self._servers.extend(started_servers)
-            logger.info("Cluster started. %d/%d servers active.", len(self._servers), len(configs_to_start))
+            _logger.info("Cluster started. %d/%d servers active.", len(self._servers), len(configs_to_start))
 
     async def stop_all(self) -> None:
-        """Stop all servers in the cluster concurrently."""
-        if self._lock is None:
+        """Terminate all active servers."""
+        if not self._active:
             raise ServerError(
                 message=(
                     "ServerCluster has not been activated. It must be used as an "
@@ -245,13 +248,13 @@ class ServerCluster:
                     for server in servers_to_stop:
                         tg.create_task(coro=server.close())
             except* Exception as eg:
-                logger.error("Errors occurred while stopping server cluster: %s", eg.exceptions, exc_info=True)
+                _logger.error("Errors occurred while stopping server cluster: %s", eg.exceptions, exc_info=True)
                 raise eg
 
-            logger.info("Stopped server cluster")
+            _logger.info("Stopped server cluster")
 
     async def _create_and_start_server(self, *, config: ServerConfig) -> WebTransportServer:
-        """Create, activate, and start a single server instance."""
+        """Instantiate and activate a single server instance."""
         server = WebTransportServer(config=config)
         await server.__aenter__()
 
@@ -265,14 +268,15 @@ class ServerCluster:
     async def _finalize_added_server(
         self, *, server: WebTransportServer, config: ServerConfig
     ) -> WebTransportServer | None:
-        """Register a newly started server if the cluster is still running."""
-        async with cast(asyncio.Lock, self._lock):
+        """Register the newly started server."""
+        # 移除了冗余的 cast(asyncio.Lock, self._lock), 因为 self._lock 已经在 __init__ 中声明
+        async with self._lock:
             if not self._running:
-                logger.warning("Cluster stopped while new server was starting. Shutting down new server.")
+                _logger.warning("Cluster stopped while new server was starting. Shutting down new server.")
                 await server.close()
                 return None
 
             self._configs.append(config)
             self._servers.append(server)
-            logger.info("Added server to cluster: %s", server.local_address)
+            _logger.info("Added server to cluster: %s", server.local_address)
             return server

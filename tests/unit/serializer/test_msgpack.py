@@ -100,6 +100,13 @@ class TestMsgPackSerializer:
         assert isinstance(result, tuple)
         assert result == (1, 2, 3)
 
+    def test_init(self, serializer: Any) -> None:
+        assert serializer._pack_kwargs == {}
+        assert serializer._unpack_kwargs == {}
+        assert serializer._user_default is None
+
+        assert not hasattr(serializer, "__dict__")
+
     def test_init_raises_configuration_error_if_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("pywebtransport.serializer.msgpack.msgpack", None)
         from pywebtransport.serializer.msgpack import MsgPackSerializer

@@ -58,7 +58,7 @@ __all__: list[str] = ["BaseConfig", "ClientConfig", "ServerConfig"]
 
 @dataclass(kw_only=True)
 class BaseConfig(ABC):
-    """Base configuration class sharing common fields and logic."""
+    """Encapsulate common configuration fields and logic."""
 
     alpn_protocols: list[str] = field(default_factory=lambda: list(DEFAULT_ALPN_PROTOCOLS))
     ca_certs: str | None = None
@@ -92,9 +92,13 @@ class BaseConfig(ABC):
     stream_creation_timeout: float = DEFAULT_STREAM_CREATION_TIMEOUT
     write_timeout: float | None = DEFAULT_WRITE_TIMEOUT
 
+    def copy(self) -> Self:
+        """Create a deep copy of the configuration."""
+        return copy.deepcopy(x=self)
+
     @classmethod
     def from_dict(cls, *, config_dict: dict[str, Any]) -> Self:
-        """Create a configuration instance from a dictionary."""
+        """Instantiate configuration from a dictionary."""
         valid_keys = {f.name for f in cls.__dataclass_fields__.values()}
         filtered_dict = {k: v for k, v in config_dict.items() if k in valid_keys}
 
@@ -125,12 +129,8 @@ class BaseConfig(ABC):
 
         return cls(**filtered_dict)
 
-    def copy(self) -> Self:
-        """Create a deep copy of the configuration."""
-        return copy.deepcopy(x=self)
-
     def to_dict(self) -> dict[str, Any]:
-        """Convert the configuration to a dictionary."""
+        """Serialize the configuration to a dictionary."""
         result = {}
         for field_name in self.__dataclass_fields__:
             value = getattr(self, field_name)
@@ -142,7 +142,7 @@ class BaseConfig(ABC):
         return result
 
     def update(self, **kwargs: Any) -> Self:
-        """Create a new config with updated values."""
+        """Return a new configuration with updated values."""
         new_config = self.copy()
         for key, value in kwargs.items():
             if hasattr(new_config, key):
@@ -155,7 +155,7 @@ class BaseConfig(ABC):
         return new_config
 
     def validate(self) -> None:
-        """Validate configuration options common to all config types."""
+        """Validate the configuration state."""
         if not self.alpn_protocols:
             raise ConfigurationError(
                 message="Invalid value for 'alpn_protocols': cannot be empty",
@@ -287,7 +287,7 @@ class BaseConfig(ABC):
 
 @dataclass(kw_only=True)
 class ClientConfig(BaseConfig):
-    """Configuration for the WebTransport client."""
+    """Encapsulate WebTransport client configuration."""
 
     connect_timeout: float = DEFAULT_CONNECT_TIMEOUT
     headers: Headers = field(default_factory=dict)
@@ -301,7 +301,7 @@ class ClientConfig(BaseConfig):
     verify_mode: ssl.VerifyMode | None = ssl.CERT_REQUIRED
 
     def validate(self) -> None:
-        """Validate client specific configuration."""
+        """Validate the client configuration state."""
         super().validate()
 
         try:
@@ -358,7 +358,7 @@ class ClientConfig(BaseConfig):
 
 @dataclass(kw_only=True)
 class ServerConfig(BaseConfig):
-    """Configuration for the WebTransport server."""
+    """Encapsulate WebTransport server configuration."""
 
     bind_host: str = DEFAULT_BIND_HOST
     bind_port: int = DEFAULT_DEV_PORT
@@ -368,7 +368,7 @@ class ServerConfig(BaseConfig):
 
     @classmethod
     def from_dict(cls, *, config_dict: dict[str, Any]) -> Self:
-        """Create a ServerConfig instance with type coercion."""
+        """Instantiate the server configuration with type coercion."""
         if "bind_port" in config_dict and isinstance(config_dict["bind_port"], str):
             try:
                 config_dict = config_dict.copy()
@@ -378,7 +378,7 @@ class ServerConfig(BaseConfig):
         return super().from_dict(config_dict=config_dict)
 
     def validate(self) -> None:
-        """Validate server specific configuration."""
+        """Validate the server configuration state."""
         super().validate()
 
         if not self.bind_host:
@@ -412,13 +412,13 @@ class ServerConfig(BaseConfig):
 
 
 def _validate_port(*, port: Any) -> None:
-    """Validate that a value is a valid network port."""
+    """Validate the network port."""
     if not isinstance(port, int) or not (1 <= port <= 65535):
         raise ValueError(f"Port must be an integer between 1 and 65535, got {port}")
 
 
 def _validate_timeout(*, timeout: float | None) -> None:
-    """Validate a timeout value."""
+    """Validate the timeout value."""
     if timeout is not None:
         if not isinstance(timeout, (int, float)):
             raise TypeError("Timeout must be a number or None")

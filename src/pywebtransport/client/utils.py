@@ -11,14 +11,14 @@ __all__: list[str] = ["normalize_headers", "parse_webtransport_url"]
 
 
 def normalize_headers(*, headers: Headers) -> Headers:
-    """Normalize header keys to lowercase."""
+    """Normalize the header keys to lowercase."""
     if isinstance(headers, dict):
         return {key.lower(): value for key, value in headers.items()}
     return [(key.lower(), value) for key, value in headers]
 
 
 def parse_webtransport_url(*, url: URL) -> URLParts:
-    """Parse a WebTransport URL into its host, port, and path components."""
+    """Parse the WebTransport URL into host, port, and path components."""
     parsed = urllib.parse.urlparse(url=url)
     if parsed.scheme != WEBTRANSPORT_SCHEME:
         raise ValueError(f"Unsupported scheme '{parsed.scheme}'. Must be '{WEBTRANSPORT_SCHEME}'")

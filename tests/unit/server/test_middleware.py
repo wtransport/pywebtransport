@@ -44,6 +44,7 @@ class TestMiddlewareFactories:
             await auth_middleware(session=mock_session)
 
         assert exc_info.value.status_code == http.HTTPStatus.UNAUTHORIZED
+        assert exc_info.value.headers == {}
         auth_handler.assert_awaited_once_with(headers=mock_session.headers)
 
     @pytest.mark.asyncio
@@ -113,11 +114,15 @@ class TestMiddlewareFactories:
         assert "from=unknown" in caplog.text
 
     def test_create_rate_limit_middleware(self) -> None:
-        limiter = create_rate_limit_middleware(max_requests=50, window_seconds=30)
+        limiter = create_rate_limit_middleware(
+            max_requests=50, window_seconds=30, cleanup_interval=100, max_tracked_ips=500
+        )
 
         assert isinstance(limiter, RateLimiter)
         assert limiter._max_requests == 50
         assert limiter._window_seconds == 30
+        assert limiter._cleanup_interval == 100
+        assert limiter._max_tracked_ips == 500
 
     @pytest.mark.asyncio
     async def test_middleware_with_generic_session(self, caplog: LogCaptureFixture) -> None:
