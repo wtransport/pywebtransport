@@ -5,13 +5,15 @@ import socket
 import ssl
 from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import cast
+from typing import Final, cast
 
 import pytest
 from pytest_asyncio import fixture as asyncio_fixture
 
 from pywebtransport import ClientConfig, ServerApp, ServerConfig, WebTransportClient
 from pywebtransport.utils import generate_self_signed_cert
+
+CERT_HOSTNAME: Final[str] = "localhost"
 
 
 def find_free_port() -> int:
@@ -25,7 +27,7 @@ def find_free_port() -> int:
 def certificates_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Generate self-signed certificates in a temporary directory for the session."""
     cert_dir = tmp_path_factory.mktemp("certs")
-    generate_self_signed_cert(hostname="localhost", output_dir=str(cert_dir))
+    generate_self_signed_cert(hostname=CERT_HOSTNAME, output_dir=str(cert_dir))
     return cert_dir
 
 
@@ -39,7 +41,8 @@ def client_config(certificates_dir: Path) -> ClientConfig:
 def server_config(certificates_dir: Path) -> ServerConfig:
     """Provide a base ServerConfig configured with the test certificates."""
     return ServerConfig(
-        certfile=str(certificates_dir / "localhost.crt"), keyfile=str(certificates_dir / "localhost.key")
+        certfile=str(certificates_dir / f"{CERT_HOSTNAME}.crt"),
+        keyfile=str(certificates_dir / f"{CERT_HOSTNAME}.key"),
     )
 
 

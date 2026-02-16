@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from typing import cast
+from unittest.mock import MagicMock
 
 import pytest
 from _pytest.logging import LogCaptureFixture
@@ -77,6 +78,7 @@ class TestBaseResourceManager:
 
         async with manager:
             await manager.add_resource(resource=resource)
+
             assert len(manager) == 1
             stats = await manager.get_stats()
             assert stats["total_created"] == 1
@@ -89,14 +91,16 @@ class TestBaseResourceManager:
         self, manager: ConcreteResourceManager, mocker: MockerFixture
     ) -> None:
         resource = MockResource("r1")
+        resource.events = mocker.MagicMock(spec=EventEmitter)
+        cast(MagicMock, resource.events.off).side_effect = ValueError("Handler not found")
+
         mocker.patch.object(manager, "_check_is_closed", return_value=True)
-        mock_off = mocker.patch.object(resource.events, "off", side_effect=ValueError("Handler not found"))
 
         async with manager:
             with pytest.raises(RuntimeError, match="closed during registration"):
                 await manager.add_resource(resource=resource)
 
-        mock_off.assert_called_once()
+        cast(MagicMock, resource.events.off).assert_called_once()
         assert len(manager) == 0
 
     async def test_add_resource_closed_handler_invalid_data(
@@ -206,7 +210,8 @@ class TestBaseResourceManager:
         self, manager: ConcreteResourceManager, mocker: MockerFixture
     ) -> None:
         resource = MockResource("r1")
-        mocker.patch.object(resource.events, "off", side_effect=ValueError("Cleanup error"))
+        resource.events = mocker.MagicMock(spec=EventEmitter)
+        cast(MagicMock, resource.events.off).side_effect = ValueError("Cleanup error")
 
         async with manager:
             await manager.add_resource(resource=resource)
@@ -226,16 +231,17 @@ class TestBaseResourceManager:
         assert manager._stats["total_closed"] == 0
 
     async def test_context_manager_lifecycle(self, manager: ConcreteResourceManager) -> None:
-        assert manager._lock is None
+        assert not manager._active
 
         async def run_context() -> None:
             async with manager:
-                assert manager._lock is not None
+                assert manager._active
                 assert not manager._is_shutting_down
 
         await run_context()
 
-        assert manager._is_shutting_down is True
+        assert not manager._active
+        assert manager._is_shutting_down
 
     async def test_get_all_resources(self, manager: ConcreteResourceManager) -> None:
         r1 = MockResource("r1")
@@ -263,7 +269,7 @@ class TestBaseResourceManager:
         self, manager: ConcreteResourceManager, mocker: MockerFixture
     ) -> None:
         manager._is_shutting_down = True
-        manager._lock = asyncio.Lock()
+        manager._active = True
         manager._resources["r1"] = MockResource("r1")
 
         await manager._handle_resource_closed(resource_id="r1")
@@ -286,7 +292,7 @@ class TestBaseResourceManager:
         await manager._handle_resource_closed(resource_id="r1")
 
     async def test_handle_resource_closed_resource_not_found(self, manager: ConcreteResourceManager) -> None:
-        manager._lock = asyncio.Lock()
+        manager._active = True
 
         await manager._handle_resource_closed(resource_id="non_existent")
 

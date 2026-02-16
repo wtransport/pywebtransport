@@ -1,4 +1,4 @@
-"""Shared protocol adapter logic for client and server."""
+"""Shared protocol adapter logic for translate aioquic events to internal engine."""
 
 from __future__ import annotations
 
@@ -70,15 +70,13 @@ from pywebtransport.utils import get_logger
 
 __all__: list[str] = []
 
-logger = get_logger(name=__name__)
+_logger = get_logger(name=__name__)
 
 apply_patches()
 
 
 class WebTransportCommonProtocol(QuicConnectionProtocol):
-    """Base adapter translating quic events to internal protocol events."""
-
-    _quic_logger: QuicLoggerTrace | None = None
+    """Base adapter translating aioquic events to internal protocol events."""
 
     def __init__(
         self,
@@ -86,27 +84,31 @@ class WebTransportCommonProtocol(QuicConnectionProtocol):
         quic: QuicConnection,
         config: ClientConfig | ServerConfig,
         is_client: bool,
+        max_event_queue_size: int = DEFAULT_MAX_EVENT_QUEUE_SIZE,
         stream_handler: Any = None,
         loop: asyncio.AbstractEventLoop | None = None,
-        max_event_queue_size: int = DEFAULT_MAX_EVENT_QUEUE_SIZE,
     ) -> None:
-        """Initialize the common protocol adapter."""
+        """Initialize the instance."""
         super().__init__(quic=quic, stream_handler=stream_handler)
-        self._loop = loop if loop is not None else asyncio.get_running_loop()
+
         self._config = config
         self._is_client = is_client
         self._max_event_queue_size = max_event_queue_size
-        self._timer_handle: asyncio.TimerHandle | None = None
-        self._pending_manager = PendingRequestManager()
+        self._loop = loop if loop is not None else asyncio.get_running_loop()
+
         self._engine = WebTransportEngine(connection_id=str(quic.host_cid), config=config, is_client=is_client)
-        self._resource_gc_timer: asyncio.TimerHandle | None = None
-        self._early_event_cleanup_timer: asyncio.TimerHandle | None = None
+        self._pending_manager = PendingRequestManager()
         self._pending_effects: deque[Effect] = deque()
         self._is_processing_effects = False
+
+        self._early_event_cleanup_timer: asyncio.TimerHandle | None = None
+        self._quic_logger: QuicLoggerTrace | None = None
+        self._resource_gc_timer: asyncio.TimerHandle | None = None
         self._status_callback: Callable[[EventType, dict[str, Any]], None] | None = None
+        self._timer_handle: asyncio.TimerHandle | None = None
 
     def close_connection(self, *, error_code: int, reason_phrase: str | None = None) -> None:
-        """Close the QUIC connection."""
+        """Close the underlying QUIC connection."""
         if self._quic._close_event is not None:
             return
 
@@ -116,7 +118,7 @@ class WebTransportCommonProtocol(QuicConnectionProtocol):
         self._pending_manager.fail_all(exception=ConnectionError(f"Connection closed: {reason_phrase}"))
 
     def connection_lost(self, exc: Exception | None) -> None:
-        """Handle connection loss."""
+        """Handle connection loss and notify engine."""
         if self._timer_handle is not None:
             self._timer_handle.cancel()
             self._timer_handle = None
@@ -126,9 +128,7 @@ class WebTransportCommonProtocol(QuicConnectionProtocol):
         event_to_send: TransportConnectionTerminated | None = None
         already_closing_locally = self._quic._close_event is not None
 
-        if exc is None and already_closing_locally:
-            pass
-        else:
+        if not (exc is None and already_closing_locally):
             if exc is not None:
                 code = getattr(exc, "error_code", ErrorCodes.INTERNAL_ERROR)
                 reason = str(exc)
@@ -144,24 +144,24 @@ class WebTransportCommonProtocol(QuicConnectionProtocol):
         super().connection_lost(exc)
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
-        """Handle connection being made."""
+        """Handle connection established and start timers."""
         super().connection_made(transport)
         self._setup_maintenance_timers()
 
     def create_request(self) -> tuple[int, asyncio.Future[Any]]:
-        """Create a new tracked request."""
+        """Create a new internally tracked request."""
         return self._pending_manager.create_request()
 
     def get_next_available_stream_id(self, *, is_unidirectional: bool) -> int:
-        """Get the next available stream ID from the QUIC connection."""
+        """Get next available stream ID from QUIC."""
         return self._quic.get_next_available_stream_id(is_unidirectional=is_unidirectional)
 
     def get_server_name(self) -> str | None:
-        """Get the server name from the QUIC configuration."""
+        """Retrieve server name from configuration."""
         return self._quic.configuration.server_name
 
     def handle_timer_now(self) -> None:
-        """Handle the QUIC timer expiry."""
+        """Trigger immediate QUIC timer handling."""
         self._quic.handle_timer(now=self._loop.time())
 
         event = self._quic.next_event()
@@ -172,17 +172,17 @@ class WebTransportCommonProtocol(QuicConnectionProtocol):
         self.transmit()
 
     def log_event(self, *, category: str, event: str, data: dict[str, Any]) -> None:
-        """Log an H3 event via the QUIC logger."""
+        """Log protocol events via QUIC logger."""
         if self._quic_logger is not None:
             self._quic_logger.log_event(category=category, event=event, data=data)
 
     def quic_event_received(self, event: QuicEvent) -> None:
-        """Translate aioquic events into internal ProtocolEvents."""
+        """Translate raw aioquic events into ProtocolEvents."""
         match event:
             case HandshakeCompleted():
                 self._on_handshake_completed()
             case ConnectionTerminated(error_code=error_code, reason_phrase=reason_phrase):
-                logger.debug(
+                _logger.debug(
                     "QUIC ConnectionTerminated event received: code=%#x reason='%s'", error_code, reason_phrase
                 )
                 self._push_event_to_engine(
@@ -206,7 +206,7 @@ class WebTransportCommonProtocol(QuicConnectionProtocol):
                 pass
 
     def reset_stream(self, *, stream_id: int, error_code: int) -> None:
-        """Reset the sending side of a QUIC stream."""
+        """Initiate a QUIC stream reset."""
         if self._quic._close_event is not None:
             return
 
@@ -214,10 +214,10 @@ class WebTransportCommonProtocol(QuicConnectionProtocol):
             self._quic.reset_stream(stream_id=stream_id, error_code=error_code)
             self.transmit()
         except (AssertionError, ValueError):
-            logger.debug("Dropping ResetQuicStream for stream %d: Stream unknown or state conflict.", stream_id)
+            _logger.debug("Dropping ResetQuicStream for stream %d: conflict.", stream_id)
 
     def schedule_timer_now(self) -> None:
-        """Schedule the next QUIC timer callback."""
+        """Schedule the next event loop callback for QUIC timer."""
         if self._timer_handle is not None:
             self._timer_handle.cancel()
 
@@ -226,50 +226,45 @@ class WebTransportCommonProtocol(QuicConnectionProtocol):
             self._timer_handle = self._loop.call_at(timer_at, self._handle_timer)
 
     def send_datagram_frame(self, *, data: Buffer | list[Buffer]) -> None:
-        """Send a QUIC datagram frame."""
+        """Send a raw QUIC datagram frame."""
         if self._quic._close_event is not None:
-            logger.debug("Attempted to send datagram while connection is closing.")
+            _logger.debug("Attempted to send datagram while closing.")
             return
 
-        bytes_data: bytes
-        if isinstance(data, list):
-            bytes_data = b"".join(data)
-        else:
-            bytes_data = bytes(data)
-
+        bytes_data = b"".join(data) if isinstance(data, list) else bytes(data)
         self._quic.send_datagram_frame(data=bytes_data)
         self.transmit()
 
     def send_event(self, *, event: ProtocolEvent) -> None:
-        """Send a user-initiated event to the engine."""
+        """Dispatch a user-layer event to the engine."""
         self._push_event_to_engine(event=event)
 
     def send_stream_data(self, *, stream_id: int, data: bytes, end_stream: bool = False) -> None:
-        """Send data on a QUIC stream."""
+        """Write data to a QUIC stream."""
         if self._quic._close_event is not None:
             if data or not end_stream:
-                logger.debug("Attempted to send stream data while connection is closing (stream %d).", stream_id)
+                _logger.debug("Attempted to send stream data while closing (stream %d).", stream_id)
                 return
 
         try:
             self._quic.send_stream_data(stream_id=stream_id, data=data, end_stream=end_stream)
             self.transmit()
         except (AssertionError, ValueError):
-            logger.debug("Dropping SendQuicData for stream %d: Stream unknown or state conflict.", stream_id)
+            _logger.debug("Dropping SendQuicData for stream %d: conflict.", stream_id)
 
     def set_status_callback(self, *, callback: Callable[[EventType, dict[str, Any]], None]) -> None:
-        """Set the callback for high-level status events."""
+        """Register callback for high-level connectivity changes."""
         self._status_callback = callback
 
     def stop_stream(self, *, stream_id: int, error_code: int) -> None:
-        """Stop the receiving side of a QUIC stream."""
+        """Send a STOP_SENDING for a QUIC stream."""
         try:
             self._quic.stop_stream(stream_id=stream_id, error_code=error_code)
         except (AssertionError, ValueError):
-            logger.debug("Dropping StopQuicStream for stream %d: Stream unknown or state conflict.", stream_id)
+            _logger.debug("Dropping StopQuicStream for stream %d: conflict.", stream_id)
 
     def transmit(self) -> None:
-        """Transmit pending QUIC packets."""
+        """Flush pending datagrams to the transport."""
         transport = self._transport
         if (
             transport is not None
@@ -286,9 +281,9 @@ class WebTransportCommonProtocol(QuicConnectionProtocol):
                     else:
                         transport.sendto(data, addr)
                 except (ConnectionRefusedError, OSError) as e:
-                    logger.debug("Failed to send UDP packet: %s", e)
+                    _logger.debug("Failed to send UDP packet: %s", e)
                 except Exception as e:
-                    logger.error("Unexpected error during transmit: %s", e, exc_info=True)
+                    _logger.error("Unexpected error during transmit: %s", e, exc_info=True)
 
     def _allocate_stream_id(self, *, is_unidirectional: bool) -> int:
         """Atomically allocate and reserve a stream ID."""
@@ -297,7 +292,7 @@ class WebTransportCommonProtocol(QuicConnectionProtocol):
         return stream_id
 
     def _cancel_maintenance_timers(self) -> None:
-        """Cancel internal maintenance timers."""
+        """Stop all background cleanup timers."""
         if self._resource_gc_timer is not None:
             self._resource_gc_timer.cancel()
             self._resource_gc_timer = None
@@ -306,7 +301,7 @@ class WebTransportCommonProtocol(QuicConnectionProtocol):
             self._early_event_cleanup_timer = None
 
     def _execute_effects(self, *, effects: list[Effect]) -> None:
-        """Execute effects returned by the engine."""
+        """Execute a batch of effects returned by the engine."""
         for effect in effects:
             self._pending_effects.append(effect)
 
@@ -322,7 +317,7 @@ class WebTransportCommonProtocol(QuicConnectionProtocol):
             self._is_processing_effects = False
 
     def _handle_early_event_cleanup_timer(self) -> None:
-        """Trigger early event cleanup in the engine."""
+        """Execute early event TTL cleanup."""
         self._early_event_cleanup_timer = None
         self._push_event_to_engine(event=InternalCleanupEarlyEvents())
         if self._config.pending_event_ttl > 0:
@@ -331,7 +326,7 @@ class WebTransportCommonProtocol(QuicConnectionProtocol):
             )
 
     def _handle_resource_gc_timer(self) -> None:
-        """Trigger resource GC in the engine."""
+        """Execute engine resource garbage collection."""
         self._resource_gc_timer = None
         self._push_event_to_engine(event=InternalCleanupResources())
         if self._config.resource_cleanup_interval > 0:
@@ -340,12 +335,12 @@ class WebTransportCommonProtocol(QuicConnectionProtocol):
             )
 
     def _handle_timer(self) -> None:
-        """Handle the QUIC timer expiry by injecting an event."""
+        """Inject QUIC timer fire event into the engine."""
         self._timer_handle = None
         self._push_event_to_engine(event=TransportQuicTimerFired())
 
     def _on_handshake_completed(self) -> None:
-        """Handle QUIC handshake completion."""
+        """Initialize H3 layer after successful handshake."""
         self._push_event_to_engine(event=TransportHandshakeCompleted())
 
         self._quic_logger = getattr(self._quic, "_quic_logger", None)
@@ -366,7 +361,7 @@ class WebTransportCommonProtocol(QuicConnectionProtocol):
             )
 
     def _process_single_effect(self, *, effect: Effect) -> None:
-        """Process a single side effect."""
+        """Translate a single Protocol Effect into IO actions."""
         match effect:
             case SendQuicData(stream_id=sid, data=d, end_stream=es):
                 self.send_stream_data(stream_id=sid, data=bytes(d), end_stream=es)
@@ -405,9 +400,8 @@ class WebTransportCommonProtocol(QuicConnectionProtocol):
             case CreateQuicStream(request_id=rid, session_id=sid, is_unidirectional=uni):
                 try:
                     stream_id = self._allocate_stream_id(is_unidirectional=uni)
-                    control_stream_id = sid
                     h3_effects = self._engine.encode_stream_creation(
-                        stream_id=stream_id, control_stream_id=control_stream_id, is_unidirectional=uni
+                        stream_id=stream_id, control_stream_id=sid, is_unidirectional=uni
                     )
                     self._execute_effects(effects=h3_effects)
                     self._push_event_to_engine(
@@ -448,15 +442,11 @@ class WebTransportCommonProtocol(QuicConnectionProtocol):
                 immediate_effects = self._engine.handle_event(event=evt, now=self._loop.time())
                 self._pending_effects.extendleft(reversed(immediate_effects))
 
-            case EmitConnectionEvent(event_type=et, data=d):
-                if self._status_callback is not None:
-                    self._status_callback(et, d)
-
-            case EmitSessionEvent(event_type=et, data=d):
-                if self._status_callback is not None:
-                    self._status_callback(et, d)
-
-            case EmitStreamEvent(event_type=et, data=d):
+            case (
+                EmitConnectionEvent(event_type=et, data=d)
+                | EmitSessionEvent(event_type=et, data=d)
+                | EmitStreamEvent(event_type=et, data=d)
+            ):
                 if self._status_callback is not None:
                     self._status_callback(et, d)
 
@@ -470,13 +460,13 @@ class WebTransportCommonProtocol(QuicConnectionProtocol):
                 pass
 
     def _push_event_to_engine(self, *, event: ProtocolEvent) -> None:
-        """Push an event to the engine and execute resulting effects."""
+        """Push an event to the engine and immediately execute resulting effects."""
         effects = self._engine.handle_event(event=event, now=self._loop.time())
         self._execute_effects(effects=effects)
         self.transmit()
 
     def _setup_maintenance_timers(self) -> None:
-        """Start internal maintenance timers."""
+        """Start internal maintenance timers for GC and TTL cleanup."""
         if self._config.resource_cleanup_interval > 0:
             self._resource_gc_timer = self._loop.call_later(
                 self._config.resource_cleanup_interval, self._handle_resource_gc_timer

@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import struct
 import weakref
-from typing import TYPE_CHECKING, Any
+from types import TracebackType
+from typing import TYPE_CHECKING, Any, Final, Self
 
 from pywebtransport.events import Event
 from pywebtransport.exceptions import ConfigurationError, SerializationError, SessionError, TimeoutError
@@ -18,31 +19,45 @@ if TYPE_CHECKING:
 
 __all__: list[str] = ["StructuredDatagramTransport"]
 
-logger = get_logger(name=__name__)
+_DEFAULT_QUEUE_SIZE: Final[int] = 100
+
+_logger = get_logger(name=__name__)
 
 
 class StructuredDatagramTransport:
     """Send and receive structured objects over datagrams."""
 
-    _HEADER_FORMAT = "!H"
-    _HEADER_SIZE = struct.calcsize(_HEADER_FORMAT)
+    __slots__ = (
+        "_session",
+        "_registry",
+        "_serializer",
+        "_class_to_id",
+        "_closed",
+        "_handler_ref",
+        "_incoming_obj_queue",
+        "_is_initialized",
+        "_sentinel",
+        "__weakref__",
+    )
 
-    def __init__(self, *, session: WebTransportSession, serializer: Serializer, registry: dict[int, type[Any]]) -> None:
+    _HEADER_FORMAT: Final[str] = "!H"
+    _HEADER_SIZE: Final[int] = struct.calcsize(_HEADER_FORMAT)
+
+    def __init__(self, *, session: WebTransportSession, registry: dict[int, type[Any]], serializer: Serializer) -> None:
         """Initialize the structured datagram transport."""
         if len(set(registry.values())) != len(registry):
             raise ConfigurationError(message="Types in the structured datagram registry must be unique.")
 
         self._session = weakref.ref(session)
-        self._serializer = serializer
         self._registry = registry
-        self._class_to_id = {v: k for k, v in registry.items()}
+        self._serializer = serializer
 
-        self._incoming_obj_queue: asyncio.Queue[Any | object] | None = None
-        self._queue_size: int = 0
+        self._class_to_id = {v: k for k, v in registry.items()}
         self._closed = False
+        self._handler_ref: Any = None
+        self._incoming_obj_queue: asyncio.Queue[Any] | None = None
         self._is_initialized = False
         self._sentinel = object()
-        self._handler_ref: Any = None
 
     @property
     def is_closed(self) -> bool:
@@ -50,12 +65,14 @@ class StructuredDatagramTransport:
         session = self._session()
         return self._closed or session is None or session.is_closed
 
-    async def __aenter__(self) -> StructuredDatagramTransport:
+    async def __aenter__(self) -> Self:
         """Enter the async context manager."""
         self.initialize()
         return self
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+    ) -> None:
         """Exit the async context manager."""
         await self.close()
 
@@ -77,13 +94,12 @@ class StructuredDatagramTransport:
         if self._incoming_obj_queue is not None:
             self._incoming_obj_queue.put_nowait(item=self._sentinel)
 
-    def initialize(self, *, queue_size: int = 100) -> None:
+    def initialize(self, *, queue_size: int = _DEFAULT_QUEUE_SIZE) -> None:
         """Initialize the resources for the transport synchronously."""
         if self._is_initialized:
             return
 
-        self._queue_size = queue_size
-        self._incoming_obj_queue = asyncio.Queue(maxsize=self._queue_size)
+        self._incoming_obj_queue = asyncio.Queue(maxsize=queue_size)
 
         session = self._session()
         if session is not None:
@@ -145,7 +161,7 @@ class StructuredDatagramTransport:
             return
 
         datagram: bytes | None = event.data.get("data")
-        if not datagram:
+        if datagram is None:
             return
 
         try:
@@ -169,9 +185,9 @@ class StructuredDatagramTransport:
             except asyncio.QueueFull:
                 session = self._session()
                 session_id = session.session_id if session is not None else "unknown"
-                logger.warning("Structured datagram queue full for session %s; dropping datagram.", session_id)
+                _logger.warning("Structured datagram queue full for session %s; dropping datagram.", session_id)
 
         except (struct.error, SerializationError) as e:
-            logger.warning("Failed to deserialize structured datagram: %s", e)
+            _logger.warning("Failed to deserialize structured datagram: %s", e)
         except Exception as e:
-            logger.error("Error in datagram receive handler: %s", e, exc_info=True)
+            _logger.error("Error in datagram receive handler: %s", e, exc_info=True)

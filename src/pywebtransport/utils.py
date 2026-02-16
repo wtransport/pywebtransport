@@ -21,7 +21,7 @@ __all__: list[str] = [
 
 
 def ensure_buffer(*, data: Buffer | str, encoding: str = "utf-8") -> Buffer:
-    """Ensure that the given data is in a buffer-compatible format."""
+    """Validate and convert input data to a buffer format."""
     match data:
         case str():
             return data.encode(encoding=encoding)
@@ -32,7 +32,7 @@ def ensure_buffer(*, data: Buffer | str, encoding: str = "utf-8") -> Buffer:
 
 
 def find_header(*, headers: Headers, key: str, default: str | bytes | None = None) -> str | bytes | None:
-    """Find a header value case-insensitively from a dict or list."""
+    """Search for a header value case-insensitively."""
     target_key = key.lower()
     target_key_bytes = target_key.encode("utf-8")
 
@@ -51,7 +51,7 @@ def find_header(*, headers: Headers, key: str, default: str | bytes | None = Non
 
 
 def find_header_str(*, headers: Headers, key: str, default: str | None = None) -> str | None:
-    """Find a header value and decode it to a string if necessary."""
+    """Retrieve a header value as a decoded string."""
     value = find_header(headers=headers, key=key)
     if value is None:
         return default
@@ -87,17 +87,17 @@ def format_duration(*, seconds: float) -> str:
 
 
 def get_logger(*, name: str) -> logging.Logger:
-    """Get a logger instance with a specific name."""
+    """Retrieve a named logger instance."""
     return logging.getLogger(name=name)
 
 
 def get_timestamp() -> float:
-    """Get the current monotonic timestamp."""
+    """Return the current monotonic timestamp."""
     return time.perf_counter()
 
 
 def merge_headers(*, base: Headers, update: Headers | None) -> Headers:
-    """Merge two sets of headers, preserving list format if present."""
+    """Combine two header collections."""
     if update is None:
         if isinstance(base, dict):
             return base.copy()

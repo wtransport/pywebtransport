@@ -1,6 +1,7 @@
 """Unit tests for the pywebtransport.events module."""
 
 import asyncio
+from collections import defaultdict, deque
 from typing import Any
 
 import pytest
@@ -13,7 +14,7 @@ from pywebtransport.types import EventType
 
 @pytest.fixture
 def mock_logger(mocker: MockerFixture) -> Any:
-    return mocker.patch("pywebtransport.events.logger")
+    return mocker.patch("pywebtransport.events._logger")
 
 
 @pytest.fixture(autouse=True)
@@ -37,6 +38,7 @@ class TestEvent:
         assert event.timestamp == 999.99
         assert event.data == {"foo": "bar"}
         assert event.source == "src"
+        assert not hasattr(event, "__dict__")
 
     def test_init_with_non_string_type(self) -> None:
         event = Event(type=123)  # type: ignore[arg-type]
@@ -154,7 +156,7 @@ class TestEventEmitter:
     @pytest.mark.asyncio
     async def test_emit_nowait_no_loop(self, emitter: EventEmitter, mocker: MockerFixture, mock_logger: Any) -> None:
         mocker.patch("asyncio.create_task", side_effect=RuntimeError)
-        mocker.patch.object(emitter, "_process_event", new_callable=mocker.Mock)
+        mocker.patch.object(EventEmitter, "_process_event", new_callable=mocker.Mock)
         handler = mocker.AsyncMock()
         emitter.on(event_type=EventType.SESSION_READY, handler=handler)
 
@@ -266,6 +268,32 @@ class TestEventEmitter:
         mock_logger.error.assert_called_once()
         handler1.assert_awaited_once()
         handler2.assert_awaited_once()
+
+    def test_init(self) -> None:
+        emitter = EventEmitter(max_listeners=5, max_history=10, max_queue_size=20)
+
+        assert emitter._max_listeners == 5
+        assert emitter._max_history == 10
+
+        assert isinstance(emitter._background_tasks, set)
+        assert len(emitter._background_tasks) == 0
+
+        assert isinstance(emitter._event_history, deque)
+        assert emitter._event_history.maxlen == 10
+
+        assert isinstance(emitter._event_queue, deque)
+        assert emitter._event_queue.maxlen == 20
+
+        assert isinstance(emitter._handlers, defaultdict)
+        assert isinstance(emitter._once_handlers, defaultdict)
+
+        assert emitter._paused is False
+        assert emitter._processing_task is None
+
+        assert isinstance(emitter._wildcard_handlers, list)
+        assert len(emitter._wildcard_handlers) == 0
+
+        assert not hasattr(emitter, "__dict__")
 
     def test_init_is_idempotent(self) -> None:
         emitter = EventEmitter(max_listeners=5)

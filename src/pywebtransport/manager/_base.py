@@ -15,6 +15,8 @@ from pywebtransport.utils import get_logger
 
 __all__: list[str] = []
 
+_logger = get_logger(name=__name__)
+
 
 @runtime_checkable
 class ManageableResource(Protocol):
@@ -28,28 +30,27 @@ class ManageableResource(Protocol):
         ...
 
 
-logger = get_logger(name=__name__)
-
-
 class BaseResourceManager[ResourceId, ResourceType: ManageableResource](ABC):
     """Manage the lifecycle of concurrent resources abstractly via events."""
 
-    _log: ClassVar[logging.Logger] = logger
+    _log: ClassVar[logging.Logger] = _logger
     _resource_closed_event_type: ClassVar[EventType]
 
     def __init__(self, *, resource_name: str, max_resources: int) -> None:
-        """Initialize the base resource manager."""
+        """Initialize the instance."""
         self._resource_name = resource_name
         self._max_resources = max_resources
-        self._lock: asyncio.Lock | None = None
+
+        self._active = False
+        self._event_handlers: dict[ResourceId, tuple[EventEmitter, Callable[[Event], Awaitable[None]]]] = {}
+        self._is_shutting_down = False
+        self._lock = asyncio.Lock()
         self._resources: dict[ResourceId, ResourceType] = {}
         self._stats = {"total_created": 0, "total_closed": 0, "current_count": 0, "max_concurrent": 0}
-        self._is_shutting_down = False
-        self._event_handlers: dict[ResourceId, tuple[EventEmitter, Callable[[Event], Awaitable[None]]]] = {}
 
     async def __aenter__(self) -> Self:
         """Enter async context and initialize resources."""
-        self._lock = asyncio.Lock()
+        self._active = True
         return self
 
     async def __aexit__(
@@ -57,21 +58,11 @@ class BaseResourceManager[ResourceId, ResourceType: ManageableResource](ABC):
     ) -> None:
         """Exit async context and shut down the manager."""
         await self.shutdown()
-
-    async def shutdown(self) -> None:
-        """Shut down the manager and all associated resources."""
-        if self._is_shutting_down:
-            return
-
-        self._is_shutting_down = True
-        self._log.info("Shutting down %s manager", self._resource_name)
-
-        await self._close_all_resources()
-        self._log.info("%s manager shutdown complete", self._resource_name)
+        self._active = False
 
     async def add_resource(self, *, resource: ResourceType) -> None:
         """Add a new resource and subscribe to its closure event."""
-        if self._lock is None:
+        if not self._active:
             raise RuntimeError(f"{self.__class__.__name__} is not activated. Use 'async with'.")
 
         if resource.is_closed:
@@ -133,26 +124,25 @@ class BaseResourceManager[ResourceId, ResourceType: ManageableResource](ABC):
             self._resources[resource_id] = resource
             self._stats["total_created"] += 1
             self._update_stats_unsafe()
-
             self._log.debug("Added %s %s (total: %d)", self._resource_name, resource_id, self._stats["current_count"])
 
     async def get_all_resources(self) -> list[ResourceType]:
         """Retrieve a list of all current resources."""
-        if self._lock is None:
+        if not self._active:
             return []
         async with self._lock:
             return list(self._resources.values())
 
     async def get_resource(self, *, resource_id: ResourceId) -> ResourceType | None:
         """Retrieve a resource by its ID."""
-        if self._lock is None:
+        if not self._active:
             return None
         async with self._lock:
             return self._resources.get(resource_id)
 
     async def get_stats(self) -> dict[str, Any]:
         """Get detailed statistics about the managed resources."""
-        if self._lock is None:
+        if not self._active:
             return {}
         async with self._lock:
             stats = self._stats.copy()
@@ -161,13 +151,24 @@ class BaseResourceManager[ResourceId, ResourceType: ManageableResource](ABC):
             stats[f"max_{self._resource_name}s"] = self._max_resources
             return stats
 
+    async def shutdown(self) -> None:
+        """Shut down the manager and all associated resources."""
+        if self._is_shutting_down:
+            return
+
+        self._is_shutting_down = True
+        self._log.info("Shutting down %s manager", self._resource_name)
+
+        await self._close_all_resources()
+        self._log.info("%s manager shutdown complete", self._resource_name)
+
     def _check_is_closed(self, *, resource: ResourceType) -> bool:
-        """Check if the resource is currently closed."""
+        """Internal check for resource closure status to aid static analysis."""
         return resource.is_closed
 
     async def _close_all_resources(self) -> None:
-        """Close all currently managed resources."""
-        if self._lock is None:
+        """Close all currently managed resources concurrently."""
+        if not self._active:
             return
 
         resources_to_close: list[ResourceType] = []
@@ -211,7 +212,7 @@ class BaseResourceManager[ResourceId, ResourceType: ManageableResource](ABC):
 
     async def _handle_resource_closed(self, *, resource_id: ResourceId) -> None:
         """Handle the closure event for a managed resource."""
-        if self._lock is None:
+        if not self._active:
             return
 
         async with self._lock:
@@ -227,7 +228,7 @@ class BaseResourceManager[ResourceId, ResourceType: ManageableResource](ABC):
                 )
 
     def _update_stats_unsafe(self) -> None:
-        """Update internal statistics."""
+        """Update internal statistics without locking."""
         current_count = len(self._resources)
         self._stats["current_count"] = current_count
         self._stats["max_concurrent"] = max(self._stats["max_concurrent"], current_count)

@@ -8,7 +8,7 @@ import http
 import time
 from collections import deque
 from types import TracebackType
-from typing import Protocol, Self, runtime_checkable
+from typing import Final, Protocol, Self, runtime_checkable
 
 from pywebtransport.exceptions import ServerError
 from pywebtransport.types import Headers, SessionProtocol
@@ -27,27 +27,30 @@ __all__: list[str] = [
     "create_rate_limit_middleware",
 ]
 
-logger = get_logger(name=__name__)
+_DEFAULT_RATE_LIMIT_CLEANUP_INTERVAL: Final[int] = 300
+_DEFAULT_RATE_LIMIT_MAX_REQUESTS: Final[int] = 100
+_DEFAULT_RATE_LIMIT_MAX_TRACKED_IPS: Final[int] = 10000
+_DEFAULT_RATE_LIMIT_WINDOW: Final[int] = 60
 
-DEFAULT_RATE_LIMIT_MAX_REQUESTS: int = 100
-DEFAULT_RATE_LIMIT_WINDOW: int = 60
-DEFAULT_RATE_LIMIT_CLEANUP_INTERVAL: int = 300
-DEFAULT_RATE_LIMIT_MAX_TRACKED_IPS: int = 10000
+_logger = get_logger(name=__name__)
 
 
 class MiddlewareRejected(Exception):
-    """Exception raised by middleware to reject a session request with specific details."""
+    """Indicate a session request rejection by middleware."""
+
+    __slots__ = ("status_code", "headers")
 
     def __init__(self, status_code: int = http.HTTPStatus.FORBIDDEN, headers: Headers | None = None) -> None:
-        """Initialize the rejection exception."""
+        """Initialize the instance."""
         super().__init__(f"Request rejected with status {status_code}")
+
         self.status_code = status_code
         self.headers = headers if headers is not None else {}
 
 
 @runtime_checkable
 class AuthHandlerProtocol(Protocol):
-    """A protocol for authentication handlers."""
+    """Define the authentication handler interface."""
 
     async def __call__(self, *, headers: Headers) -> bool:
         """Perform authentication check on headers."""
@@ -56,33 +59,33 @@ class AuthHandlerProtocol(Protocol):
 
 @runtime_checkable
 class MiddlewareProtocol(Protocol):
-    """A protocol for a middleware object."""
+    """Define the middleware interface."""
 
     async def __call__(self, *, session: SessionProtocol) -> None:
-        """Process a session request. Raise MiddlewareRejected to deny."""
+        """Process a session request."""
         ...
 
 
 @runtime_checkable
 class StatefulMiddlewareProtocol(MiddlewareProtocol, Protocol):
-    """A protocol for middleware that requires lifecycle management."""
+    """Define the stateful middleware interface."""
 
     async def __aenter__(self) -> Self:
-        """Enter the async context manager."""
+        """Enter the asynchronous context."""
         ...
 
     async def __aexit__(
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
     ) -> None:
-        """Exit the async context manager."""
+        """Exit the asynchronous context."""
         ...
 
 
 class MiddlewareManager:
-    """Manages a chain of server middleware."""
+    """Manage a chain of server middleware."""
 
     def __init__(self) -> None:
-        """Initialize the middleware manager."""
+        """Initialize the instance."""
         self._middleware: list[MiddlewareProtocol] = []
 
     def add_middleware(self, *, middleware: MiddlewareProtocol) -> None:
@@ -90,7 +93,7 @@ class MiddlewareManager:
         self._middleware.append(middleware)
 
     def get_middleware_count(self) -> int:
-        """Get the number of registered middleware."""
+        """Return the number of registered middleware."""
         return len(self._middleware)
 
     async def process_request(self, *, session: SessionProtocol) -> None:
@@ -101,7 +104,7 @@ class MiddlewareManager:
             except MiddlewareRejected:
                 raise
             except Exception as e:
-                logger.error("Middleware error: %s", e, exc_info=True)
+                _logger.error("Middleware error: %s", e, exc_info=True)
                 raise MiddlewareRejected(status_code=http.HTTPStatus.INTERNAL_SERVER_ERROR) from e
 
     def remove_middleware(self, *, middleware: MiddlewareProtocol) -> None:
@@ -111,29 +114,31 @@ class MiddlewareManager:
 
 
 class RateLimiter:
-    """A stateful, concurrent-safe rate-limiting middleware."""
+    """Manage stateful, concurrent-safe rate limiting."""
 
     def __init__(
         self,
         *,
-        max_requests: int = DEFAULT_RATE_LIMIT_MAX_REQUESTS,
-        window_seconds: int = DEFAULT_RATE_LIMIT_WINDOW,
-        cleanup_interval: int = DEFAULT_RATE_LIMIT_CLEANUP_INTERVAL,
-        max_tracked_ips: int = DEFAULT_RATE_LIMIT_MAX_TRACKED_IPS,
+        max_requests: int = _DEFAULT_RATE_LIMIT_MAX_REQUESTS,
+        window_seconds: int = _DEFAULT_RATE_LIMIT_WINDOW,
+        cleanup_interval: int = _DEFAULT_RATE_LIMIT_CLEANUP_INTERVAL,
+        max_tracked_ips: int = _DEFAULT_RATE_LIMIT_MAX_TRACKED_IPS,
     ) -> None:
-        """Initialize the rate limiter."""
+        """Initialize the instance."""
         self._max_requests = max_requests
         self._window_seconds = window_seconds
         self._cleanup_interval = cleanup_interval
         self._max_tracked_ips = max_tracked_ips
-        self._requests: dict[str, deque[float]] = {}
-        self._lock = asyncio.Lock()
-        self._tg: asyncio.TaskGroup | None = None
-        self._cleanup_task: asyncio.Task[None] | None = None
+
         self._is_closing = False
+        self._lock = asyncio.Lock()
+        self._requests: dict[str, deque[float]] = {}
+
+        self._cleanup_task: asyncio.Task[None] | None = None
+        self._tg: asyncio.TaskGroup | None = None
 
     async def __aenter__(self) -> Self:
-        """Initialize resources and start the cleanup task."""
+        """Enter the asynchronous context."""
         self._is_closing = False
         self._tg = asyncio.TaskGroup()
         await self._tg.__aenter__()
@@ -143,7 +148,7 @@ class RateLimiter:
     async def __aexit__(
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
     ) -> None:
-        """Stop the background cleanup task and release resources."""
+        """Exit the asynchronous context."""
         self._is_closing = True
         if self._cleanup_task is not None:
             self._cleanup_task.cancel()
@@ -155,7 +160,7 @@ class RateLimiter:
         self._tg = None
 
     async def _periodic_cleanup(self) -> None:
-        """Periodically remove stale IP entries from the tracker."""
+        """Remove stale IP entries from the tracker periodically."""
         while True:
             try:
                 await asyncio.sleep(delay=self._cleanup_interval)
@@ -177,16 +182,16 @@ class RateLimiter:
                         del self._requests[ip]
 
                     if ips_to_remove:
-                        logger.debug("Cleaned up %d stale IP entries.", len(ips_to_remove))
+                        _logger.debug("Cleaned up %d stale IP entries.", len(ips_to_remove))
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error("Error in RateLimiter cleanup task: %s", e, exc_info=True)
+                _logger.error("Error in RateLimiter cleanup task: %s", e, exc_info=True)
                 await asyncio.sleep(delay=1.0)
 
     def _start_cleanup_task(self) -> None:
-        """Create and start the periodic cleanup task if not already running."""
+        """Initiate the periodic cleanup task."""
         if self._tg is not None and (self._cleanup_task is None or self._cleanup_task.done()):
             self._cleanup_task = self._tg.create_task(coro=self._periodic_cleanup())
 
@@ -210,7 +215,7 @@ class RateLimiter:
             if client_ip not in self._requests:
                 if len(self._requests) >= self._max_tracked_ips:
                     self._requests.clear()
-                    logger.warning(
+                    _logger.warning(
                         "Rate limiter IP tracking limit (%d) reached. Flushed all records.", self._max_tracked_ips
                     )
                 self._requests[client_ip] = deque()
@@ -222,7 +227,7 @@ class RateLimiter:
                 client_timestamps.popleft()
 
             if len(client_timestamps) >= self._max_requests:
-                logger.warning("Rate limit exceeded for IP %s", client_ip)
+                _logger.warning("Rate limit exceeded for IP %s", client_ip)
                 raise MiddlewareRejected(
                     status_code=http.HTTPStatus.TOO_MANY_REQUESTS, headers={"retry-after": str(self._window_seconds)}
                 )
@@ -231,7 +236,7 @@ class RateLimiter:
 
 
 def create_auth_middleware(*, auth_handler: AuthHandlerProtocol) -> MiddlewareProtocol:
-    """Create an authentication middleware with a custom handler."""
+    """Instantiate authentication middleware with a custom handler."""
 
     async def middleware(*, session: SessionProtocol) -> None:
         try:
@@ -240,19 +245,19 @@ def create_auth_middleware(*, auth_handler: AuthHandlerProtocol) -> MiddlewarePr
         except MiddlewareRejected:
             raise
         except Exception as e:
-            logger.error("Authentication handler error: %s", e, exc_info=True)
+            _logger.error("Authentication handler error: %s", e, exc_info=True)
             raise MiddlewareRejected(status_code=http.HTTPStatus.INTERNAL_SERVER_ERROR) from e
 
     return middleware
 
 
 def create_cors_middleware(*, allowed_origins: list[str]) -> MiddlewareProtocol:
-    """Create a CORS middleware to validate the Origin header."""
+    """Instantiate CORS middleware to validate the Origin header."""
 
     async def cors_middleware(*, session: SessionProtocol) -> None:
         origin = find_header_str(headers=session.headers, key="origin")
         if origin is None or not origin:
-            logger.warning("CORS check failed: 'Origin' header missing.")
+            _logger.warning("CORS check failed: 'Origin' header missing.")
             raise MiddlewareRejected(status_code=http.HTTPStatus.FORBIDDEN)
 
         match_found = False
@@ -262,14 +267,14 @@ def create_cors_middleware(*, allowed_origins: list[str]) -> MiddlewareProtocol:
                 break
 
         if not match_found:
-            logger.warning("CORS check failed: Origin '%s' not allowed.", origin)
+            _logger.warning("CORS check failed: Origin '%s' not allowed.", origin)
             raise MiddlewareRejected(status_code=http.HTTPStatus.FORBIDDEN)
 
     return cors_middleware
 
 
 def create_logging_middleware() -> MiddlewareProtocol:
-    """Create a simple request logging middleware."""
+    """Instantiate simple request logging middleware."""
 
     async def middleware(*, session: SessionProtocol) -> None:
         remote_address_str = "unknown"
@@ -277,19 +282,19 @@ def create_logging_middleware() -> MiddlewareProtocol:
             addr = session.remote_address
             remote_address_str = f"{addr[0]}:{addr[1]}"
 
-        logger.info("Session request: path='%s' from=%s", session.path, remote_address_str)
+        _logger.info("Session request: path='%s' from=%s", session.path, remote_address_str)
 
     return middleware
 
 
 def create_rate_limit_middleware(
     *,
-    max_requests: int = DEFAULT_RATE_LIMIT_MAX_REQUESTS,
-    window_seconds: int = DEFAULT_RATE_LIMIT_WINDOW,
-    cleanup_interval: int = DEFAULT_RATE_LIMIT_CLEANUP_INTERVAL,
-    max_tracked_ips: int = DEFAULT_RATE_LIMIT_MAX_TRACKED_IPS,
+    max_requests: int = _DEFAULT_RATE_LIMIT_MAX_REQUESTS,
+    window_seconds: int = _DEFAULT_RATE_LIMIT_WINDOW,
+    cleanup_interval: int = _DEFAULT_RATE_LIMIT_CLEANUP_INTERVAL,
+    max_tracked_ips: int = _DEFAULT_RATE_LIMIT_MAX_TRACKED_IPS,
 ) -> RateLimiter:
-    """Create a stateful rate-limiting middleware instance."""
+    """Instantiate a stateful rate-limiting middleware."""
     return RateLimiter(
         max_requests=max_requests,
         window_seconds=window_seconds,

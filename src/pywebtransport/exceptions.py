@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Final
 
 from pywebtransport.constants import ErrorCodes
 from pywebtransport.types import SessionId, SessionState, StreamState
@@ -25,7 +25,7 @@ __all__: list[str] = [
     "WebTransportError",
 ]
 
-_FATAL_ERROR_CODES = frozenset(
+_FATAL_ERROR_CODES: Final[frozenset[int]] = frozenset(
     {
         ErrorCodes.INTERNAL_ERROR,
         ErrorCodes.H3_INTERNAL_ERROR,
@@ -37,16 +37,16 @@ _FATAL_ERROR_CODES = frozenset(
     }
 )
 
-_RETRIABLE_ERROR_CODES = frozenset(
+_RETRIABLE_ERROR_CODES: Final[frozenset[int]] = frozenset(
     {ErrorCodes.APP_CONNECTION_TIMEOUT, ErrorCodes.APP_SERVICE_UNAVAILABLE, ErrorCodes.FLOW_CONTROL_ERROR}
 )
 
 
 class WebTransportError(Exception):
-    """The base exception for all WebTransport errors."""
+    """Manage the base exception for all WebTransport errors."""
 
     def __init__(self, message: str, *, error_code: int | None = None, details: dict[str, Any] | None = None) -> None:
-        """Initialize the WebTransport error."""
+        """Initialize the instance."""
         super().__init__(message)
         self.message = message
         self.error_code = error_code if error_code is not None else ErrorCodes.INTERNAL_ERROR
@@ -62,16 +62,16 @@ class WebTransportError(Exception):
 
     @property
     def is_fatal(self) -> bool:
-        """Check if the error is fatal and should terminate the connection."""
+        """Return True if the error is fatal."""
         return self.error_code in _FATAL_ERROR_CODES
 
     @property
     def is_retriable(self) -> bool:
-        """Check if the error is transient and the operation can be retried."""
+        """Return True if the error is transient."""
         return self.error_code in _RETRIABLE_ERROR_CODES
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert the exception to a dictionary for serialization."""
+        """Serialize the exception to a dictionary."""
         data = {
             "type": self.__class__.__name__,
             "category": self.category,
@@ -89,7 +89,7 @@ class WebTransportError(Exception):
         return data
 
     def __repr__(self) -> str:
-        """Return a detailed string representation of the error."""
+        """Return the string representation."""
         args = [f"message={self.message!r}", f"error_code={hex(self.error_code)}"]
         excluded_keys = {"message", "error_code", "details", "args"}
 
@@ -103,12 +103,12 @@ class WebTransportError(Exception):
         return f"{self.__class__.__name__}({', '.join(args)})"
 
     def __str__(self) -> str:
-        """Return a simple string representation of the error."""
+        """Return the string representation."""
         return f"[{hex(self.error_code)}] {self.message}"
 
 
 class AuthenticationError(WebTransportError):
-    """An exception for authentication-related errors."""
+    """Manage authentication-related errors."""
 
     def __init__(
         self,
@@ -118,7 +118,7 @@ class AuthenticationError(WebTransportError):
         auth_method: str | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
-        """Initialize the authentication error."""
+        """Initialize the instance."""
         super().__init__(
             message=message,
             error_code=error_code if error_code is not None else ErrorCodes.APP_AUTHENTICATION_FAILED,
@@ -128,7 +128,7 @@ class AuthenticationError(WebTransportError):
 
 
 class CertificateError(WebTransportError):
-    """An exception for certificate-related errors."""
+    """Manage certificate-related errors."""
 
     def __init__(
         self,
@@ -139,7 +139,7 @@ class CertificateError(WebTransportError):
         certificate_error: str | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
-        """Initialize the certificate error."""
+        """Initialize the instance."""
         super().__init__(
             message=message,
             error_code=error_code if error_code is not None else ErrorCodes.APP_AUTHENTICATION_FAILED,
@@ -150,7 +150,7 @@ class CertificateError(WebTransportError):
 
 
 class ClientError(WebTransportError):
-    """An exception for client-specific errors."""
+    """Manage client-specific errors."""
 
     def __init__(
         self,
@@ -160,7 +160,7 @@ class ClientError(WebTransportError):
         target_url: str | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
-        """Initialize the client error."""
+        """Initialize the instance."""
         super().__init__(
             message=message,
             error_code=error_code if error_code is not None else ErrorCodes.APP_INVALID_REQUEST,
@@ -170,7 +170,7 @@ class ClientError(WebTransportError):
 
 
 class ConfigurationError(WebTransportError):
-    """An exception for configuration-related errors."""
+    """Manage configuration-related errors."""
 
     def __init__(
         self,
@@ -181,7 +181,7 @@ class ConfigurationError(WebTransportError):
         config_value: Any | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
-        """Initialize the configuration error."""
+        """Initialize the instance."""
         super().__init__(
             message=message,
             error_code=error_code if error_code is not None else ErrorCodes.APP_INVALID_REQUEST,
@@ -192,7 +192,7 @@ class ConfigurationError(WebTransportError):
 
 
 class ConnectionError(WebTransportError):
-    """An exception for connection-related errors."""
+    """Manage connection-related errors."""
 
     def __init__(
         self,
@@ -202,7 +202,7 @@ class ConnectionError(WebTransportError):
         remote_address: tuple[str, int] | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
-        """Initialize the connection error."""
+        """Initialize the instance."""
         super().__init__(
             message=message,
             error_code=error_code if error_code is not None else ErrorCodes.CONNECTION_REFUSED,
@@ -212,7 +212,7 @@ class ConnectionError(WebTransportError):
 
 
 class DatagramError(WebTransportError):
-    """An exception for datagram-related errors."""
+    """Manage datagram-related errors."""
 
     def __init__(
         self,
@@ -223,7 +223,7 @@ class DatagramError(WebTransportError):
         max_size: int | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
-        """Initialize the datagram error."""
+        """Initialize the instance."""
         super().__init__(
             message=message,
             error_code=error_code if error_code is not None else ErrorCodes.INTERNAL_ERROR,
@@ -234,7 +234,7 @@ class DatagramError(WebTransportError):
 
 
 class FlowControlError(WebTransportError):
-    """An exception for flow control errors."""
+    """Manage flow control errors."""
 
     def __init__(
         self,
@@ -246,7 +246,7 @@ class FlowControlError(WebTransportError):
         current_value: int | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
-        """Initialize the flow control error."""
+        """Initialize the instance."""
         super().__init__(
             message=message,
             error_code=error_code if error_code is not None else ErrorCodes.FLOW_CONTROL_ERROR,
@@ -258,7 +258,7 @@ class FlowControlError(WebTransportError):
 
 
 class HandshakeError(WebTransportError):
-    """An exception for handshake-related errors."""
+    """Manage handshake-related errors."""
 
     def __init__(
         self,
@@ -268,7 +268,7 @@ class HandshakeError(WebTransportError):
         handshake_stage: str | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
-        """Initialize the handshake error."""
+        """Initialize the instance."""
         super().__init__(
             message=message,
             error_code=error_code if error_code is not None else ErrorCodes.INTERNAL_ERROR,
@@ -278,7 +278,7 @@ class HandshakeError(WebTransportError):
 
 
 class ProtocolError(WebTransportError):
-    """An exception for protocol violation errors."""
+    """Manage protocol violation errors."""
 
     def __init__(
         self,
@@ -288,7 +288,7 @@ class ProtocolError(WebTransportError):
         frame_type: int | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
-        """Initialize the protocol error."""
+        """Initialize the instance."""
         super().__init__(
             message=message,
             error_code=error_code if error_code is not None else ErrorCodes.PROTOCOL_VIOLATION,
@@ -298,7 +298,7 @@ class ProtocolError(WebTransportError):
 
 
 class SerializationError(WebTransportError):
-    """An exception for serialization or deserialization errors."""
+    """Manage serialization or deserialization errors."""
 
     def __init__(
         self,
@@ -308,7 +308,7 @@ class SerializationError(WebTransportError):
         original_exception: Exception | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
-        """Initialize the serialization error."""
+        """Initialize the instance."""
         super().__init__(
             message=message,
             error_code=error_code if error_code is not None else ErrorCodes.INTERNAL_ERROR,
@@ -318,7 +318,7 @@ class SerializationError(WebTransportError):
 
 
 class ServerError(WebTransportError):
-    """An exception for server-specific errors."""
+    """Manage server-specific errors."""
 
     def __init__(
         self,
@@ -328,7 +328,7 @@ class ServerError(WebTransportError):
         bind_address: tuple[str, int] | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
-        """Initialize the server error."""
+        """Initialize the instance."""
         super().__init__(
             message=message,
             error_code=error_code if error_code is not None else ErrorCodes.APP_SERVICE_UNAVAILABLE,
@@ -338,7 +338,7 @@ class ServerError(WebTransportError):
 
 
 class SessionError(WebTransportError):
-    """An exception for WebTransport session errors."""
+    """Manage WebTransport session errors."""
 
     def __init__(
         self,
@@ -349,7 +349,7 @@ class SessionError(WebTransportError):
         session_state: SessionState | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
-        """Initialize the session error."""
+        """Initialize the instance."""
         super().__init__(
             message=message,
             error_code=error_code if error_code is not None else ErrorCodes.INTERNAL_ERROR,
@@ -360,7 +360,7 @@ class SessionError(WebTransportError):
 
 
 class StreamError(WebTransportError):
-    """An exception for stream-related errors."""
+    """Manage stream-related errors."""
 
     def __init__(
         self,
@@ -371,7 +371,7 @@ class StreamError(WebTransportError):
         stream_state: StreamState | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
-        """Initialize the stream error."""
+        """Initialize the instance."""
         super().__init__(
             message=message,
             error_code=error_code if error_code is not None else ErrorCodes.STREAM_STATE_ERROR,
@@ -381,7 +381,7 @@ class StreamError(WebTransportError):
         self.stream_state = stream_state
 
     def __str__(self) -> str:
-        """Return a simple string representation of the error."""
+        """Return the string representation."""
         base_msg = super().__str__()
         if self.stream_id is not None:
             return f"{base_msg} (stream_id={self.stream_id})"
@@ -389,7 +389,7 @@ class StreamError(WebTransportError):
 
 
 class TimeoutError(WebTransportError):
-    """An exception for timeout-related errors."""
+    """Manage timeout-related errors."""
 
     def __init__(
         self,
@@ -400,7 +400,7 @@ class TimeoutError(WebTransportError):
         operation: str | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
-        """Initialize the timeout error."""
+        """Initialize the instance."""
         super().__init__(
             message=message,
             error_code=error_code if error_code is not None else ErrorCodes.APP_CONNECTION_TIMEOUT,

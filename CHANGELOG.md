@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(No planned changes for the next release yet.)_
 
+## [0.13.1] - 2026-02-16
+
+This is a critical interoperability and stabilization release designed to fortify the protocol engine against wide-area network (WAN) volatility and strict browser security perimeters. It modernizes the underlying TLS PKI infrastructure, decouples the HTTP/3 frame parsing mechanism to tolerate severe packet reordering, optimizes the internal memory footprint, and guarantees thread-safety at the FFI boundary.
+
+### Added
+
+- **Standardized PKI Trust Chain**: Replaced standalone self-signed certificates with a standard Root CA and derived leaf certificate architecture to satisfy strict modern QUIC client and browser security verifications.
+- **Thread-Safe Engine Boundaries**: Enabled `Send` + `Sync` semantics for the core protocol engine, safely permitting cross-thread execution within asynchronous environments (e.g., `asyncio` executors).
+
+### Changed
+
+- **Decoupled H3 Frame Parsing**: Eliminated the synchronous dependency on `SETTINGS` frame reception prior to processing `HEADERS`. Out-of-order frame resolution is now delegated entirely to the QPACK suspension mechanism, eliminating spurious connection drops and preserving QUIC's stream multiplexing concurrency.
+- **QPACK Capacity Alignment**: Elevated `QPACK_DECODER_MAX_TABLE_CAPACITY` and encoder physical limits from 4KB to 64KB, strictly aligning the internal protocol optimization with HTTP/3 production standards.
+- **Memory Model Optimization**: Enforced `__slots__` across all core Python components (Client, Server, Protocol, Messaging, Serializers) to significantly minimize memory footprint and attribute access overhead.
+- **Configuration Immutability**: Transitioned core configuration and statistics objects to `frozen` dataclasses to enforce strict immutability at the API boundary.
+- **Idempotent Certificate Provisioning**: Upgraded the interoperability server with idempotent certificate generation, preventing trust state corruption across server reboots and maintaining consistent client evaluation.
+- **WAN Resilience in Interoperability Suite**: Fortified the `DeviousBatonTest` compliance client with deterministic retry-backoff heuristics and relaxed asynchronous timeout thresholds to mitigate false-positive test flakiness caused by UDP transit jitter and cross-border routing.
+
+### Fixed
+
+- **TLS SAN IP Validation**: Implemented strict `IpAddr` parsing for Subject Alternative Name (SAN) extensions to correctly support IP-based identity generation during certificate creation.
+- **TLS Clock Skew Mitigation**: Backdated the certificate validity start time during dynamic generation to preemptively mitigate connection failures caused by client-server clock desynchronization.
+- **Type Resolution Resiliency**: Fixed an issue in data deserialization to correctly and robustly resolve PEP 563 string annotations and forward references.
+
 ## [0.13.0] - 2026-02-09
 
 This release establishes **Full Peer Symmetry**, enabling both clients and servers to initiate arbitrary streams, and introduces a **Modernized Error Architecture** that strictly decouples error origins for precise exception handling. It also rectifies critical QUIC flow control semantics regarding stream termination and hardens the HTTP/3 state machine against initialization race conditions.
@@ -738,7 +762,8 @@ This is a major release focused on enhancing runtime safety and modernizing the 
 - cryptography (>=45.0.4,<46.0.0) for SSL/TLS operations
 - typing-extensions (>=4.14.0,<5.0.0) for Python <3.10 support
 
-[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.13.1...HEAD
+[0.13.1]: https://github.com/wtransport/pywebtransport/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/wtransport/pywebtransport/compare/v0.12.1...v0.13.0
 [0.12.1]: https://github.com/wtransport/pywebtransport/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/wtransport/pywebtransport/compare/v0.11.0...v0.12.0

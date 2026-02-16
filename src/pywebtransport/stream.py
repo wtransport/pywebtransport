@@ -7,7 +7,7 @@ import weakref
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from types import TracebackType
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, Final, Self
 
 from pywebtransport._protocol.events import (
     UserGetStreamDiagnostics,
@@ -19,12 +19,11 @@ from pywebtransport._protocol.events import (
 from pywebtransport.constants import ErrorCodes
 from pywebtransport.events import Event, EventEmitter
 from pywebtransport.exceptions import ConnectionError, StreamError, TimeoutError
-from pywebtransport.types import Buffer, SessionId, StreamDirection, StreamId, StreamState, EventType
+from pywebtransport.types import Buffer, EventType, SessionId, StreamDirection, StreamId, StreamState
 from pywebtransport.utils import ensure_buffer, get_logger
 
 if TYPE_CHECKING:
     from pywebtransport.session import WebTransportSession
-
 
 __all__: list[str] = [
     "StreamDiagnostics",
@@ -34,16 +33,18 @@ __all__: list[str] = [
     "WebTransportStream",
 ]
 
-DEFAULT_EVENT_HISTORY_SIZE: int = 0
-DEFAULT_EVENT_QUEUE_SIZE: int = 16
-DEFAULT_MAX_EVENT_LISTENERS: int = 20
+type StreamType = WebTransportStream | WebTransportReceiveStream | WebTransportSendStream
 
-logger = get_logger(name=__name__)
+_DEFAULT_EVENT_HISTORY_SIZE: Final[int] = 0
+_DEFAULT_EVENT_QUEUE_SIZE: Final[int] = 16
+_DEFAULT_MAX_EVENT_LISTENERS: Final[int] = 20
+
+_logger = get_logger(name=__name__)
 
 
-@dataclass(kw_only=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class StreamDiagnostics:
-    """A snapshot of stream diagnostics."""
+    """Encapsulate stream diagnostic data."""
 
     stream_id: StreamId
     session_id: SessionId
@@ -61,22 +62,23 @@ class StreamDiagnostics:
 
 
 class _BaseStream:
-    """Base class for WebTransport stream handles."""
+    """Manage the common state for WebTransport stream handles."""
 
-    _stream_id: StreamId
-    events: EventEmitter
+    __slots__ = ("_session", "_stream_id", "_is_remote", "_cached_state", "events")
 
     def __init__(self, *, session: WebTransportSession, stream_id: StreamId, is_remote: bool) -> None:
-        """Initialize the base stream handle."""
+        """Initialize the instance."""
         self._session = weakref.ref(session)
         self._stream_id = stream_id
         self._is_remote = is_remote
+
         self._cached_state = StreamState.OPEN
         self.events = EventEmitter(
-            max_queue_size=DEFAULT_EVENT_QUEUE_SIZE,
-            max_history=DEFAULT_EVENT_HISTORY_SIZE,
-            max_listeners=DEFAULT_MAX_EVENT_LISTENERS,
+            max_queue_size=_DEFAULT_EVENT_QUEUE_SIZE,
+            max_history=_DEFAULT_EVENT_HISTORY_SIZE,
+            max_listeners=_DEFAULT_MAX_EVENT_LISTENERS,
         )
+
         self.events.on(event_type=EventType.STREAM_CLOSED, handler=self._on_closed)
 
     @property
@@ -91,7 +93,7 @@ class _BaseStream:
 
     @property
     def session(self) -> WebTransportSession:
-        """Get the parent session handle."""
+        """Return the parent session handle."""
         session = self._session()
         if session is None:
             raise ConnectionError("Session is gone.")
@@ -99,16 +101,16 @@ class _BaseStream:
 
     @property
     def state(self) -> StreamState:
-        """Get the current state of the stream."""
+        """Return the current state of the stream."""
         return self._cached_state
 
     @property
     def stream_id(self) -> StreamId:
-        """Get the unique identifier for this stream."""
+        """Return the unique identifier for this stream."""
         return self._stream_id
 
     async def diagnostics(self) -> StreamDiagnostics:
-        """Get diagnostic information about the stream."""
+        """Retrieve diagnostic information about the stream."""
         connection = self.session._connection()
         if connection is None:
             raise ConnectionError("Connection is gone.")
@@ -125,21 +127,34 @@ class _BaseStream:
         return StreamDiagnostics(**diag_data)
 
     def _on_closed(self, event: Event) -> None:
-        """Handle stream closed event."""
+        """Handle the stream closed event."""
         self._cached_state = StreamState.CLOSED
 
     def __repr__(self) -> str:
-        """Provide a developer-friendly representation."""
+        """Return the string representation."""
         return f"<{self.__class__.__name__} id={self.stream_id} state={self._cached_state}>"
 
 
 class WebTransportReceiveStream(_BaseStream):
-    """Represents the readable side of a WebTransport stream."""
+    """Manage the readable side of a WebTransport stream."""
+
+    __slots__ = ("_read_eof",)
 
     def __init__(self, *, session: WebTransportSession, stream_id: StreamId, is_remote: bool) -> None:
-        """Initialize the receive stream handle."""
+        """Initialize the instance."""
         super().__init__(session=session, stream_id=stream_id, is_remote=is_remote)
+
         self._read_eof = False
+
+    async def __aenter__(self) -> Self:
+        """Enter the asynchronous context."""
+        return self
+
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+    ) -> None:
+        """Exit the asynchronous context."""
+        await self.stop_receiving()
 
     @property
     def can_read(self) -> bool:
@@ -148,21 +163,11 @@ class WebTransportReceiveStream(_BaseStream):
 
     @property
     def direction(self) -> StreamDirection:
-        """Get the directionality of the stream."""
+        """Return the directionality of the stream."""
         return StreamDirection.RECEIVE_ONLY
 
-    async def __aenter__(self) -> Self:
-        """Enter the async context manager."""
-        return self
-
-    async def __aexit__(
-        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
-    ) -> None:
-        """Exit the async context manager."""
-        await self.stop_receiving()
-
     async def close(self) -> None:
-        """Close the receiving side of the stream."""
+        """Terminate the receiving side of the stream."""
         await self.stop_receiving()
 
     async def read(self, *, max_bytes: int = -1) -> bytes:
@@ -289,26 +294,18 @@ class WebTransportReceiveStream(_BaseStream):
 
 
 class WebTransportSendStream(_BaseStream):
-    """Represents the writable side of a WebTransport stream."""
+    """Manage the writable side of a WebTransport stream."""
 
-    @property
-    def can_write(self) -> bool:
-        """Return True if the stream is writable."""
-        return self._cached_state not in (StreamState.HALF_CLOSED_LOCAL, StreamState.CLOSED, StreamState.RESET_SENT)
-
-    @property
-    def direction(self) -> StreamDirection:
-        """Get the directionality of the stream."""
-        return StreamDirection.SEND_ONLY
+    __slots__ = ()
 
     async def __aenter__(self) -> Self:
-        """Enter the async context manager."""
+        """Enter the asynchronous context."""
         return self
 
     async def __aexit__(
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
     ) -> None:
-        """Exit the async context manager."""
+        """Exit the asynchronous context."""
         exit_error_code: int | None = None
 
         if isinstance(exc_val, asyncio.CancelledError):
@@ -318,8 +315,18 @@ class WebTransportSendStream(_BaseStream):
 
         await self.close(error_code=exit_error_code)
 
+    @property
+    def can_write(self) -> bool:
+        """Return True if the stream is writable."""
+        return self._cached_state not in (StreamState.HALF_CLOSED_LOCAL, StreamState.CLOSED, StreamState.RESET_SENT)
+
+    @property
+    def direction(self) -> StreamDirection:
+        """Return the directionality of the stream."""
+        return StreamDirection.SEND_ONLY
+
     async def close(self, *, error_code: int | None = None) -> None:
-        """Close the sending side of the stream."""
+        """Terminate the sending side of the stream."""
         if error_code is not None:
             await self.reset(error_code=error_code)
             return
@@ -328,13 +335,13 @@ class WebTransportSendStream(_BaseStream):
             await self.write(data=b"", end_stream=True)
             self._cached_state = StreamState.HALF_CLOSED_LOCAL
         except StreamError as e:
-            logger.debug("Ignoring expected StreamError on stream %s close: %s", self.stream_id, e)
+            _logger.debug("Ignoring expected StreamError on stream %s close: %s", self.stream_id, e)
         except Exception as e:
-            logger.error("Unexpected error during stream %s close: %s", self.stream_id, e, exc_info=True)
+            _logger.error("Unexpected error during stream %s close: %s", self.stream_id, e, exc_info=True)
             raise
 
     async def reset(self, *, error_code: int = ErrorCodes.NO_ERROR) -> None:
-        """Abruptly terminate stream transmission and signal peer to discard data."""
+        """Abruptly terminate stream transmission."""
         connection = self.session._connection()
         if connection is None:
             raise ConnectionError("Connection is gone.")
@@ -350,7 +357,7 @@ class WebTransportSendStream(_BaseStream):
         try:
             buffer_data = ensure_buffer(data=data)
         except TypeError as e:
-            logger.debug("Stream %d write failed pre-validation: %s", self.stream_id, e)
+            _logger.debug("Stream %d write failed pre-validation: %s", self.stream_id, e)
             raise
 
         if not buffer_data and not end_stream:
@@ -388,18 +395,38 @@ class WebTransportSendStream(_BaseStream):
                 is_last_chunk = offset >= data_len
                 await self.write(data=chunk, end_stream=end_stream if is_last_chunk else False)
         except StreamError as e:
-            logger.debug("Error writing bytes to stream %d: %s", self.stream_id, e)
+            _logger.debug("Error writing bytes to stream %d: %s", self.stream_id, e)
             raise
 
 
 class WebTransportStream(_BaseStream):
-    """Represents the bidirectional WebTransport stream."""
+    """Manage the bidirectional WebTransport stream."""
+
+    __slots__ = ("_reader", "_writer")
 
     def __init__(self, *, session: WebTransportSession, stream_id: StreamId, is_remote: bool) -> None:
-        """Initialize the bidirectional stream handle."""
+        """Initialize the instance."""
         super().__init__(session=session, stream_id=stream_id, is_remote=is_remote)
+
         self._reader = WebTransportReceiveStream(session=session, stream_id=stream_id, is_remote=is_remote)
         self._writer = WebTransportSendStream(session=session, stream_id=stream_id, is_remote=is_remote)
+
+    async def __aenter__(self) -> Self:
+        """Enter the asynchronous context."""
+        return self
+
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+    ) -> None:
+        """Exit the asynchronous context."""
+        exit_error_code: int | None = None
+
+        if isinstance(exc_val, asyncio.CancelledError):
+            exit_error_code = ErrorCodes.APPLICATION_ERROR
+        elif isinstance(exc_val, BaseException):
+            exit_error_code = getattr(exc_val, "error_code", ErrorCodes.APPLICATION_ERROR)
+
+        await self.close(error_code=exit_error_code)
 
     @property
     def can_read(self) -> bool:
@@ -413,28 +440,11 @@ class WebTransportStream(_BaseStream):
 
     @property
     def direction(self) -> StreamDirection:
-        """Get the directionality of the stream."""
+        """Return the directionality of the stream."""
         return StreamDirection.BIDIRECTIONAL
 
-    async def __aenter__(self) -> Self:
-        """Enter the async context manager."""
-        return self
-
-    async def __aexit__(
-        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
-    ) -> None:
-        """Exit the async context manager."""
-        exit_error_code: int | None = None
-
-        if isinstance(exc_val, asyncio.CancelledError):
-            exit_error_code = ErrorCodes.APPLICATION_ERROR
-        elif isinstance(exc_val, BaseException):
-            exit_error_code = getattr(exc_val, "error_code", ErrorCodes.APPLICATION_ERROR)
-
-        await self.close(error_code=exit_error_code)
-
     async def close(self, *, error_code: int | None = None) -> None:
-        """Close both sides of the stream."""
+        """Terminate both sides of the stream."""
         await self._writer.close(error_code=error_code)
         stop_code = error_code if error_code is not None else ErrorCodes.NO_ERROR
         await self._reader.stop_receiving(error_code=stop_code)
@@ -459,13 +469,13 @@ class WebTransportStream(_BaseStream):
         """Read data from the stream until a separator is found."""
         return await self._reader.readuntil(separator=separator, limit=limit)
 
-    async def stop_receiving(self, *, error_code: int = ErrorCodes.NO_ERROR) -> None:
-        """Signal the peer to stop sending data."""
-        await self._reader.stop_receiving(error_code=error_code)
-
     async def reset(self, *, error_code: int = ErrorCodes.NO_ERROR) -> None:
         """Stop sending data and reset the stream."""
         await self._writer.reset(error_code=error_code)
+
+    async def stop_receiving(self, *, error_code: int = ErrorCodes.NO_ERROR) -> None:
+        """Signal the peer to stop sending data."""
+        await self._reader.stop_receiving(error_code=error_code)
 
     async def write(self, *, data: Buffer, end_stream: bool = False) -> None:
         """Write data to the stream."""
@@ -476,7 +486,7 @@ class WebTransportStream(_BaseStream):
         await self._writer.write_all(data=data, chunk_size=chunk_size, end_stream=end_stream)
 
     def _on_closed(self, event: Event) -> None:
-        """Handle stream closed event and propagate to children."""
+        """Handle the stream closed event."""
         super()._on_closed(event)
         self._reader._on_closed(event)
         self._writer._on_closed(event)
@@ -488,6 +498,3 @@ class WebTransportStream(_BaseStream):
     async def __anext__(self) -> bytes:
         """Get the next chunk of data."""
         return await self._reader.__anext__()
-
-
-type StreamType = WebTransportStream | WebTransportReceiveStream | WebTransportSendStream

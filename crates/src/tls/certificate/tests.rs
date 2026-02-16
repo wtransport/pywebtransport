@@ -70,18 +70,22 @@ fn test_generate_self_signed_cert_io_operations_success() {
         assert!(res.is_ok(), "Generation failed: {e}");
     }
 
-    let Ok((cert_path_str, key_path_str)) = res else {
+    let Ok((ca_path_str, cert_path_str, key_path_str)) = res else {
         return;
     };
+    let ca_path = Path::new(&ca_path_str);
     let cert_path = Path::new(&cert_path_str);
     let key_path = Path::new(&key_path_str);
 
+    assert!(ca_path.exists());
     assert!(cert_path.exists());
     assert!(key_path.exists());
 
+    let ca_content = fs::read_to_string(ca_path).unwrap_or_default();
     let cert_content = fs::read_to_string(cert_path).unwrap_or_default();
     let key_content = fs::read_to_string(key_path).unwrap_or_default();
 
+    assert!(ca_content.contains("BEGIN CERTIFICATE"));
     assert!(cert_content.contains("BEGIN CERTIFICATE"));
     assert!(key_content.contains("PRIVATE KEY"));
 
@@ -101,7 +105,9 @@ fn test_generate_self_signed_cert_key_permissions_unix_success() {
         assert!(res.is_ok(), "Generation failed: {e}");
     }
 
-    let Ok((_, key_path_str)) = res else { return };
+    let Ok((_, _, key_path_str)) = res else {
+        return;
+    };
     let metadata_res = fs::metadata(&key_path_str);
 
     if let Err(e) = &metadata_res {

@@ -42,7 +42,7 @@ const WHITESPACE: &[u8] = &[SP, HTAB];
 // Reserved settings identifier list.
 const RESERVED_SETTINGS: &[u64] = &[0x0, 0x2, 0x3, 0x4, 0x5];
 
-// Internal HTTP/3 protocol state machine.
+// Internal HTTP/3 protocol engine.
 pub(super) struct H3 {
     is_client: bool,
     config: H3Config,
@@ -626,13 +626,6 @@ impl H3 {
                 }
             }
             H3_FRAME_TYPE_HEADERS => {
-                if !self.settings_received {
-                    return Err(WebTransportError::Protocol(
-                        Some(ERR_H3_MISSING_SETTINGS),
-                        "Stream Blocked: Missing Settings".to_owned(),
-                    ));
-                }
-
                 let p_check = self.ensure_partial_frame(stream_id);
                 if p_check.headers_processed {
                     return Err(WebTransportError::Protocol(

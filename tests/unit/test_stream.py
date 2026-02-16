@@ -1,6 +1,7 @@
 """Unit tests for the pywebtransport.stream.stream module."""
 
 import asyncio
+import dataclasses
 from typing import Any, cast
 from unittest.mock import MagicMock, call
 
@@ -132,8 +133,16 @@ class TestBaseStream:
         diag = await stream.diagnostics()
         assert diag.is_peer_initiated is True
 
-    @pytest.mark.asyncio
-    async def test_is_closed(self, stream: _BaseStream) -> None:
+    def test_init(self, stream: _BaseStream, mock_session: MagicMock) -> None:
+        assert stream._session() is mock_session
+        assert stream._stream_id == 1
+        assert stream._is_remote is False
+        assert stream._cached_state == StreamState.OPEN
+        assert stream.events is not None
+
+        assert not hasattr(stream, "__dict__")
+
+    def test_is_closed(self, stream: _BaseStream) -> None:
         stream._cached_state = StreamState.OPEN
 
         assert not stream.is_closed
@@ -142,8 +151,7 @@ class TestBaseStream:
 
         assert stream.is_closed
 
-    @pytest.mark.asyncio
-    async def test_is_remote_property(self, mock_session: MagicMock) -> None:
+    def test_is_remote_property(self, mock_session: MagicMock) -> None:
         s1 = _BaseStream(session=mock_session, stream_id=1, is_remote=True)
         assert s1.is_remote is True
 
@@ -157,14 +165,19 @@ class TestBaseStream:
 
         assert stream.state == StreamState.CLOSED
 
-    @pytest.mark.asyncio
-    async def test_repr(self, stream: _BaseStream) -> None:
+    def test_properties(self, stream: _BaseStream, mock_session: MagicMock) -> None:
+        assert stream.stream_id == 1
+        assert stream.is_remote is False
+        assert stream.state == StreamState.OPEN
+        assert stream.session is mock_session
+        assert stream.is_closed is False
+
+    def test_repr(self, stream: _BaseStream) -> None:
         assert "_BaseStream" in repr(stream)
         assert "id=1" in repr(stream)
 
-    @pytest.mark.asyncio
-    async def test_session_property_gone(self, stream: _BaseStream) -> None:
-        stream._session = lambda: None  # type: ignore
+    def test_session_property_gone(self, stream: _BaseStream) -> None:
+        stream._session = lambda: None  # type: ignore[assignment]
 
         with pytest.raises(ConnectionError, match="Session is gone"):
             _ = stream.session
@@ -193,54 +206,80 @@ class TestStreamDiagnostics:
         assert diag.state == StreamState.OPEN
         assert diag.is_peer_initiated is True
 
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            cast(Any, diag).state = StreamState.CLOSED
 
-@pytest.mark.asyncio
+        assert not hasattr(diag, "__dict__")
+
+
 class TestWebTransportReceiveStream(TestBaseStream):
 
     @pytest.fixture
     def stream(self, mock_session: MagicMock) -> WebTransportReceiveStream:
         return WebTransportReceiveStream(session=mock_session, stream_id=2, is_remote=False)
 
+    @pytest.mark.asyncio
     async def test_aiter(self, stream: WebTransportReceiveStream, mocker: MockerFixture) -> None:
-        mocker.patch.object(stream, "read", side_effect=[b"1", b"2", b""])
+        mocker.patch.object(WebTransportReceiveStream, "read", side_effect=[b"1", b"2", b""])
 
         res = [chunk async for chunk in stream]
 
         assert res == [b"1", b"2"]
 
+    @pytest.mark.asyncio
     async def test_close(self, stream: WebTransportReceiveStream, mocker: MockerFixture) -> None:
-        spy_stop = mocker.patch.object(stream, "stop_receiving", new_callable=mocker.AsyncMock)
+        spy_stop = mocker.patch.object(WebTransportReceiveStream, "stop_receiving", new_callable=mocker.AsyncMock)
 
         await stream.close()
 
         spy_stop.assert_awaited_once()
 
+    @pytest.mark.asyncio
     async def test_context_manager(self, stream: WebTransportReceiveStream, mocker: MockerFixture) -> None:
-        spy_stop = mocker.patch.object(stream, "stop_receiving", new_callable=mocker.AsyncMock)
+        spy_stop = mocker.patch.object(WebTransportReceiveStream, "stop_receiving", new_callable=mocker.AsyncMock)
 
         async with stream as s:
             assert s is stream
 
         spy_stop.assert_awaited_once()
 
-    async def test_properties(self, stream: WebTransportReceiveStream) -> None:
+    def test_init(self, stream: _BaseStream, mock_session: MagicMock) -> None:
+        assert isinstance(stream, WebTransportReceiveStream)
+        assert stream._session() is mock_session
+        assert stream._stream_id == 2
+        assert stream._is_remote is False
+        assert stream._cached_state == StreamState.OPEN
+        assert stream.events is not None
+        assert stream._read_eof is False
+
+        assert not hasattr(stream, "__dict__")
+
+    def test_properties(self, stream: _BaseStream, mock_session: MagicMock) -> None:
+        assert isinstance(stream, WebTransportReceiveStream)
+        assert stream.stream_id == 2
+        assert stream.is_remote is False
+        assert stream.state == StreamState.OPEN
+        assert stream.session is mock_session
+        assert stream.is_closed is False
         assert stream.direction == StreamDirection.RECEIVE_ONLY
         assert stream.can_read is True
 
         stream._cached_state = StreamState.RESET_RECEIVED
-
         assert stream.can_read is False
 
+    @pytest.mark.asyncio
     async def test_read_all(self, stream: WebTransportReceiveStream, mocker: MockerFixture) -> None:
-        mocker.patch.object(stream, "read", side_effect=[b"a", b"b", b""])
+        mocker.patch.object(WebTransportReceiveStream, "read", side_effect=[b"a", b"b", b""])
 
         assert await stream.read_all() == b"ab"
 
+    @pytest.mark.asyncio
     async def test_read_closed(self, stream: WebTransportReceiveStream) -> None:
         stream._cached_state = StreamState.CLOSED
 
         assert await stream.read() == b""
 
+    @pytest.mark.asyncio
     async def test_read_eof(self, stream: WebTransportReceiveStream, mock_protocol: MagicMock) -> None:
         fut: asyncio.Future[bytes] = asyncio.Future()
         mock_protocol.create_request.side_effect = None
@@ -257,6 +296,7 @@ class TestWebTransportReceiveStream(TestBaseStream):
         assert await stream.read() == b""
         mock_protocol.create_request.assert_not_called()
 
+    @pytest.mark.asyncio
     async def test_read_generic_error(self, stream: WebTransportReceiveStream, mock_protocol: MagicMock) -> None:
         fut: asyncio.Future[bytes] = asyncio.Future()
         mock_protocol.create_request.side_effect = None
@@ -266,12 +306,14 @@ class TestWebTransportReceiveStream(TestBaseStream):
         with pytest.raises(ValueError):
             await stream.read()
 
+    @pytest.mark.asyncio
     async def test_read_no_connection(self, stream: WebTransportReceiveStream, mock_session: MagicMock) -> None:
         mock_session._connection.return_value = None
 
         with pytest.raises(ConnectionError):
             await stream.read()
 
+    @pytest.mark.asyncio
     async def test_read_stream_error(self, stream: WebTransportReceiveStream, mock_protocol: MagicMock) -> None:
         fut: asyncio.Future[bytes] = asyncio.Future()
         mock_protocol.create_request.side_effect = None
@@ -285,6 +327,7 @@ class TestWebTransportReceiveStream(TestBaseStream):
         assert await stream.read() == b""
         mock_protocol.create_request.assert_not_called()
 
+    @pytest.mark.asyncio
     async def test_read_stream_error_reraise(self, stream: WebTransportReceiveStream, mock_protocol: MagicMock) -> None:
         fut: asyncio.Future[bytes] = asyncio.Future()
         mock_protocol.create_request.side_effect = None
@@ -294,6 +337,7 @@ class TestWebTransportReceiveStream(TestBaseStream):
         with pytest.raises(StreamError, match="Other"):
             await stream.read()
 
+    @pytest.mark.asyncio
     async def test_read_success(self, stream: WebTransportReceiveStream, mock_protocol: MagicMock) -> None:
         fut: asyncio.Future[bytes] = asyncio.Future()
         mock_protocol.create_request.side_effect = None
@@ -307,81 +351,96 @@ class TestWebTransportReceiveStream(TestBaseStream):
         assert isinstance(event, UserStreamRead)
         assert event.max_bytes == 10
 
+    @pytest.mark.asyncio
     async def test_readexactly(self, stream: WebTransportReceiveStream, mocker: MockerFixture) -> None:
-        mocker.patch.object(stream, "read", side_effect=[b"12", b"34"])
+        mocker.patch.object(WebTransportReceiveStream, "read", side_effect=[b"12", b"34"])
 
         assert await stream.readexactly(n=4) == b"1234"
 
+    @pytest.mark.asyncio
     async def test_readexactly_incomplete(self, stream: WebTransportReceiveStream, mocker: MockerFixture) -> None:
-        mocker.patch.object(stream, "read", return_value=b"")
+        mocker.patch.object(WebTransportReceiveStream, "read", return_value=b"")
 
         with pytest.raises(asyncio.IncompleteReadError):
             await stream.readexactly(n=5)
 
+    @pytest.mark.asyncio
     async def test_readexactly_no_connection(self, stream: WebTransportReceiveStream, mock_session: MagicMock) -> None:
         mock_session._connection.return_value = None
 
         with pytest.raises(ConnectionError, match="Connection is gone"):
             await stream.readexactly(n=1)
 
+    @pytest.mark.asyncio
     async def test_readexactly_params(self, stream: WebTransportReceiveStream) -> None:
         with pytest.raises(ValueError):
             await stream.readexactly(n=-1)
 
         assert await stream.readexactly(n=0) == b""
 
+    @pytest.mark.asyncio
     async def test_readexactly_timeout(self, stream: WebTransportReceiveStream, mocker: MockerFixture) -> None:
         mocker.patch("asyncio.timeout", side_effect=asyncio.TimeoutError)
 
         with pytest.raises(TimeoutError, match="readexactly timed out"):
             await stream.readexactly(n=1)
 
+    @pytest.mark.asyncio
     async def test_readline(self, stream: WebTransportReceiveStream, mocker: MockerFixture) -> None:
-        mocker.patch.object(stream, "readuntil", return_value=b"line\n")
+        mocker.patch.object(WebTransportReceiveStream, "readuntil", return_value=b"line\n")
 
         assert await stream.readline() == b"line\n"
 
+    @pytest.mark.asyncio
     async def test_readuntil_empty_separator(self, stream: WebTransportReceiveStream) -> None:
         with pytest.raises(ValueError):
             await stream.readuntil(separator=b"")
 
+    @pytest.mark.asyncio
     async def test_readuntil_incomplete(self, stream: WebTransportReceiveStream, mocker: MockerFixture) -> None:
-        mocker.patch.object(stream, "read", return_value=b"")
+        mocker.patch.object(WebTransportReceiveStream, "read", return_value=b"")
 
         with pytest.raises(asyncio.IncompleteReadError):
             await stream.readuntil(separator=b"\n")
 
+    @pytest.mark.asyncio
     async def test_readuntil_limit(self, stream: WebTransportReceiveStream, mocker: MockerFixture) -> None:
-        mocker.patch.object(stream, "read", side_effect=[b"1", b"2", b"3"])
+        mocker.patch.object(WebTransportReceiveStream, "read", side_effect=[b"1", b"2", b"3"])
 
         with pytest.raises(StreamError, match="Separator not found within limit"):
             await stream.readuntil(separator=b"\n", limit=2)
 
+    @pytest.mark.asyncio
     async def test_readuntil_no_connection(self, stream: WebTransportReceiveStream, mock_session: MagicMock) -> None:
         mock_session._connection.return_value = None
 
         with pytest.raises(ConnectionError, match="Connection is gone"):
             await stream.readuntil(separator=b"\n")
 
+    @pytest.mark.asyncio
     async def test_readuntil_params(self, stream: WebTransportReceiveStream) -> None:
         with pytest.raises(ValueError):
             await stream.readuntil(separator=b"")
 
+    @pytest.mark.asyncio
     async def test_readuntil_success(self, stream: WebTransportReceiveStream, mocker: MockerFixture) -> None:
-        mocker.patch.object(stream, "read", side_effect=[b"a", b"b", b"\n"])
+        mocker.patch.object(WebTransportReceiveStream, "read", side_effect=[b"a", b"b", b"\n"])
 
         assert await stream.readuntil(separator=b"\n") == b"ab\n"
 
+    @pytest.mark.asyncio
     async def test_readuntil_timeout(self, stream: WebTransportReceiveStream, mocker: MockerFixture) -> None:
         mocker.patch("asyncio.timeout", side_effect=asyncio.TimeoutError)
 
         with pytest.raises(TimeoutError, match="readuntil timed out"):
             await stream.readuntil(separator=b"\n")
 
-    async def test_repr(self, stream: WebTransportReceiveStream) -> None:  # type: ignore[override]
+    def test_repr(self, stream: _BaseStream) -> None:
+        assert isinstance(stream, WebTransportReceiveStream)
         assert "WebTransportReceiveStream" in repr(stream)
         assert "id=2" in repr(stream)
 
+    @pytest.mark.asyncio
     async def test_stop_receiving(self, stream: WebTransportReceiveStream, mock_protocol: MagicMock) -> None:
         fut: asyncio.Future[None] = asyncio.Future()
         mock_protocol.create_request.side_effect = None
@@ -395,6 +454,7 @@ class TestWebTransportReceiveStream(TestBaseStream):
         assert isinstance(event, UserStopSending)
         assert event.error_code == 123
 
+    @pytest.mark.asyncio
     async def test_stop_receiving_no_connection(
         self, stream: WebTransportReceiveStream, mock_session: MagicMock
     ) -> None:
@@ -403,41 +463,45 @@ class TestWebTransportReceiveStream(TestBaseStream):
         await stream.stop_receiving()
 
 
-@pytest.mark.asyncio
 class TestWebTransportSendStream(TestBaseStream):
 
     @pytest.fixture
     def stream(self, mock_session: MagicMock) -> WebTransportSendStream:
         return WebTransportSendStream(session=mock_session, stream_id=3, is_remote=False)
 
+    @pytest.mark.asyncio
     async def test_close(self, stream: WebTransportSendStream, mocker: MockerFixture) -> None:
-        spy_write = mocker.patch.object(stream, "write", new_callable=mocker.AsyncMock)
+        spy_write = mocker.patch.object(WebTransportSendStream, "write", new_callable=mocker.AsyncMock)
 
         await stream.close()
 
         spy_write.assert_awaited_once_with(data=b"", end_stream=True)
         assert stream.state == StreamState.HALF_CLOSED_LOCAL
 
+    @pytest.mark.asyncio
     async def test_close_generic_error(self, stream: WebTransportSendStream, mocker: MockerFixture) -> None:
-        mocker.patch.object(stream, "write", side_effect=ValueError("Boom"))
+        mocker.patch.object(WebTransportSendStream, "write", side_effect=ValueError("Boom"))
 
         with pytest.raises(ValueError):
             await stream.close()
 
+    @pytest.mark.asyncio
     async def test_close_stream_error_ignored(self, stream: WebTransportSendStream, mocker: MockerFixture) -> None:
-        mocker.patch.object(stream, "write", side_effect=StreamError("Expected"))
+        mocker.patch.object(WebTransportSendStream, "write", side_effect=StreamError("Expected"))
 
         await stream.close()
 
+    @pytest.mark.asyncio
     async def test_close_with_error(self, stream: WebTransportSendStream, mocker: MockerFixture) -> None:
-        spy_reset = mocker.patch.object(stream, "reset", new_callable=mocker.AsyncMock)
+        spy_reset = mocker.patch.object(WebTransportSendStream, "reset", new_callable=mocker.AsyncMock)
 
         await stream.close(error_code=1)
 
         spy_reset.assert_awaited_once_with(error_code=1)
 
+    @pytest.mark.asyncio
     async def test_context_manager_exit_cancelled(self, stream: WebTransportSendStream, mocker: MockerFixture) -> None:
-        spy_close = mocker.patch.object(stream, "close", new_callable=mocker.AsyncMock)
+        spy_close = mocker.patch.object(WebTransportSendStream, "close", new_callable=mocker.AsyncMock)
 
         with pytest.raises(asyncio.CancelledError):
             async with stream:
@@ -445,8 +509,9 @@ class TestWebTransportSendStream(TestBaseStream):
 
         spy_close.assert_awaited_once_with(error_code=ErrorCodes.APPLICATION_ERROR)
 
+    @pytest.mark.asyncio
     async def test_context_manager_exit_error(self, stream: WebTransportSendStream, mocker: MockerFixture) -> None:
-        spy_close = mocker.patch.object(stream, "close", new_callable=mocker.AsyncMock)
+        spy_close = mocker.patch.object(WebTransportSendStream, "close", new_callable=mocker.AsyncMock)
 
         class MyErr(Exception):
             error_code = 999
@@ -457,10 +522,11 @@ class TestWebTransportSendStream(TestBaseStream):
 
         spy_close.assert_awaited_once_with(error_code=999)
 
+    @pytest.mark.asyncio
     async def test_context_manager_exit_generic_error(
         self, stream: WebTransportSendStream, mocker: MockerFixture
     ) -> None:
-        spy_close = mocker.patch.object(stream, "close", new_callable=mocker.AsyncMock)
+        spy_close = mocker.patch.object(WebTransportSendStream, "close", new_callable=mocker.AsyncMock)
 
         with pytest.raises(RuntimeError):
             async with stream:
@@ -468,25 +534,43 @@ class TestWebTransportSendStream(TestBaseStream):
 
         spy_close.assert_awaited_once_with(error_code=ErrorCodes.APPLICATION_ERROR)
 
+    @pytest.mark.asyncio
     async def test_context_manager_exit_success(self, stream: WebTransportSendStream, mocker: MockerFixture) -> None:
-        spy_close = mocker.patch.object(stream, "close", new_callable=mocker.AsyncMock)
+        spy_close = mocker.patch.object(WebTransportSendStream, "close", new_callable=mocker.AsyncMock)
 
         async with stream:
             pass
 
         spy_close.assert_awaited_once_with(error_code=None)
 
-    async def test_properties(self, stream: WebTransportSendStream) -> None:
+    def test_init(self, stream: _BaseStream, mock_session: MagicMock) -> None:
+        assert isinstance(stream, WebTransportSendStream)
+        assert stream._session() is mock_session
+        assert stream._stream_id == 3
+        assert stream._is_remote is False
+        assert stream._cached_state == StreamState.OPEN
+        assert stream.events is not None
+
+        assert not hasattr(stream, "__dict__")
+
+    def test_properties(self, stream: _BaseStream, mock_session: MagicMock) -> None:
+        assert isinstance(stream, WebTransportSendStream)
+        assert stream.stream_id == 3
+        assert stream.is_remote is False
+        assert stream.state == StreamState.OPEN
+        assert stream.session is mock_session
+        assert stream.is_closed is False
         assert stream.direction == StreamDirection.SEND_ONLY
         assert stream.can_write is True
 
         stream._cached_state = StreamState.RESET_SENT
-
         assert stream.can_write is False
 
-    async def test_repr(self, stream: WebTransportSendStream) -> None:  # type: ignore[override]
+    def test_repr(self, stream: _BaseStream) -> None:
+        assert isinstance(stream, WebTransportSendStream)
         assert "WebTransportSendStream" in repr(stream)
 
+    @pytest.mark.asyncio
     async def test_reset(self, stream: WebTransportSendStream, mock_protocol: MagicMock) -> None:
         fut: asyncio.Future[None] = asyncio.Future()
         mock_protocol.create_request.side_effect = None
@@ -500,12 +584,14 @@ class TestWebTransportSendStream(TestBaseStream):
         assert isinstance(event, UserResetStream)
         assert event.error_code == 99
 
+    @pytest.mark.asyncio
     async def test_reset_no_connection(self, stream: WebTransportSendStream, mock_session: MagicMock) -> None:
         mock_session._connection.return_value = None
 
         with pytest.raises(ConnectionError):
             await stream.reset()
 
+    @pytest.mark.asyncio
     async def test_write(self, stream: WebTransportSendStream, mock_protocol: MagicMock) -> None:
         fut: asyncio.Future[None] = asyncio.Future()
         mock_protocol.create_request.side_effect = None
@@ -519,38 +605,44 @@ class TestWebTransportSendStream(TestBaseStream):
         assert event.data == b"test"
         assert event.end_stream is True
 
+    @pytest.mark.asyncio
     async def test_write_all(self, stream: WebTransportSendStream, mocker: MockerFixture) -> None:
-        spy_write = mocker.patch.object(stream, "write", new_callable=mocker.AsyncMock)
+        spy_write = mocker.patch.object(WebTransportSendStream, "write", new_callable=mocker.AsyncMock)
 
         await stream.write_all(data=b"1234", chunk_size=2, end_stream=True)
 
         assert spy_write.await_count == 2
         spy_write.assert_has_awaits([call(data=b"12", end_stream=False), call(data=b"34", end_stream=True)])
 
+    @pytest.mark.asyncio
     async def test_write_all_empty_end(self, stream: WebTransportSendStream, mocker: MockerFixture) -> None:
-        spy_write = mocker.patch.object(stream, "write", new_callable=mocker.AsyncMock)
+        spy_write = mocker.patch.object(WebTransportSendStream, "write", new_callable=mocker.AsyncMock)
 
         await stream.write_all(data=b"", end_stream=True)
 
         spy_write.assert_awaited_once_with(data=b"", end_stream=True)
 
+    @pytest.mark.asyncio
     async def test_write_all_error(self, stream: WebTransportSendStream, mocker: MockerFixture) -> None:
-        mocker.patch.object(stream, "write", side_effect=StreamError("Fail", stream_id=3))
+        mocker.patch.object(WebTransportSendStream, "write", side_effect=StreamError("Fail", stream_id=3))
 
         with pytest.raises(StreamError):
             await stream.write_all(data=b"data")
 
+    @pytest.mark.asyncio
     async def test_write_early_return(self, stream: WebTransportSendStream, mock_protocol: MagicMock) -> None:
         await stream.write(data=b"", end_stream=False)
 
         mock_protocol.create_request.assert_not_called()
 
+    @pytest.mark.asyncio
     async def test_write_no_connection(self, stream: WebTransportSendStream, mock_session: MagicMock) -> None:
         mock_session._connection.return_value = None
 
         with pytest.raises(ConnectionError):
             await stream.write(data=b"a")
 
+    @pytest.mark.asyncio
     async def test_write_timeout_propagation(self, stream: WebTransportSendStream, mock_protocol: MagicMock) -> None:
         fut: asyncio.Future[None] = asyncio.Future()
         mock_protocol.create_request.side_effect = None
@@ -560,65 +652,66 @@ class TestWebTransportSendStream(TestBaseStream):
         with pytest.raises(TimeoutError):
             await stream.write(data=b"payload")
 
+    @pytest.mark.asyncio
     async def test_write_type_error(self, stream: WebTransportSendStream) -> None:
         with pytest.raises(TypeError):
             await stream.write(data=123)  # type: ignore[arg-type]
 
 
-@pytest.mark.asyncio
 class TestWebTransportStream(TestBaseStream):
 
     @pytest.fixture
     def stream(self, mock_session: MagicMock) -> WebTransportStream:
         return WebTransportStream(session=mock_session, stream_id=4, is_remote=False)
 
+    @pytest.mark.asyncio
     async def test_aiter(self, stream: WebTransportStream, mocker: MockerFixture) -> None:
-        mocker.patch.object(stream._reader, "__anext__", side_effect=[b"1", StopAsyncIteration])
+        mocker.patch.object(WebTransportReceiveStream, "__anext__", side_effect=[b"1", StopAsyncIteration])
 
         chunks = [c async for c in stream]
 
         assert chunks == [b"1"]
 
+    @pytest.mark.asyncio
     async def test_close(self, stream: WebTransportStream, mocker: MockerFixture) -> None:
-        spy_send_close = mocker.patch.object(stream._writer, "close", new_callable=mocker.AsyncMock)
-        spy_recv_stop = mocker.patch.object(stream._reader, "stop_receiving", new_callable=mocker.AsyncMock)
+        spy_send_close = mocker.patch.object(WebTransportSendStream, "close", new_callable=mocker.AsyncMock)
+        spy_recv_stop = mocker.patch.object(WebTransportReceiveStream, "stop_receiving", new_callable=mocker.AsyncMock)
 
         await stream.close(error_code=10)
 
         spy_send_close.assert_awaited_once_with(error_code=10)
         spy_recv_stop.assert_awaited_once_with(error_code=10)
 
+    @pytest.mark.asyncio
     async def test_close_no_args(self, stream: WebTransportStream, mocker: MockerFixture) -> None:
-        spy_send_close = mocker.patch.object(stream._writer, "close", new_callable=mocker.AsyncMock)
-        spy_recv_stop = mocker.patch.object(stream._reader, "stop_receiving", new_callable=mocker.AsyncMock)
+        spy_send_close = mocker.patch.object(WebTransportSendStream, "close", new_callable=mocker.AsyncMock)
+        spy_recv_stop = mocker.patch.object(WebTransportReceiveStream, "stop_receiving", new_callable=mocker.AsyncMock)
 
         await stream.close()
 
         spy_send_close.assert_awaited_once_with(error_code=None)
         spy_recv_stop.assert_awaited_once_with(error_code=ErrorCodes.NO_ERROR)
 
-    async def test_composition(self, stream: WebTransportStream) -> None:
+    def test_composition(self, stream: WebTransportStream) -> None:
         assert isinstance(stream._reader, WebTransportReceiveStream)
         assert isinstance(stream._writer, WebTransportSendStream)
         assert stream.direction == StreamDirection.BIDIRECTIONAL
 
-    async def test_composition_properties(self, stream: WebTransportStream) -> None:
-        assert stream.can_read is True
-        assert stream.can_write is True
-
+    @pytest.mark.asyncio
     async def test_context_manager(self, stream: WebTransportStream, mocker: MockerFixture) -> None:
-        spy_close = mocker.patch.object(stream, "close", new_callable=mocker.AsyncMock)
+        spy_close = mocker.patch.object(WebTransportStream, "close", new_callable=mocker.AsyncMock)
 
         async with stream:
             pass
 
         spy_close.assert_awaited_once_with(error_code=None)
 
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("exception_type", [ValueError, asyncio.CancelledError])
     async def test_context_manager_error(
         self, stream: WebTransportStream, mocker: MockerFixture, exception_type: type[BaseException]
     ) -> None:
-        spy_close = mocker.patch.object(stream, "close", new_callable=mocker.AsyncMock)
+        spy_close = mocker.patch.object(WebTransportStream, "close", new_callable=mocker.AsyncMock)
 
         with pytest.raises(exception_type):
             async with stream:
@@ -626,10 +719,11 @@ class TestWebTransportStream(TestBaseStream):
 
         spy_close.assert_awaited_once_with(error_code=ErrorCodes.APPLICATION_ERROR)
 
+    @pytest.mark.asyncio
     async def test_context_manager_exit_error_with_code(
         self, stream: WebTransportStream, mocker: MockerFixture
     ) -> None:
-        spy_close = mocker.patch.object(stream, "close", new_callable=mocker.AsyncMock)
+        spy_close = mocker.patch.object(WebTransportStream, "close", new_callable=mocker.AsyncMock)
 
         class MyErr(Exception):
             error_code = 12345
@@ -640,70 +734,104 @@ class TestWebTransportStream(TestBaseStream):
 
         spy_close.assert_awaited_once_with(error_code=12345)
 
+    @pytest.mark.asyncio
     async def test_delegated_read(self, stream: WebTransportStream, mocker: MockerFixture) -> None:
-        mocker.patch.object(stream._reader, "read", return_value=b"rd")
+        mocker.patch.object(WebTransportReceiveStream, "read", return_value=b"rd")
 
         assert await stream.read() == b"rd"
 
+    @pytest.mark.asyncio
     async def test_delegated_read_all(self, stream: WebTransportStream, mocker: MockerFixture) -> None:
-        mocker.patch.object(stream._reader, "read_all", return_value=b"all")
+        mocker.patch.object(WebTransportReceiveStream, "read_all", return_value=b"all")
 
         assert await stream.read_all() == b"all"
 
+    @pytest.mark.asyncio
     async def test_delegated_readexactly(self, stream: WebTransportStream, mocker: MockerFixture) -> None:
-        mocker.patch.object(stream._reader, "readexactly", return_value=b"ex")
+        mocker.patch.object(WebTransportReceiveStream, "readexactly", return_value=b"ex")
 
         assert await stream.readexactly(n=2) == b"ex"
 
+    @pytest.mark.asyncio
     async def test_delegated_readline(self, stream: WebTransportStream, mocker: MockerFixture) -> None:
-        mocker.patch.object(stream._reader, "readline", return_value=b"ln")
+        mocker.patch.object(WebTransportReceiveStream, "readline", return_value=b"ln")
 
         assert await stream.readline() == b"ln"
 
+    @pytest.mark.asyncio
     async def test_delegated_readuntil(self, stream: WebTransportStream, mocker: MockerFixture) -> None:
-        mocker.patch.object(stream._reader, "readuntil", return_value=b"ut")
+        mocker.patch.object(WebTransportReceiveStream, "readuntil", return_value=b"ut")
 
         assert await stream.readuntil(separator=b"t") == b"ut"
 
+    @pytest.mark.asyncio
     async def test_delegated_reset(self, stream: WebTransportStream, mocker: MockerFixture) -> None:
-        mocker.patch.object(stream._writer, "reset", new_callable=mocker.AsyncMock)
+        spy_reset = mocker.patch.object(WebTransportSendStream, "reset", new_callable=mocker.AsyncMock)
 
         await stream.reset(error_code=2)
 
-        cast(MagicMock, stream._writer.reset).assert_awaited_once_with(error_code=2)
+        spy_reset.assert_awaited_once_with(error_code=2)
 
+    @pytest.mark.asyncio
     async def test_delegated_stop_receiving(self, stream: WebTransportStream, mocker: MockerFixture) -> None:
-        mocker.patch.object(stream._reader, "stop_receiving", new_callable=mocker.AsyncMock)
+        spy_stop = mocker.patch.object(WebTransportReceiveStream, "stop_receiving", new_callable=mocker.AsyncMock)
 
         await stream.stop_receiving(error_code=1)
 
-        cast(MagicMock, stream._reader.stop_receiving).assert_awaited_once_with(error_code=1)
+        spy_stop.assert_awaited_once_with(error_code=1)
 
+    @pytest.mark.asyncio
     async def test_delegated_write(self, stream: WebTransportStream, mocker: MockerFixture) -> None:
-        mocker.patch.object(stream._writer, "write", new_callable=mocker.AsyncMock)
+        spy_write = mocker.patch.object(WebTransportSendStream, "write", new_callable=mocker.AsyncMock)
 
         await stream.write(data=b"wr")
 
-        cast(MagicMock, stream._writer.write).assert_awaited_once_with(data=b"wr", end_stream=False)
+        spy_write.assert_awaited_once_with(data=b"wr", end_stream=False)
 
+    @pytest.mark.asyncio
     async def test_delegated_write_all(self, stream: WebTransportStream, mocker: MockerFixture) -> None:
-        mocker.patch.object(stream._writer, "write_all", new_callable=mocker.AsyncMock)
+        spy_write_all = mocker.patch.object(WebTransportSendStream, "write_all", new_callable=mocker.AsyncMock)
 
         await stream.write_all(data=b"wall")
 
-        cast(MagicMock, stream._writer.write_all).assert_awaited_once_with(
-            data=b"wall", chunk_size=65536, end_stream=False
-        )
+        spy_write_all.assert_awaited_once_with(data=b"wall", chunk_size=65536, end_stream=False)
 
+    def test_init(self, stream: _BaseStream, mock_session: MagicMock) -> None:
+        assert isinstance(stream, WebTransportStream)
+        assert stream._session() is mock_session
+        assert stream._stream_id == 4
+        assert stream._is_remote is False
+        assert stream._cached_state == StreamState.OPEN
+        assert stream.events is not None
+
+        assert isinstance(stream._reader, WebTransportReceiveStream)
+        assert isinstance(stream._writer, WebTransportSendStream)
+
+        assert not hasattr(stream, "__dict__")
+
+    @pytest.mark.asyncio
     async def test_on_closed_propagates(self, stream: WebTransportStream, mocker: MockerFixture) -> None:
-        stream._reader = mocker.Mock()
-        stream._writer = mocker.Mock()
+        spy_reader_on_closed = mocker.patch.object(WebTransportReceiveStream, "_on_closed")
+        spy_writer_on_closed = mocker.patch.object(WebTransportSendStream, "_on_closed")
+
         stream.events.emit_nowait(event_type="stream_closed", data={})
         await asyncio.sleep(0)
 
         assert stream.state == StreamState.CLOSED
-        cast(MagicMock, stream._reader)._on_closed.assert_called_once()
-        cast(MagicMock, stream._writer)._on_closed.assert_called_once()
+        spy_reader_on_closed.assert_called_once()
+        spy_writer_on_closed.assert_called_once()
 
-    async def test_repr(self, stream: WebTransportStream) -> None:  # type: ignore[override]
+    def test_properties(self, stream: _BaseStream, mock_session: MagicMock) -> None:
+        assert isinstance(stream, WebTransportStream)
+        assert stream.stream_id == 4
+        assert stream.is_remote is False
+        assert stream.state == StreamState.OPEN
+        assert stream.session is mock_session
+        assert stream.is_closed is False
+        assert stream.direction == StreamDirection.BIDIRECTIONAL
+        assert stream.can_read is True
+        assert stream.can_write is True
+
+    def test_repr(self, stream: _BaseStream) -> None:
+        assert isinstance(stream, WebTransportStream)
         assert "WebTransportStream" in repr(stream)

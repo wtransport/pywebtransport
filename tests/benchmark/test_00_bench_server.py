@@ -19,10 +19,13 @@ from pywebtransport import (
 from pywebtransport.types import EventType
 from pywebtransport.utils import generate_self_signed_cert
 
+CERT_HOSTNAME: Final[str] = "localhost"
+CERT_PATH: Final[Path] = Path(f"{CERT_HOSTNAME}.crt")
+KEY_PATH: Final[Path] = Path(f"{CERT_HOSTNAME}.key")
+
 SERVER_HOST: Final[str] = "::"
 SERVER_PORT: Final[int] = 4433
-CERT_PATH: Final[Path] = Path("localhost.crt")
-KEY_PATH: Final[Path] = Path("localhost.key")
+
 CHUNK_SIZE: Final[int] = 65536
 STATIC_VIEW: Final[memoryview] = memoryview(b"x" * (100 * 1024 * 1024))
 
@@ -195,7 +198,7 @@ class BenchmarkServerApp(ServerApp):
 
 async def main() -> None:
     if not CERT_PATH.exists() or not KEY_PATH.exists():
-        generate_self_signed_cert(hostname="localhost", output_dir=".")
+        generate_self_signed_cert(hostname=CERT_HOSTNAME, output_dir=".")
 
     config = ServerConfig(
         bind_host=SERVER_HOST,

@@ -1,4 +1,4 @@
-"""Utilities specific to the adapter layer."""
+"""Internal utilities for configuring aioquic endpoints."""
 
 from __future__ import annotations
 
@@ -11,18 +11,18 @@ __all__: list[str] = []
 
 def create_quic_configuration(
     *,
+    is_client: bool,
     alpn_protocols: list[str],
+    congestion_control_algorithm: str,
+    max_datagram_size: int,
+    idle_timeout: float,
+    server_name: str | None = None,
     ca_certs: str | None = None,
     certfile: str | None = None,
-    congestion_control_algorithm: str,
-    idle_timeout: float,
-    is_client: bool,
     keyfile: str | None = None,
-    max_datagram_size: int,
-    server_name: str | None = None,
     verify_mode: Any = None,
 ) -> QuicConfiguration:
-    """Create a QUIC configuration from specific parameters."""
+    """Create a QUIC configuration object from specific parameters."""
     config = QuicConfiguration(
         alpn_protocols=alpn_protocols,
         cafile=ca_certs,

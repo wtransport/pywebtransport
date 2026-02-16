@@ -26,15 +26,14 @@ from pywebtransport.utils import get_logger
 if TYPE_CHECKING:
     from pywebtransport.connection import WebTransportConnection
 
-
 __all__: list[str] = ["SessionDiagnostics", "WebTransportSession"]
 
-logger = get_logger(name=__name__)
+_logger = get_logger(name=__name__)
 
 
-@dataclass(kw_only=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class SessionDiagnostics:
-    """A snapshot of session diagnostics."""
+    """Encapsulate session diagnostic data."""
 
     session_id: SessionId
     state: SessionState
@@ -71,16 +70,19 @@ class SessionDiagnostics:
 
 
 class WebTransportSession:
-    """A high-level handle for a WebTransport session."""
+    """Manage the high-level WebTransport session."""
+
+    __slots__ = ("_connection", "_session_id", "_path", "_headers", "_cached_state", "events", "__weakref__")
 
     def __init__(
         self, *, connection: WebTransportConnection, session_id: SessionId, path: str, headers: Headers
     ) -> None:
-        """Initialize the WebTransportSession handle."""
+        """Initialize the instance."""
         self._connection = weakref.ref(connection)
         self._session_id = session_id
         self._path = path
         self._headers = headers
+
         self._cached_state = SessionState.CONNECTING
 
         config = connection.config
@@ -93,11 +95,21 @@ class WebTransportSession:
         self.events.on(event_type=EventType.SESSION_READY, handler=self._on_session_ready)
         self.events.on(event_type=EventType.SESSION_CLOSED, handler=self._on_session_closed)
 
-        logger.debug("WebTransportSession handle created for session %s", self._session_id)
+        _logger.debug("WebTransportSession handle created for session %s", self._session_id)
+
+    async def __aenter__(self) -> Self:
+        """Enter the asynchronous context."""
+        return self
+
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+    ) -> None:
+        """Exit the asynchronous context."""
+        await self.close()
 
     @property
     def headers(self) -> Headers:
-        """Get the initial request headers for this session."""
+        """Return the initial request headers for this session."""
         return self._headers.copy()
 
     @property
@@ -107,12 +119,12 @@ class WebTransportSession:
 
     @property
     def path(self) -> str:
-        """Get the request path associated with this session."""
+        """Return the request path associated with this session."""
         return self._path
 
     @property
     def remote_address(self) -> Address | None:
-        """Get the remote address of the peer."""
+        """Return the remote address of the peer."""
         connection = self._connection()
         if connection is not None:
             return connection.remote_address
@@ -120,30 +132,20 @@ class WebTransportSession:
 
     @property
     def session_id(self) -> SessionId:
-        """Get the unique identifier for this session."""
+        """Return the unique identifier for this session."""
         return self._session_id
 
     @property
     def state(self) -> SessionState:
-        """Get the current state of the session."""
+        """Return the current state of the session."""
         return self._cached_state
 
-    async def __aenter__(self) -> Self:
-        """Enter async context."""
-        return self
-
-    async def __aexit__(
-        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
-    ) -> None:
-        """Exit async context, closing the session."""
-        await self.close()
-
     async def close(self, *, error_code: int = ErrorCodes.NO_ERROR, reason: str | None = None) -> None:
-        """Close the WebTransport session."""
+        """Terminate the WebTransport session."""
         if self._cached_state == SessionState.CLOSED:
             return
 
-        logger.info("Closing session %s: code=%#x reason='%s'", self.session_id, error_code, reason or "")
+        _logger.info("Closing session %s: code=%#x reason='%s'", self.session_id, error_code, reason or "")
         connection = self._connection()
         if connection is None:
             return
@@ -157,24 +159,24 @@ class WebTransportSession:
         try:
             await future
         except (ConnectionError, SessionError) as e:
-            logger.warning("Error initiating session close for %s: %s", self.session_id, e, exc_info=True)
+            _logger.warning("Error initiating session close for %s: %s", self.session_id, e, exc_info=True)
 
     async def create_bidirectional_stream(self) -> WebTransportStream:
-        """Create a new bidirectional WebTransport stream."""
+        """Instantiate a new bidirectional WebTransport stream."""
         stream = await self._create_stream_internal(is_unidirectional=False)
         if not isinstance(stream, WebTransportStream):
             raise StreamError(f"Internal error: Expected bidirectional stream, got {type(stream).__name__}")
         return stream
 
     async def create_unidirectional_stream(self) -> WebTransportSendStream:
-        """Create a new unidirectional (send-only) WebTransport stream."""
+        """Instantiate a new unidirectional WebTransport stream."""
         stream = await self._create_stream_internal(is_unidirectional=True)
         if not isinstance(stream, WebTransportSendStream) or isinstance(stream, WebTransportStream):
             raise StreamError(f"Internal error: Expected unidirectional send stream, got {type(stream).__name__}")
         return stream
 
     async def diagnostics(self) -> SessionDiagnostics:
-        """Get diagnostic information about the session."""
+        """Retrieve diagnostic information about the session."""
         connection = self._connection()
         if connection is None:
             raise ConnectionError("Connection is gone.")
@@ -190,7 +192,7 @@ class WebTransportSession:
             raise SessionError(f"Connection is closed, cannot get diagnostics: {e}") from e
 
     async def grant_data_credit(self, *, max_data: int) -> None:
-        """Manually grant data flow control credit to the peer."""
+        """Allocate data flow control credit to the peer."""
         connection = self._connection()
         if connection is None:
             raise ConnectionError("Connection is gone.")
@@ -201,7 +203,7 @@ class WebTransportSession:
         await future
 
     async def grant_streams_credit(self, *, is_unidirectional: bool, max_streams: int) -> None:
-        """Manually grant stream flow control credit to the peer."""
+        """Allocate stream flow control credit to the peer."""
         connection = self._connection()
         if connection is None:
             raise ConnectionError("Connection is gone.")
@@ -217,7 +219,7 @@ class WebTransportSession:
         await future
 
     async def send_datagram(self, *, data: Buffer | list[Buffer]) -> None:
-        """Send an unreliable datagram."""
+        """Transmit an unreliable datagram."""
         connection = self._connection()
         if connection is None:
             raise ConnectionError("Connection is gone.")
@@ -228,7 +230,7 @@ class WebTransportSession:
         await future
 
     async def _create_stream_internal(self, *, is_unidirectional: bool) -> WebTransportStream | WebTransportSendStream:
-        """Internal logic for creating a stream with timeout handling."""
+        """Execute internal logic for stream creation with timeout."""
         connection = self._connection()
         if connection is None:
             raise ConnectionError("Connection is gone.")
@@ -242,14 +244,14 @@ class WebTransportSession:
             async with asyncio.timeout(delay=timeout):
                 stream_id: StreamId = await future
         except asyncio.TimeoutError:
-            logger.warning("Timeout creating stream on session %s", self.session_id)
+            _logger.warning("Timeout creating stream on session %s", self.session_id)
             raise TimeoutError(f"Session {self.session_id} timed out creating stream after {timeout}s") from None
         except Exception:
             raise
 
         stream_handle = connection._stream_handles.get(stream_id)
         if stream_handle is None:
-            logger.error("Internal error: Stream handle %d missing after creation", stream_id)
+            _logger.error("Internal error: Stream handle %d missing after creation", stream_id)
             raise StreamError(f"Internal error creating stream handle for {stream_id}")
 
         if not isinstance(stream_handle, (WebTransportStream, WebTransportSendStream)):
@@ -258,13 +260,13 @@ class WebTransportSession:
         return stream_handle
 
     def _on_session_closed(self, event: Event) -> None:
-        """Handle session closed event to update cached state."""
+        """Handle the session closed event."""
         self._cached_state = SessionState.CLOSED
 
     def _on_session_ready(self, event: Event) -> None:
-        """Handle session ready event to update cached state."""
+        """Handle the session ready event."""
         self._cached_state = SessionState.CONNECTED
 
     def __repr__(self) -> str:
-        """Provide a developer-friendly representation."""
+        """Return the string representation."""
         return f"<WebTransportSession id={self.session_id} state={self._cached_state}>"

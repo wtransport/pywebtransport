@@ -112,6 +112,7 @@ class TestReconnectingClient:
     @pytest.mark.asyncio
     async def test_aexit_without_aenter(self, client: ReconnectingClient, mocker: MockerFixture) -> None:
         client._tg = None
+
         await client.__aexit__(None, None, None)
 
     @pytest.mark.asyncio
@@ -328,6 +329,22 @@ class TestReconnectingClient:
             await client.get_session()
 
     @pytest.mark.asyncio
+    async def test_get_session_uses_default_config_timeout(
+        self, client: ReconnectingClient, mock_underlying_client: Any
+    ) -> None:
+        mock_underlying_client.config.connect_timeout = 0.01
+
+        async def sleep_forever(*args: Any, **kwargs: Any) -> Any:
+            await asyncio.sleep(10)
+
+        mock_underlying_client.connect.side_effect = sleep_forever
+        mock_underlying_client.config.max_connection_retries = 5
+
+        async with client:
+            with pytest.raises(asyncio.TimeoutError):
+                await client.get_session()
+
+    @pytest.mark.asyncio
     async def test_get_session_waits_and_succeeds(
         self, client: ReconnectingClient, mock_session: Any, mocker: MockerFixture
     ) -> None:
@@ -353,13 +370,18 @@ class TestReconnectingClient:
 
         assert client._url == self.URL
         assert client._client is mock_underlying_client
+        assert client._closed is False
         assert client._config is mock_underlying_client.config
+        assert isinstance(client._connected_event, asyncio.Event)
+        assert not client._connected_event.is_set()
+        assert client._crashed_exception is None
+        assert client._is_initialized is False
         assert client._session is None
-        assert not client._closed
-        assert not client._is_initialized
+        assert client._reconnect_task is None
+        assert client._tg is None
 
     @pytest.mark.parametrize(
-        ("session_state", "event_is_set", "expected"),
+        "session_state, event_is_set, expected",
         [
             (SessionState.CONNECTED, True, True),
             (SessionState.CONNECTING, True, False),
@@ -673,6 +695,7 @@ class TestReconnectingClient:
     @pytest.mark.asyncio
     async def test_reconnect_loop_respects_closed_flag(self, client: ReconnectingClient) -> None:
         client._closed = True
+
         await client._reconnect_loop()
 
     @pytest.mark.asyncio
@@ -742,8 +765,10 @@ class TestReconnectingClient:
         async with client:
             async with asyncio.timeout(delay=1):
                 await first_connection_made.wait()
+
             mock_session.events.wait_for.assert_called()
             closed_future.set_result(None)
+
             async with asyncio.timeout(delay=1):
                 await connection_lost.wait()
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Final
 
 from aioquic.quic.connection import QuicConnection
 from aioquic.quic.events import StopSendingReceived
@@ -10,7 +10,7 @@ from aioquic.quic.stream import QuicStream
 
 __all__: list[str] = []
 
-ORIGINAL_IS_FINISHED_GETTER = QuicStream.is_finished.fget  # type: ignore[attr-defined]
+_ORIGINAL_IS_FINISHED_GETTER: Final[Any] = QuicStream.is_finished.fget  # type: ignore[attr-defined]
 
 
 def apply_patches() -> None:
@@ -39,7 +39,7 @@ def _handle_stop_sending_frame_replacement(self: Any, context: Any, frame_type: 
 
 def _is_finished_replacement(self: Any) -> bool:
     """Replacement getter for QuicStream.is_finished."""
-    is_finished = ORIGINAL_IS_FINISHED_GETTER(self)
+    is_finished = _ORIGINAL_IS_FINISHED_GETTER(self)
     if is_finished:
         is_unidirectional = self.stream_id & 0x02
         if is_unidirectional and not self.sender.reset_pending and self.sender._reset_error_code is None:

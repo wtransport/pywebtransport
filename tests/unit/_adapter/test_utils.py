@@ -12,11 +12,11 @@ class TestCreateQuicConfiguration:
         mock_config_cls = mocker.patch("pywebtransport._adapter.utils.QuicConfiguration", autospec=True)
 
         config = create_quic_configuration(
+            is_client=True,
             alpn_protocols=["h3"],
             congestion_control_algorithm="reno",
-            idle_timeout=60.0,
-            is_client=True,
             max_datagram_size=1350,
+            idle_timeout=60.0,
         )
 
         assert config == mock_config_cls.return_value
@@ -37,13 +37,13 @@ class TestCreateQuicConfiguration:
         mock_config_cls = mocker.patch("pywebtransport._adapter.utils.QuicConfiguration", autospec=True)
 
         create_quic_configuration(
-            alpn_protocols=["h3"],
-            certfile=certfile,
-            congestion_control_algorithm="reno",
-            idle_timeout=60.0,
             is_client=True,
-            keyfile=keyfile,
+            alpn_protocols=["h3"],
+            congestion_control_algorithm="cubic",
             max_datagram_size=1200,
+            idle_timeout=30.0,
+            certfile=certfile,
+            keyfile=keyfile,
         )
 
         mock_config_cls.return_value.load_cert_chain.assert_not_called()
@@ -53,13 +53,13 @@ class TestCreateQuicConfiguration:
         mock_verify = mocker.Mock()
 
         create_quic_configuration(
-            alpn_protocols=["h3"],
-            ca_certs="root.pem",
-            congestion_control_algorithm="reno",
-            idle_timeout=60.0,
             is_client=True,
+            alpn_protocols=["h3"],
+            congestion_control_algorithm="reno",
             max_datagram_size=1200,
+            idle_timeout=60.0,
             server_name="example.com",
+            ca_certs="root.pem",
             verify_mode=mock_verify,
         )
 
@@ -72,13 +72,13 @@ class TestCreateQuicConfiguration:
         mock_config_cls = mocker.patch("pywebtransport._adapter.utils.QuicConfiguration", autospec=True)
 
         create_quic_configuration(
-            alpn_protocols=["h3"],
-            certfile="cert.pem",
-            congestion_control_algorithm="cubic",
-            idle_timeout=30.0,
             is_client=False,
-            keyfile="key.pem",
+            alpn_protocols=["h3"],
+            congestion_control_algorithm="cubic",
             max_datagram_size=1200,
+            idle_timeout=30.0,
+            certfile="cert.pem",
+            keyfile="key.pem",
         )
 
         mock_config_cls.return_value.load_cert_chain.assert_called_once_with(certfile="cert.pem", keyfile="key.pem")

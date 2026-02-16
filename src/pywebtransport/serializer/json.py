@@ -20,6 +20,8 @@ __all__: list[str] = ["JSONSerializer"]
 class JSONSerializer(BaseDataclassSerializer, Serializer):
     """Serializer for encoding and decoding using the JSON format."""
 
+    __slots__ = ("_dump_kwargs", "_load_kwargs", "_user_default")
+
     def __init__(self, *, dump_kwargs: dict[str, Any] | None = None, load_kwargs: dict[str, Any] | None = None) -> None:
         """Initialize the JSON serializer."""
         self._dump_kwargs = dump_kwargs.copy() if dump_kwargs is not None else {}

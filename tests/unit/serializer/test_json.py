@@ -106,6 +106,13 @@ class TestJSONSerializer:
         with pytest.raises(SerializationError, match="Failed to unpack"):
             serializer.deserialize(data=data, obj_type=SimpleData)
 
+    def test_init(self, serializer: JSONSerializer) -> None:
+        assert serializer._dump_kwargs == {}
+        assert serializer._load_kwargs == {}
+        assert serializer._user_default is None
+
+        assert not hasattr(serializer, "__dict__")
+
     def test_init_with_dump_kwargs(self) -> None:
         serializer = JSONSerializer(dump_kwargs={"indent": 2, "sort_keys": True})
         instance = SimpleData(id=1, name="test")
@@ -156,13 +163,7 @@ class TestJSONSerializer:
     def test_serialize_extended_types(self, serializer: JSONSerializer) -> None:
         test_uuid = uuid.uuid4()
         test_time = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        data = {
-            "bytes": b"test",
-            "uuid": test_uuid,
-            "enum": Status.ACTIVE,
-            "set": {1, 2},
-            "datetime": test_time,
-        }
+        data = {"bytes": b"test", "uuid": test_uuid, "enum": Status.ACTIVE, "set": {1, 2}, "datetime": test_time}
 
         json_bytes = serializer.serialize(obj=data)
         result = serializer.deserialize(data=json_bytes)

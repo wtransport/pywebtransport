@@ -42,14 +42,14 @@ class TestServerDiagnostics:
         expected_issue_part: str | None,
     ) -> None:
         defaults = {
+            "is_serving": True,
             "stats": ServerStats(),
             "connection_states": {},
-            "session_states": {},
-            "is_serving": True,
-            "certfile_path": "cert.pem",
-            "keyfile_path": "key.pem",
             "max_connections": 100,
+            "session_states": {},
+            "certfile_path": "cert.pem",
             "cert_file_exists": True,
+            "keyfile_path": "key.pem",
             "key_file_exists": True,
         }
         for k, v in defaults.items():
@@ -65,6 +65,46 @@ class TestServerDiagnostics:
             assert any(expected_issue_part in issue for issue in issues)
         else:
             assert not issues
+
+
+class TestServerStats:
+
+    def test_success_rate(self) -> None:
+        stats = ServerStats()
+        assert stats.success_rate == 1.0
+
+        stats.connections_accepted = 8
+        stats.connections_rejected = 2
+        assert stats.success_rate == 0.8
+
+        stats.connections_accepted = 0
+        stats.connections_rejected = 10
+        assert stats.success_rate == 0.0
+
+    def test_to_dict(self, mocker: MockerFixture) -> None:
+        mocker.patch("pywebtransport.server.server.get_timestamp", return_value=1010.0)
+        stats = ServerStats(start_time=1000.0)
+        stats.connections_accepted = 5
+        stats.connections_rejected = 5
+
+        data = stats.to_dict()
+
+        assert data["total_connections_attempted"] == 10
+        assert data["success_rate"] == 0.5
+        assert data["uptime"] == 10.0
+
+    def test_to_dict_no_start_time(self) -> None:
+        stats = ServerStats(start_time=None)
+        data = stats.to_dict()
+        assert data["uptime"] == 0.0
+
+    def test_total_connections_attempted(self) -> None:
+        stats = ServerStats()
+        assert stats.total_connections_attempted == 0
+
+        stats.connections_accepted = 5
+        stats.connections_rejected = 3
+        assert stats.total_connections_attempted == 8
 
 
 class TestWebTransportServer:
@@ -493,30 +533,6 @@ class TestWebTransportServer:
         mock_webtransport_connection.close.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_initialize_connection_session_registration_failure(
-        self,
-        server: WebTransportServer,
-        mock_webtransport_connection: Any,
-        mock_session_manager: Any,
-        mocker: MockerFixture,
-    ) -> None:
-        mock_logger = mocker.patch("pywebtransport.server.server.logger")
-        mock_session_manager.add_session.side_effect = ValueError("Session limit reached")
-
-        await server._initialize_and_register_connection(connection=mock_webtransport_connection)
-
-        call_args = mock_webtransport_connection.events.on.call_args
-        handler = call_args.kwargs["handler"]
-
-        mock_session = mocker.Mock()
-        mock_session.session_id = "test_sess_id"
-        event = Event(type=EventType.SESSION_REQUEST, data={"session": mock_session})
-
-        await handler(event)
-
-        mock_logger.error.assert_called_with("Failed to register session %s: %s", "test_sess_id", mocker.ANY)
-
-    @pytest.mark.asyncio
     async def test_initialize_and_register_connection_success(
         self,
         server: WebTransportServer,
@@ -538,6 +554,30 @@ class TestWebTransportServer:
 
         await cleanup_handler(Event(type=EventType.CONNECTION_CLOSED, data=None))
         mock_webtransport_connection.events.off.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_initialize_connection_session_registration_failure(
+        self,
+        server: WebTransportServer,
+        mock_webtransport_connection: Any,
+        mock_session_manager: Any,
+        mocker: MockerFixture,
+    ) -> None:
+        mock_logger = mocker.patch("pywebtransport.server.server._logger")
+        mock_session_manager.add_session.side_effect = ValueError("Session limit reached")
+
+        await server._initialize_and_register_connection(connection=mock_webtransport_connection)
+
+        call_args = mock_webtransport_connection.events.on.call_args
+        handler = call_args.kwargs["handler"]
+
+        mock_session = mocker.Mock()
+        mock_session.session_id = "test_sess_id"
+        event = Event(type=EventType.SESSION_REQUEST, data={"session": mock_session})
+
+        await handler(event)
+
+        mock_logger.error.assert_called_with("Failed to register session %s: %s", "test_sess_id", mocker.ANY)
 
     @pytest.mark.asyncio
     async def test_listen_cert_file_not_found(
@@ -658,7 +698,7 @@ class TestWebTransportServer:
     ) -> None:
         await server.listen()
         assert server._shutdown_event is not None
-        mock_logger_error = mocker.patch("pywebtransport.server.server.logger.error")
+        mock_logger_error = mocker.patch("pywebtransport.server.server._logger.error")
 
         mocker.patch.object(server._shutdown_event, "wait", side_effect=ValueError("Wait error"))
 

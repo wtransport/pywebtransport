@@ -62,16 +62,16 @@ def test_environment_missing_dependency() -> None:
 
 class TestProtobufSerializer:
 
-    @pytest.fixture(autouse=True)
-    def setup_dependencies(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("pywebtransport.serializer.protobuf.Message", MockBaseMessage)
-        monkeypatch.setattr("pywebtransport.serializer.protobuf.DecodeError", RuntimeError)
-
     @pytest.fixture
     def serializer(self) -> Any:
         from pywebtransport.serializer.protobuf import ProtobufSerializer
 
         return ProtobufSerializer()
+
+    @pytest.fixture(autouse=True)
+    def setup_dependencies(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("pywebtransport.serializer.protobuf.Message", MockBaseMessage)
+        monkeypatch.setattr("pywebtransport.serializer.protobuf.DecodeError", RuntimeError)
 
     def test_deserialize_invalid_data_raises_error(self, serializer: Any) -> None:
         data = b"invalid_data"
@@ -103,6 +103,9 @@ class TestProtobufSerializer:
         assert isinstance(result, MockProtoMessage)
         assert result.id == 1
         assert result.name == "parsed"
+
+    def test_init(self, serializer: Any) -> None:
+        assert not hasattr(serializer, "__dict__")
 
     def test_init_raises_configuration_error_if_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("pywebtransport.serializer.protobuf.Message", None)

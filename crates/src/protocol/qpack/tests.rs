@@ -91,14 +91,17 @@ fn test_encode_large_batch_triggers_buffer_resize() {
 }
 
 #[test]
-fn test_encoder_apply_settings_limit_exceeded() {
+fn test_encoder_apply_settings_high_limits() {
     let mut encoder = Encoder::new();
-    let max_table = 4096;
-    let blocked_streams = u64::from(ENCODER_MAX_BLOCKED_STREAMS_LIMIT) + 1;
+    let max_table = 100_000;
+    let blocked_streams = u64::from(ENCODER_MAX_BLOCKED_STREAMS_LIMIT) + 100;
 
     let res = encoder.apply_settings(max_table, blocked_streams);
 
-    assert!(matches!(res, Err(QpackError::EncoderError)));
+    let Ok(data) = res else {
+        unreachable!("Apply settings should succeed with clamping/ignoring");
+    };
+    assert!(!data.is_empty());
 }
 
 #[test]

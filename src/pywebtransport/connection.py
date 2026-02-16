@@ -38,18 +38,18 @@ if TYPE_CHECKING:
     from pywebtransport._adapter.server import WebTransportServerProtocol
     from pywebtransport.config import ClientConfig, ServerConfig
 
-    type AdapterProtocol = WebTransportServerProtocol | WebTransportClientProtocol
+    type _AdapterProtocol = WebTransportServerProtocol | WebTransportClientProtocol
 
 __all__: list[str] = ["ConnectionDiagnostics", "WebTransportConnection"]
 
-logger = get_logger(name=__name__)
+type _StreamHandle = WebTransportStream | WebTransportReceiveStream | WebTransportSendStream
 
-type StreamHandle = WebTransportStream | WebTransportReceiveStream | WebTransportSendStream
+_logger = get_logger(name=__name__)
 
 
-@dataclass(kw_only=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class ConnectionDiagnostics:
-    """A snapshot of connection diagnostics."""
+    """Encapsulate connection diagnostic data."""
 
     connection_id: ConnectionId
     is_client: bool
@@ -70,63 +70,67 @@ class ConnectionDiagnostics:
 
 
 class WebTransportConnection:
-    """A high-level handle for a WebTransport connection over QUIC."""
+    """Manage the high-level WebTransport connection over QUIC."""
+
+    __slots__ = (
+        "_config",
+        "_protocol",
+        "_transport",
+        "_is_client",
+        "_connection_id",
+        "_cached_state",
+        "events",
+        "_session_handles",
+        "_stream_handles",
+        "__weakref__",
+    )
 
     def __init__(
         self,
         *,
         config: ClientConfig | ServerConfig,
-        protocol: AdapterProtocol,
+        protocol: _AdapterProtocol,
         transport: asyncio.DatagramTransport,
         is_client: bool,
     ) -> None:
-        """Initialize the WebTransport connection."""
+        """Initialize the instance."""
         self._config = config
         self._protocol = protocol
         self._transport = transport
         self._is_client = is_client
+
         self._connection_id: ConnectionId = str(uuid.uuid4())
+        self._cached_state = ConnectionState.IDLE
+
         self.events = EventEmitter(
             max_queue_size=config.max_event_queue_size,
             max_listeners=config.max_event_listeners,
             max_history=config.max_event_history_size,
         )
-        self._cached_state = ConnectionState.IDLE
+        self._session_handles: dict[SessionId, WebTransportSession] = {}
+        self._stream_handles: dict[StreamId, _StreamHandle] = {}
 
         self._protocol.set_status_callback(callback=self._notify_owner)
+        _logger.debug("WebTransportConnection %s initialized.", self.connection_id)
 
-        self._session_handles: dict[SessionId, WebTransportSession] = {}
-        self._stream_handles: dict[StreamId, StreamHandle] = {}
+    async def __aenter__(self) -> Self:
+        """Enter the asynchronous context."""
+        return self
 
-        logger.debug("WebTransportConnection %s initialized.", self.connection_id)
-
-    @classmethod
-    def accept(
-        cls, *, transport: asyncio.DatagramTransport, protocol: AdapterProtocol, config: ServerConfig
-    ) -> WebTransportConnection:
-        """Static factory to wrap an accepted server connection."""
-        connection = cls(config=config, protocol=protocol, transport=transport, is_client=False)
-        return connection
-
-    @classmethod
-    async def connect(
-        cls, *, host: str, port: int, config: ClientConfig, loop: asyncio.AbstractEventLoop | None = None
-    ) -> WebTransportConnection:
-        """Static factory to establish a client connection."""
-        loop = loop or asyncio.get_running_loop()
-        transport, protocol = await create_quic_endpoint(host=host, port=port, config=config, loop=loop)
-
-        connection = cls(config=config, protocol=protocol, transport=transport, is_client=True)
-        return connection
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
+    ) -> None:
+        """Exit the asynchronous context."""
+        await self.close()
 
     @property
     def config(self) -> ClientConfig | ServerConfig:
-        """Get the configuration associated with this connection."""
+        """Return the configuration associated with this connection."""
         return self._config
 
     @property
     def connection_id(self) -> ConnectionId:
-        """Get the unique identifier for this connection."""
+        """Return the unique identifier for this connection."""
         return self._connection_id
 
     @property
@@ -151,7 +155,7 @@ class WebTransportConnection:
 
     @property
     def local_address(self) -> Address | None:
-        """Get the local address of the connection."""
+        """Return the local address of the connection."""
         addr = self._transport.get_extra_info("sockname")
         if isinstance(addr, tuple) and len(addr) >= 2:
             return (addr[0], addr[1])
@@ -159,7 +163,7 @@ class WebTransportConnection:
 
     @property
     def remote_address(self) -> Address | None:
-        """Get the remote address of the connection."""
+        """Return the remote address of the connection."""
         addr = self._transport.get_extra_info("peername")
         if isinstance(addr, tuple) and len(addr) >= 2:
             return (addr[0], addr[1])
@@ -167,25 +171,23 @@ class WebTransportConnection:
 
     @property
     def state(self) -> ConnectionState:
-        """Get the current state of the connection."""
+        """Return the current state of the connection."""
         return self._cached_state
 
-    async def __aenter__(self) -> Self:
-        """Enter the async context manager."""
-        return self
-
-    async def __aexit__(
-        self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
-    ) -> None:
-        """Exit the async context manager."""
-        await self.close()
+    @classmethod
+    def accept(
+        cls, *, transport: asyncio.DatagramTransport, protocol: _AdapterProtocol, config: ServerConfig
+    ) -> WebTransportConnection:
+        """Instantiate a connection wrapper for an accepted server connection."""
+        connection = cls(config=config, protocol=protocol, transport=transport, is_client=False)
+        return connection
 
     async def close(self, *, error_code: int = ErrorCodes.NO_ERROR, reason: str = "Closed by application") -> None:
-        """Immediately close the WebTransport connection."""
+        """Terminate the WebTransport connection."""
         if self._cached_state == ConnectionState.CLOSED:
             return
 
-        logger.info("Closing connection %s...", self.connection_id)
+        _logger.info("Closing connection %s...", self.connection_id)
 
         try:
             request_id, future = self._protocol.create_request()
@@ -199,43 +201,36 @@ class WebTransportConnection:
                 pass
             except ConnectionError as e:
                 if "Connection closed" in str(e):
-                    logger.debug("Connection closed while waiting for close confirmation: %s", e)
+                    _logger.debug("Connection closed while waiting for close confirmation: %s", e)
                 else:
-                    logger.warning("Connection error during close: %s", e)
+                    _logger.warning("Connection error during close: %s", e)
             except Exception as e:
-                logger.warning("Error during close event processing: %s", e)
+                _logger.warning("Error during close event processing: %s", e)
 
         finally:
             if self.is_client:
                 if not self._transport.is_closing():
-                    logger.debug("Closing underlying transport for connection %s", self.connection_id)
+                    _logger.debug("Closing underlying transport for connection %s", self.connection_id)
                     self._transport.close()
 
             self._session_handles.clear()
             self._stream_handles.clear()
             self._cached_state = ConnectionState.CLOSED
-            logger.info("Connection %s close process finished.", self.connection_id)
+            _logger.info("Connection %s close process finished.", self.connection_id)
 
-    async def graceful_shutdown(self) -> None:
-        """Gracefully shut down the connection."""
-        logger.info("Initiating graceful shutdown for connection %s...", self.connection_id)
+    @classmethod
+    async def connect(
+        cls, *, host: str, port: int, config: ClientConfig, loop: asyncio.AbstractEventLoop | None = None
+    ) -> WebTransportConnection:
+        """Establish and return a client-side WebTransport connection."""
+        loop = loop or asyncio.get_running_loop()
+        transport, protocol = await create_quic_endpoint(host=host, port=port, config=config, loop=loop)
 
-        request_id, future = self._protocol.create_request()
-        event = UserConnectionGracefulClose(request_id=request_id)
-        self._protocol.send_event(event=event)
-
-        try:
-            async with asyncio.timeout(delay=5.0):
-                await future
-        except asyncio.TimeoutError:
-            logger.warning("Timeout waiting for graceful shutdown GOAWAY confirmation.")
-        except Exception as e:
-            logger.warning("Error during graceful shutdown: %s", e)
-
-        await self.close(reason="Graceful shutdown complete")
+        connection = cls(config=config, protocol=protocol, transport=transport, is_client=True)
+        return connection
 
     async def create_session(self, *, path: str, headers: Headers | None = None) -> WebTransportSession:
-        """Create a new WebTransport session."""
+        """Initiate a new WebTransport session."""
         if not self.is_client:
             raise ConnectionError("Sessions can only be created by the client.")
 
@@ -256,13 +251,13 @@ class WebTransportConnection:
 
         session_handle = self._session_handles.get(session_id)
         if session_handle is None:
-            logger.error("Internal error: Session handle %s missing after successful creation effect.", session_id)
+            _logger.error("Internal error: Session handle %s missing after successful creation effect.", session_id)
             raise SessionError(f"Internal error creating session handle for {session_id}")
 
         return session_handle
 
     async def diagnostics(self) -> ConnectionDiagnostics:
-        """Get diagnostic information about the connection."""
+        """Retrieve diagnostic information about the connection."""
         request_id, future = self._protocol.create_request()
         event = UserGetConnectionDiagnostics(request_id=request_id)
         self._protocol.send_event(event=event)
@@ -273,11 +268,100 @@ class WebTransportConnection:
         return ConnectionDiagnostics(**diag_data)
 
     def get_all_sessions(self) -> list[WebTransportSession]:
-        """Get a list of all active session handles."""
+        """Retrieve a list of all active session handles."""
         return list(self._session_handles.values())
 
+    async def graceful_shutdown(self) -> None:
+        """Initiate a graceful shutdown of the connection."""
+        _logger.info("Initiating graceful shutdown for connection %s...", self.connection_id)
+
+        request_id, future = self._protocol.create_request()
+        event = UserConnectionGracefulClose(request_id=request_id)
+        self._protocol.send_event(event=event)
+
+        try:
+            async with asyncio.timeout(delay=5.0):
+                await future
+        except asyncio.TimeoutError:
+            _logger.warning("Timeout waiting for graceful shutdown GOAWAY confirmation.")
+        except Exception as e:
+            _logger.warning("Error during graceful shutdown: %s", e)
+
+        await self.close(reason="Graceful shutdown complete")
+
+    def _handle_session_event(self, *, event_type: EventType, data: dict[str, Any]) -> None:
+        """Process internal session-related events and manage handles."""
+        session_id = data.get("session_id")
+        if session_id is None:
+            return
+
+        create_handle = (not self.is_client and event_type == EventType.SESSION_REQUEST) or (
+            self.is_client and event_type == EventType.SESSION_READY
+        )
+
+        if create_handle and session_id not in self._session_handles:
+            path = data.get("path")
+            headers = data.get("headers")
+
+            if path is not None and headers is not None:
+                session = WebTransportSession(connection=self, session_id=session_id, path=path, headers=headers)
+                self._session_handles[session_id] = session
+                _logger.debug("Created session handle for %s", session_id)
+                data["session"] = session
+            else:
+                _logger.error("Missing metadata for session handle creation %s", session_id)
+
+    def _handle_stream_event(self, *, event_type: EventType, data: dict[str, Any]) -> None:
+        """Process internal stream-related events and manage handles."""
+        stream_id = data.get("stream_id")
+        if stream_id is None:
+            return
+
+        if event_type == EventType.STREAM_OPENED:
+            session_id = data.get("session_id")
+            direction = data.get("direction")
+            is_remote = data.get("is_remote", False)
+
+            if session_id is not None and direction is not None and stream_id not in self._stream_handles:
+                session = self._session_handles.get(session_id)
+                if session is not None:
+                    handle_class: type[_StreamHandle]
+                    match direction:
+                        case StreamDirection.BIDIRECTIONAL:
+                            handle_class = WebTransportStream
+                        case StreamDirection.SEND_ONLY:
+                            handle_class = WebTransportSendStream
+                        case StreamDirection.RECEIVE_ONLY:
+                            handle_class = WebTransportReceiveStream
+                        case _:
+                            _logger.error("Unknown stream direction: %s", direction)
+                            return
+
+                    new_stream = handle_class(session=session, stream_id=stream_id, is_remote=is_remote)
+                    self._stream_handles[stream_id] = new_stream
+                    data["stream"] = new_stream
+
+                    session.events.emit_nowait(event_type=event_type, data=data)
+                else:
+                    _logger.warning("Session %s not found for stream %d", session_id, stream_id)
+
+        elif event_type == EventType.STREAM_CLOSED:
+            stream = self._stream_handles.pop(stream_id, None)
+            if stream is not None:
+                data["stream"] = stream
+                stream.events.emit_nowait(event_type=event_type, data=data)
+                asyncio.create_task(coro=stream.events.close())
+
+        elif event_type in (EventType.STOP_SENDING_RECEIVED, EventType.STREAM_RESET_RECEIVED):
+            stream = self._stream_handles.get(stream_id)
+            if stream is not None:
+                data["stream"] = stream
+                stream.events.emit_nowait(event_type=event_type, data=data)
+            else:
+                _logger.debug("Received %s for unknown or closed stream %d", event_type, stream_id)
+
     def _notify_owner(self, event_type: EventType, data: dict[str, Any]) -> None:
-        """Handle high-level status events from the adapter."""
+        """Process status events received from the low-level protocol adapter."""
         try:
             if "connection" not in data:
                 data["connection"] = weakref.proxy(self)
@@ -316,32 +400,10 @@ class WebTransportConnection:
             self.events.emit_nowait(event_type=event_type, data=data)
 
         except Exception as e:
-            logger.error("Error during owner notification callback: %s", e, exc_info=True)
-
-    def _handle_session_event(self, *, event_type: EventType, data: dict[str, Any]) -> None:
-        """Create or update session handles based on events."""
-        session_id = data.get("session_id")
-        if session_id is None:
-            return
-
-        create_handle = (not self.is_client and event_type == EventType.SESSION_REQUEST) or (
-            self.is_client and event_type == EventType.SESSION_READY
-        )
-
-        if create_handle and session_id not in self._session_handles:
-            path = data.get("path")
-            headers = data.get("headers")
-
-            if path is not None and headers is not None:
-                session = WebTransportSession(connection=self, session_id=session_id, path=path, headers=headers)
-                self._session_handles[session_id] = session
-                logger.debug("Created session handle for %s", session_id)
-                data["session"] = session
-            else:
-                logger.error("Missing metadata for session handle creation %s", session_id)
+            _logger.error("Error during owner notification callback: %s", e, exc_info=True)
 
     def _route_session_event(self, *, event_type: EventType, data: dict[str, Any]) -> None:
-        """Route events to existing session handles."""
+        """Dispatch events to the appropriate session handle."""
         session_id = data.get("session_id")
         if session_id is None:
             return
@@ -355,55 +417,6 @@ class WebTransportConnection:
                 self._session_handles.pop(session_id, None)
                 asyncio.create_task(coro=session.events.close())
 
-    def _handle_stream_event(self, *, event_type: EventType, data: dict[str, Any]) -> None:
-        """Manage stream handles."""
-        stream_id = data.get("stream_id")
-        if stream_id is None:
-            return
-
-        if event_type == EventType.STREAM_OPENED:
-            session_id = data.get("session_id")
-            direction = data.get("direction")
-            is_remote = data.get("is_remote", False)  # Extract is_remote flag, default False
-
-            if session_id is not None and direction is not None and stream_id not in self._stream_handles:
-                session = self._session_handles.get(session_id)
-                if session is not None:
-                    handle_class: type[StreamHandle]
-                    match direction:
-                        case StreamDirection.BIDIRECTIONAL:
-                            handle_class = WebTransportStream
-                        case StreamDirection.SEND_ONLY:
-                            handle_class = WebTransportSendStream
-                        case StreamDirection.RECEIVE_ONLY:
-                            handle_class = WebTransportReceiveStream
-                        case _:
-                            logger.error("Unknown stream direction: %s", direction)
-                            return
-
-                    new_stream = handle_class(session=session, stream_id=stream_id, is_remote=is_remote)
-                    self._stream_handles[stream_id] = new_stream
-                    data["stream"] = new_stream
-
-                    session.events.emit_nowait(event_type=event_type, data=data)
-                else:
-                    logger.warning("Session %s not found for stream %d", session_id, stream_id)
-
-        elif event_type == EventType.STREAM_CLOSED:
-            stream = self._stream_handles.pop(stream_id, None)
-            if stream is not None:
-                data["stream"] = stream
-                stream.events.emit_nowait(event_type=event_type, data=data)
-                asyncio.create_task(coro=stream.events.close())
-
-        elif event_type in (EventType.STOP_SENDING_RECEIVED, EventType.STREAM_RESET_RECEIVED):
-            stream = self._stream_handles.get(stream_id)
-            if stream is not None:
-                data["stream"] = stream
-                stream.events.emit_nowait(event_type=event_type, data=data)
-            else:
-                logger.debug("Received %s for unknown or closed stream %d", event_type, stream_id)
-
     def __repr__(self) -> str:
-        """Provide a developer-friendly representation."""
+        """Return the string representation."""
         return f"<WebTransportConnection id={self.connection_id} state={self._cached_state} client={self.is_client}>"

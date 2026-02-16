@@ -74,13 +74,13 @@ class TestConnectionManager:
             assert stats["states"]["connecting"] == 1
 
     @pytest.mark.asyncio
-    async def test_get_stats_no_lock(self, manager: ConnectionManager) -> None:
+    async def test_get_stats_not_active(self, manager: ConnectionManager) -> None:
         stats = await manager.get_stats()
 
         assert stats == {}
 
     @pytest.mark.asyncio
-    async def test_handle_resource_closed_guards_no_lock(self, manager: ConnectionManager) -> None:
+    async def test_handle_resource_closed_guards_not_active(self, manager: ConnectionManager) -> None:
         await manager._handle_resource_closed(resource_id="c1")
 
     @pytest.mark.asyncio
@@ -152,7 +152,7 @@ class TestConnectionManager:
             assert removed is None
 
     @pytest.mark.asyncio
-    async def test_remove_connection_no_lock(self, manager: ConnectionManager) -> None:
+    async def test_remove_connection_not_active(self, manager: ConnectionManager) -> None:
         assert await manager.remove_connection(connection_id="c1") is None
 
     def test_schedule_close_idempotency(self, manager: ConnectionManager, mock_connection: MagicMock) -> None:

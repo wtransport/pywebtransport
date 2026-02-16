@@ -68,8 +68,8 @@ async def run_structured_test(*, serializer: Serializer, path: str, serializer_n
             raw_stream = await session.create_bidirectional_stream()
             structured_stream = StructuredStream(
                 stream=raw_stream,
-                serializer=serializer,
                 registry=MESSAGE_REGISTRY,
+                serializer=serializer,
                 max_message_size=DEFAULT_MAX_MESSAGE_SIZE,
             )
 
@@ -95,7 +95,7 @@ async def run_structured_test(*, serializer: Serializer, path: str, serializer_n
 
             logger.info("[%s] Testing StructuredDatagramTransport...", serializer_name.upper())
             structured_datagram_transport = StructuredDatagramTransport(
-                session=session, serializer=serializer, registry=MESSAGE_REGISTRY
+                session=session, registry=MESSAGE_REGISTRY, serializer=serializer
             )
             structured_datagram_transport.initialize()
 

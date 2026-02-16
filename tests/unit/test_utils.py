@@ -9,9 +9,9 @@ from pytest_mock import MockerFixture
 from pywebtransport import Headers
 from pywebtransport.utils import (
     ensure_buffer,
-    format_duration,
     find_header,
     find_header_str,
+    format_duration,
     get_logger,
     get_timestamp,
     merge_headers,
@@ -61,34 +61,6 @@ class TestDataConversionAndFormatting:
 
 class TestHeaderUtils:
 
-    def test_find_header_str_decoding(self) -> None:
-        headers: Headers = {b"content-type": b"application/json"}
-
-        result = find_header_str(headers=headers, key="content-type")
-
-        assert result == "application/json"
-
-    def test_find_header_str_default(self) -> None:
-        headers: Headers = {"host": "example.com"}
-
-        result = find_header_str(headers=headers, key="missing", default="default")
-
-        assert result == "default"
-
-    def test_find_header_str_existing_string(self) -> None:
-        headers: Headers = {"user-agent": "test-client"}
-
-        result = find_header_str(headers=headers, key="user-agent")
-
-        assert result == "test-client"
-
-    def test_find_header_str_invalid_utf8(self) -> None:
-        headers: Headers = {b"key": b"\xff\xfe"}
-
-        result = find_header_str(headers=headers, key="key", default="fallback")
-
-        assert result == "fallback"
-
     def test_find_header_dual_mode_dict(self) -> None:
         headers: Headers = {b"content-length": b"123", "server": "test"}
 
@@ -117,6 +89,34 @@ class TestHeaderUtils:
 
         assert find_header(headers=headers, key="content-type") == "application/json"
         assert find_header(headers=headers, key="Unknown") is None
+
+    def test_find_header_str_decoding(self) -> None:
+        headers: Headers = {b"content-type": b"application/json"}
+
+        result = find_header_str(headers=headers, key="content-type")
+
+        assert result == "application/json"
+
+    def test_find_header_str_default(self) -> None:
+        headers: Headers = {"host": "example.com"}
+
+        result = find_header_str(headers=headers, key="missing", default="default")
+
+        assert result == "default"
+
+    def test_find_header_str_existing_string(self) -> None:
+        headers: Headers = {"user-agent": "test-client"}
+
+        result = find_header_str(headers=headers, key="user-agent")
+
+        assert result == "test-client"
+
+    def test_find_header_str_invalid_utf8(self) -> None:
+        headers: Headers = {b"key": b"\xff\xfe"}
+
+        result = find_header_str(headers=headers, key="key", default="fallback")
+
+        assert result == "fallback"
 
     def test_merge_headers_dict(self) -> None:
         base: Headers = {"a": "1"}

@@ -49,6 +49,30 @@ class TestCreateQuicEndpoint:
         mock_instance.host_cid = b"test_cid"
         return mock_class
 
+    async def test_create_quic_endpoint_failure_cleanup(
+        self,
+        client_config: ClientConfig,
+        mock_loop: MagicMock,
+        mock_create_quic_config: MagicMock,
+        mock_quic_connection_class: MagicMock,
+        mocker: MockerFixture,
+    ) -> None:
+        mock_protocol_cls = mocker.patch("pywebtransport._adapter.client.WebTransportClientProtocol", autospec=True)
+        mock_protocol_instance = mock_protocol_cls.return_value
+
+        async def side_effect(*args: Any, **kwargs: Any) -> None:
+            factory = kwargs.get("protocol_factory")
+            if factory is not None:
+                factory()
+            raise OSError("Simulated connection failure")
+
+        mock_loop.create_datagram_endpoint = mocker.AsyncMock(side_effect=side_effect)
+
+        with pytest.raises(OSError, match="Simulated connection failure"):
+            await create_quic_endpoint(host="example.com", port=4433, config=client_config, loop=mock_loop)
+
+        mock_protocol_instance.close_connection.assert_called_once_with(error_code=0, reason_phrase="Handshake failed")
+
     async def test_create_quic_endpoint_no_certs(
         self,
         client_config: ClientConfig,
@@ -106,15 +130,15 @@ class TestCreateQuicEndpoint:
         )
 
         mock_create_quic_config.assert_called_once_with(
+            is_client=True,
             alpn_protocols=client_config.alpn_protocols,
+            congestion_control_algorithm=client_config.congestion_control_algorithm,
+            max_datagram_size=client_config.max_datagram_size,
+            idle_timeout=client_config.connection_idle_timeout,
+            server_name="example.com",
             ca_certs=None,
             certfile=None,
-            congestion_control_algorithm=client_config.congestion_control_algorithm,
-            idle_timeout=client_config.connection_idle_timeout,
-            is_client=True,
             keyfile=None,
-            max_datagram_size=client_config.max_datagram_size,
-            server_name="example.com",
             verify_mode=client_config.verify_mode,
         )
         mock_loop.create_datagram_endpoint.assert_awaited_once()
@@ -164,30 +188,6 @@ class TestCreateQuicEndpoint:
         assert mock_create_quic_config.call_args.kwargs.get("certfile") == "/path/to/cert.pem"
         assert mock_create_quic_config.call_args.kwargs.get("keyfile") == "/path/to/key.pem"
 
-    async def test_create_quic_endpoint_failure_cleanup(
-        self,
-        client_config: ClientConfig,
-        mock_loop: MagicMock,
-        mock_create_quic_config: MagicMock,
-        mock_quic_connection_class: MagicMock,
-        mocker: MockerFixture,
-    ) -> None:
-        mock_protocol_cls = mocker.patch("pywebtransport._adapter.client.WebTransportClientProtocol", autospec=True)
-        mock_protocol_instance = mock_protocol_cls.return_value
-
-        async def side_effect(*args: Any, **kwargs: Any) -> None:
-            factory = kwargs.get("protocol_factory")
-            if factory is not None:
-                factory()
-            raise OSError("Simulated connection failure")
-
-        mock_loop.create_datagram_endpoint = mocker.AsyncMock(side_effect=side_effect)
-
-        with pytest.raises(OSError, match="Simulated connection failure"):
-            await create_quic_endpoint(host="example.com", port=4433, config=client_config, loop=mock_loop)
-
-        mock_protocol_instance.close_connection.assert_called_once_with(error_code=0, reason_phrase="Handshake failed")
-
 
 class TestWebTransportClientProtocol:
 
@@ -212,7 +212,7 @@ class TestWebTransportClientProtocol:
         self, mock_quic: MagicMock, client_config: ClientConfig, mock_loop: MagicMock
     ) -> WebTransportClientProtocol:
         return WebTransportClientProtocol(
-            quic=mock_quic, config=client_config, loop=mock_loop, max_event_queue_size=100
+            quic=mock_quic, config=client_config, max_event_queue_size=100, loop=mock_loop
         )
 
     def test_protocol_initialization(self, protocol: WebTransportClientProtocol) -> None:

@@ -17,14 +17,13 @@ mod sys {
 }
 
 /// Encoder dynamic table capacity physical limit.
-const ENCODER_MAX_TABLE_CAPACITY_LIMIT: u32 = 4096;
+const ENCODER_MAX_TABLE_CAPACITY_LIMIT: u32 = 65536;
 /// Encoder maximum blocked streams physical limit.
 const ENCODER_MAX_BLOCKED_STREAMS_LIMIT: u32 = 16;
 
 // High-level wrapper for the QPACK Encoder.
 pub(super) struct Encoder {
     inner: Pin<Box<InnerEncoder>>,
-    max_blocked_streams: u32,
 }
 
 unsafe impl Send for Encoder {}
@@ -53,28 +52,21 @@ impl Encoder {
             );
         }
 
-        Self {
-            inner,
-            max_blocked_streams: ENCODER_MAX_BLOCKED_STREAMS_LIMIT,
-        }
+        Self { inner }
     }
 
     // Dynamic table capacity configuration.
     pub(super) fn apply_settings(
         &mut self,
         max_table_capacity: u64,
-        blocked_streams: u64,
+        _blocked_streams: u64,
     ) -> Result<Vec<u8>, QpackError> {
-        let blocked = u32::try_from(blocked_streams).unwrap_or(u32::MAX);
-        if blocked > self.max_blocked_streams {
-            return Err(QpackError::EncoderError);
-        }
-
         let mut buffer = vec![0u8; 1024];
         let mut written: usize = buffer.len();
 
         let inner = unsafe { self.inner.as_mut().get_unchecked_mut() };
-        let capacity = u32::try_from(max_table_capacity).unwrap_or(u32::MAX);
+        let requested_capacity = u32::try_from(max_table_capacity).unwrap_or(u32::MAX);
+        let capacity = cmp::min(requested_capacity, ENCODER_MAX_TABLE_CAPACITY_LIMIT);
 
         let result = unsafe {
             sys::lsqpack_enc_set_max_capacity(

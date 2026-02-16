@@ -1,8 +1,9 @@
 //! FFI bindings for WebTransport protocol engine.
 
-use std::cell::RefCell;
+use std::sync::{Mutex, MutexGuard};
 
 use bytes::Bytes;
+use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
@@ -19,13 +20,9 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 // Python wrapper for Rust WebTransportEngine.
-#[pyclass(
-    name = "WebTransportEngine",
-    module = "pywebtransport._wtransport",
-    unsendable
-)]
+#[pyclass(name = "WebTransportEngine", module = "pywebtransport._wtransport")]
 struct WebTransportEngine {
-    inner: RefCell<InnerEngine>,
+    inner: Mutex<InnerEngine>,
 }
 
 #[pymethods]
@@ -71,13 +68,14 @@ impl WebTransportEngine {
         )?;
 
         Ok(WebTransportEngine {
-            inner: RefCell::new(inner),
+            inner: Mutex::new(inner),
         })
     }
 
     // H3 stream state cleanup.
-    fn cleanup_stream(&self, stream_id: StreamId) {
-        self.inner.borrow_mut().cleanup_stream(stream_id);
+    fn cleanup_stream(&self, stream_id: StreamId) -> PyResult<()> {
+        lock_engine(self)?.cleanup_stream(stream_id);
+        Ok(())
     }
 
     // Capsule encoding and effect generation.
@@ -111,7 +109,7 @@ impl WebTransportEngine {
 
     // GOAWAY frame encoding and effect generation.
     fn encode_goaway(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let effects = self.inner.borrow_mut().encode_goaway();
+        let effects = lock_engine(self)?.encode_goaway();
 
         effects_to_py(py, effects)
     }
@@ -125,10 +123,7 @@ impl WebTransportEngine {
         status: u16,
         end_stream: bool,
     ) -> PyResult<Py<PyAny>> {
-        let effects = self
-            .inner
-            .borrow_mut()
-            .encode_headers(stream_id, status, end_stream)?;
+        let effects = lock_engine(self)?.encode_headers(stream_id, status, end_stream)?;
 
         effects_to_py(py, effects)
     }
@@ -143,12 +138,8 @@ impl WebTransportEngine {
         headers: &Bound<'_, PyAny>,
     ) -> PyResult<Py<PyAny>> {
         let headers_vec = extract_headers(headers)?;
-        let effects = self.inner.borrow_mut().encode_session_request(
-            stream_id,
-            path,
-            authority,
-            &headers_vec,
-        )?;
+        let effects =
+            lock_engine(self)?.encode_session_request(stream_id, path, authority, &headers_vec)?;
 
         effects_to_py(py, effects)
     }
@@ -161,7 +152,7 @@ impl WebTransportEngine {
         control_stream_id: StreamId,
         is_unidirectional: bool,
     ) -> PyResult<Py<PyAny>> {
-        let effects = self.inner.borrow_mut().encode_stream_creation(
+        let effects = lock_engine(self)?.encode_stream_creation(
             stream_id,
             control_stream_id,
             is_unidirectional,
@@ -172,7 +163,7 @@ impl WebTransportEngine {
 
     // Protocol event handling.
     fn handle_event(&self, py: Python<'_>, event: ProtocolEvent, now: f64) -> PyResult<Py<PyAny>> {
-        let effects = self.inner.borrow_mut().handle_event(event, now);
+        let effects = lock_engine(self)?.handle_event(event, now);
 
         effects_to_py(py, effects)
     }
@@ -185,11 +176,17 @@ impl WebTransportEngine {
         encoder_id: StreamId,
         decoder_id: StreamId,
     ) -> PyResult<Py<PyAny>> {
-        let effects = self
-            .inner
-            .borrow_mut()
-            .initialize_h3_transport(control_id, encoder_id, decoder_id)?;
+        let effects =
+            lock_engine(self)?.initialize_h3_transport(control_id, encoder_id, decoder_id)?;
 
         effects_to_py(py, effects)
     }
+}
+
+// Safe mutex locking helper with error mapping.
+fn lock_engine(engine: &WebTransportEngine) -> PyResult<MutexGuard<'_, InnerEngine>> {
+    engine
+        .inner
+        .lock()
+        .map_err(|_e| PyRuntimeError::new_err("WebTransportEngine mutex poisoned"))
 }

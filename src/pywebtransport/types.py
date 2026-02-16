@@ -41,7 +41,6 @@ __all__: list[str] = [
     "Weight",
 ]
 
-
 type Address = tuple[str, int]
 type Buffer = bytes | bytearray | memoryview
 type ConnectionId = str
@@ -60,74 +59,6 @@ type Timestamp = float
 type URL = str
 type URLParts = tuple[str, int, str]
 type Weight = int
-
-
-@runtime_checkable
-class Serializer(Protocol):
-    """A protocol for serializing and deserializing structured data."""
-
-    def deserialize(self, *, data: Buffer, obj_type: Any = None) -> Any:
-        """Deserialize buffer into an object."""
-        ...
-
-    def serialize(self, *, obj: Any) -> bytes:
-        """Serialize an object into bytes."""
-        ...
-
-
-@runtime_checkable
-class SessionProtocol(Protocol):
-    """A protocol defining the essential interface of a WebTransport session."""
-
-    @property
-    def headers(self) -> Headers:
-        """Get the session headers."""
-        ...
-
-    @property
-    def path(self) -> str:
-        """Get the session path."""
-        ...
-
-    @property
-    def remote_address(self) -> Address | None:
-        """Get the remote address of the peer."""
-        ...
-
-    @property
-    def session_id(self) -> SessionId:
-        """Get the session ID."""
-        ...
-
-    @property
-    def state(self) -> SessionState:
-        """Get the current session state."""
-        ...
-
-    async def close(self, *, error_code: int = 0, reason: str | None = None) -> None:
-        """Close the session."""
-        ...
-
-
-@runtime_checkable
-class WebTransportProtocol(Protocol):
-    """A protocol for the underlying WebTransport transport layer."""
-
-    def connection_lost(self, exc: Exception | None) -> None:
-        """Called when a connection is lost."""
-        ...
-
-    def connection_made(self, transport: asyncio.BaseTransport) -> None:
-        """Called when a connection is established."""
-        ...
-
-    def datagram_received(self, data: Buffer, addr: Address) -> None:
-        """Called when a datagram is received."""
-        ...
-
-    def error_received(self, exc: Exception) -> None:
-        """Called when an error is received."""
-        ...
 
 
 class ConnectionState(StrEnum):
@@ -173,6 +104,57 @@ class EventType(StrEnum):
     TIMEOUT_ERROR = "timeout_error"
 
 
+@runtime_checkable
+class Serializer(Protocol):
+    """Define the interface for serializing and deserializing structured data."""
+
+    __slots__ = ()
+
+    def deserialize(self, *, data: Buffer, obj_type: Any = None) -> Any:
+        """Deserialize the buffer into an object."""
+        ...
+
+    def serialize(self, *, obj: Any) -> bytes:
+        """Serialize the object into bytes."""
+        ...
+
+
+@runtime_checkable
+class SessionProtocol(Protocol):
+    """Define the essential interface of a WebTransport session."""
+
+    __slots__ = ()
+
+    @property
+    def headers(self) -> Headers:
+        """Return the session headers."""
+        ...
+
+    @property
+    def path(self) -> str:
+        """Return the session path."""
+        ...
+
+    @property
+    def remote_address(self) -> Address | None:
+        """Return the remote address of the peer."""
+        ...
+
+    @property
+    def session_id(self) -> SessionId:
+        """Return the session ID."""
+        ...
+
+    @property
+    def state(self) -> SessionState:
+        """Return the current session state."""
+        ...
+
+    async def close(self, *, error_code: int = 0, reason: str | None = None) -> None:
+        """Terminate the session."""
+        ...
+
+
 class SessionState(StrEnum):
     """Enumeration of WebTransport session states."""
 
@@ -200,3 +182,26 @@ class StreamState(StrEnum):
     RESET_SENT = "reset_sent"
     RESET_RECEIVED = "reset_received"
     CLOSED = "closed"
+
+
+@runtime_checkable
+class WebTransportProtocol(Protocol):
+    """Define the interface for the underlying WebTransport layer."""
+
+    __slots__ = ()
+
+    def connection_lost(self, exc: Exception | None) -> None:
+        """Handle connection loss."""
+        ...
+
+    def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        """Handle connection establishment."""
+        ...
+
+    def datagram_received(self, data: Buffer, addr: Address) -> None:
+        """Handle incoming datagrams."""
+        ...
+
+    def error_received(self, exc: Exception) -> None:
+        """Handle incoming transport errors."""
+        ...

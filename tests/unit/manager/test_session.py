@@ -31,7 +31,7 @@ class TestSessionManager:
         session.session_id = 1
         session.state = SessionState.CONNECTED
         session.is_closed = False
-        session.events = EventEmitter()
+        session.events = mocker.MagicMock(spec=EventEmitter)
         session.close = mocker.AsyncMock()
         return cast(MagicMock, session)
 
@@ -65,13 +65,13 @@ class TestSessionManager:
 
     @pytest.mark.asyncio
     async def test_get_sessions_by_state(self, manager: SessionManager, mocker: MockerFixture) -> None:
-        s1 = mocker.Mock(spec=WebTransportSession, session_id=1, events=EventEmitter())
+        s1 = mocker.Mock(spec=WebTransportSession, session_id=1, events=mocker.MagicMock(spec=EventEmitter))
         s1.state = SessionState.CONNECTED
         s1.is_closed = False
-        s2 = mocker.Mock(spec=WebTransportSession, session_id=2, events=EventEmitter())
+        s2 = mocker.Mock(spec=WebTransportSession, session_id=2, events=mocker.MagicMock(spec=EventEmitter))
         s2.state = SessionState.CLOSING
         s2.is_closed = False
-        s3 = mocker.Mock(spec=WebTransportSession, session_id=3, events=EventEmitter())
+        s3 = mocker.Mock(spec=WebTransportSession, session_id=3, events=mocker.MagicMock(spec=EventEmitter))
         s3.state = SessionState.CONNECTED
         s3.is_closed = False
 
@@ -90,15 +90,15 @@ class TestSessionManager:
             assert s2 in closing
 
     @pytest.mark.asyncio
-    async def test_get_sessions_by_state_no_lock(self, manager: SessionManager) -> None:
+    async def test_get_sessions_by_state_not_active(self, manager: SessionManager) -> None:
         assert await manager.get_sessions_by_state(state=SessionState.CONNECTED) == []
 
     @pytest.mark.asyncio
     async def test_get_stats_includes_states(self, manager: SessionManager, mocker: MockerFixture) -> None:
-        s1 = mocker.Mock(spec=WebTransportSession, session_id=1, events=EventEmitter())
+        s1 = mocker.Mock(spec=WebTransportSession, session_id=1, events=mocker.MagicMock(spec=EventEmitter))
         s1.state = SessionState.CONNECTED
         s1.is_closed = False
-        s2 = mocker.Mock(spec=WebTransportSession, session_id=2, events=EventEmitter())
+        s2 = mocker.Mock(spec=WebTransportSession, session_id=2, events=mocker.MagicMock(spec=EventEmitter))
         s2.state = SessionState.DRAINING
         s2.is_closed = False
 
@@ -113,7 +113,7 @@ class TestSessionManager:
             assert stats["states"]["draining"] == 1
 
     @pytest.mark.asyncio
-    async def test_get_stats_no_lock(self, manager: SessionManager) -> None:
+    async def test_get_stats_not_active(self, manager: SessionManager) -> None:
         stats = await manager.get_stats()
 
         assert stats == {}
@@ -143,7 +143,7 @@ class TestSessionManager:
     async def test_remove_session_falsy(self, manager: SessionManager, mocker: MockerFixture) -> None:
         session = FalsySession(spec=WebTransportSession)
         session.session_id = 1
-        session.events = EventEmitter()
+        session.events = mocker.MagicMock(spec=EventEmitter)
         session.is_closed = False
         session.state = SessionState.CONNECTED
 
@@ -160,7 +160,7 @@ class TestSessionManager:
     async def test_remove_session_handler_error(
         self, manager: SessionManager, mock_session: MagicMock, mocker: MockerFixture
     ) -> None:
-        mocker.patch.object(mock_session.events, "off", side_effect=ValueError("Handler not found"))
+        cast(MagicMock, mock_session.events.off).side_effect = ValueError("Handler not found")
 
         async with manager:
             await manager.add_session(session=mock_session)
@@ -178,5 +178,5 @@ class TestSessionManager:
             assert removed is None
 
     @pytest.mark.asyncio
-    async def test_remove_session_no_lock(self, manager: SessionManager) -> None:
+    async def test_remove_session_not_active(self, manager: SessionManager) -> None:
         assert await manager.remove_session(session_id=1) is None

@@ -18,58 +18,56 @@ from pywebtransport.utils import get_logger
 
 __all__: list[str] = []
 
-logger = get_logger(name=__name__)
+type _ConnectionCreator = Callable[[WebTransportServerProtocol, BaseTransport], None]
 
-type ConnectionCreator = Callable[[WebTransportServerProtocol, BaseTransport], None]
+_logger = get_logger(name=__name__)
 
 
 class WebTransportServerProtocol(WebTransportCommonProtocol):
-    """Adapt aioquic server events and actions for the WebTransportEngine."""
-
-    _connection_creator: ConnectionCreator
-    _server_config: ServerConfig
+    """Adapt aioquic server events for the WebTransport internal engine."""
 
     def __init__(
         self,
         *,
         quic: QuicConnection,
         server_config: ServerConfig,
-        connection_creator: ConnectionCreator,
+        connection_creator: _ConnectionCreator,
         stream_handler: Any = None,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
-        """Initialize the server protocol adapter."""
+        """Initialize the instance."""
         super().__init__(
             quic=quic,
             config=server_config,
             is_client=False,
+            max_event_queue_size=server_config.max_event_queue_size,
             stream_handler=stream_handler,
             loop=loop,
-            max_event_queue_size=server_config.max_event_queue_size,
         )
+
         self._server_config = server_config
         self._connection_creator = connection_creator
 
     def connection_made(self, transport: BaseTransport) -> None:
-        """Handle connection establishment."""
+        """Handle new connection establishment and notify creator."""
         super().connection_made(transport)
-        logger.debug("Adapter connection_made, calling connection creator.")
+        _logger.debug("Adapter connection_made, invoking connection creator.")
         self._connection_creator(self, transport)
 
 
 async def create_server(
-    *, host: str, port: int, config: ServerConfig, connection_creator: ConnectionCreator
+    *, host: str, port: int, config: ServerConfig, connection_creator: _ConnectionCreator
 ) -> QuicServer:
-    """Start an aioquic server with the given configuration."""
+    """Start an aioquic server with the specified configuration."""
     quic_config = create_quic_configuration(
+        is_client=False,
         alpn_protocols=config.alpn_protocols,
+        congestion_control_algorithm=config.congestion_control_algorithm,
+        max_datagram_size=config.max_datagram_size,
+        idle_timeout=config.connection_idle_timeout,
         ca_certs=config.ca_certs,
         certfile=config.certfile,
-        congestion_control_algorithm=config.congestion_control_algorithm,
-        idle_timeout=config.connection_idle_timeout,
-        is_client=False,
         keyfile=config.keyfile,
-        max_datagram_size=config.max_datagram_size,
         verify_mode=config.verify_mode,
     )
 
