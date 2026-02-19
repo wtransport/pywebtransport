@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+## PR Fix Windows build
+### Added
+- **The missing `queue.h` for the third-party component `ls-qpack` which was missing on Windows systems has been added.
+
 ### Planned for future release
 
 _(No planned changes for the next release yet.)_

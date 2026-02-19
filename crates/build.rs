@@ -9,6 +9,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let vendor_dir = manifest_dir.join("vendor");
     let lsqpack_dir = vendor_dir.join("ls-qpack");
     let xxhash_dir = vendor_dir.join("xxhash");
+	let lsqpack_queue_dir = vendor_dir.join("queue");
 
     let lsqpack_c = lsqpack_dir.join("lsqpack.c");
     let xxhash_c = xxhash_dir.join("xxhash.c");
@@ -18,6 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     cc::Build::new()
         .file(&lsqpack_c)
         .file(&xxhash_c)
+		.include(&lsqpack_queue_dir)
         .include(&lsqpack_dir)
         .include(&xxhash_dir)
         .define("XXH_INLINE_ALL", None)
@@ -32,6 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bindings = bindgen::Builder::default()
         .header(path_to_str(&lsqpack_h)?)
         .header(path_to_str(&lsxpack_header_h)?)
+		.clang_arg(format!("-I{}", lsqpack_queue_dir.display()))
         .clang_arg(format!("-I{}", lsqpack_dir.display()))
         .clang_arg(format!("-I{}", xxhash_dir.display()))
         .allowlist_function("lsqpack_.*")
