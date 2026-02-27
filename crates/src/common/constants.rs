@@ -12,120 +12,6 @@ pub const WEBTRANSPORT_DEFAULT_PORT: u16 = 443;
 /// Default WebTransport URI scheme.
 pub const WEBTRANSPORT_SCHEME: &str = "https";
 
-/// Bidirectional stream ID mask.
-pub const BIDIRECTIONAL_STREAM: u64 = 0x0;
-
-/// WebTransport session closure capsule type.
-pub const CLOSE_WEBTRANSPORT_SESSION_TYPE: u64 = 0x2843;
-
-/// WebTransport session drain capsule type.
-pub const DRAIN_WEBTRANSPORT_SESSION_TYPE: u64 = 0x78AE;
-
-/// HTTP/3 frame type: `CANCEL_PUSH`.
-pub const H3_FRAME_TYPE_CANCEL_PUSH: u64 = 0x3;
-
-/// HTTP/3 frame type: `DATA`.
-pub const H3_FRAME_TYPE_DATA: u64 = 0x0;
-
-/// HTTP/3 frame type: `GOAWAY`.
-pub const H3_FRAME_TYPE_GOAWAY: u64 = 0x7;
-
-/// HTTP/3 frame type: `HEADERS`.
-pub const H3_FRAME_TYPE_HEADERS: u64 = 0x1;
-
-/// HTTP/3 frame type: `MAX_PUSH_ID`.
-pub const H3_FRAME_TYPE_MAX_PUSH_ID: u64 = 0xD;
-
-/// HTTP/3 frame type: `PUSH_PROMISE`.
-pub const H3_FRAME_TYPE_PUSH_PROMISE: u64 = 0x5;
-
-/// HTTP/3 frame type: `SETTINGS`.
-pub const H3_FRAME_TYPE_SETTINGS: u64 = 0x4;
-
-/// HTTP/3 frame type: `WEBTRANSPORT_STREAM`.
-pub const H3_FRAME_TYPE_WEBTRANSPORT_STREAM: u64 = 0x41;
-
-/// HTTP/3 stream type: `CONTROL`.
-pub const H3_STREAM_TYPE_CONTROL: u64 = 0x0;
-
-/// HTTP/3 stream type: `PUSH`.
-pub const H3_STREAM_TYPE_PUSH: u64 = 0x1;
-
-/// HTTP/3 stream type: `QPACK_DECODER`.
-pub const H3_STREAM_TYPE_QPACK_DECODER: u64 = 0x3;
-
-/// HTTP/3 stream type: `QPACK_ENCODER`.
-pub const H3_STREAM_TYPE_QPACK_ENCODER: u64 = 0x2;
-
-/// HTTP/3 stream type: `WEBTRANSPORT`.
-pub const H3_STREAM_TYPE_WEBTRANSPORT: u64 = 0x54;
-
-/// Maximum close reason phrase length.
-pub const MAX_CLOSE_REASON_BYTES: usize = 1024;
-
-/// Maximum UDP datagram size.
-pub const MAX_DATAGRAM_SIZE: u64 = 65535;
-
-/// Protocol-defined maximum concurrent stream limit.
-pub const MAX_PROTOCOL_STREAMS_LIMIT: u64 = 1 << 60;
-
-/// Maximum valid stream identifier.
-pub const MAX_STREAM_ID: u64 = (1 << 62) - 1;
-
-/// QPACK maximum number of blocked streams.
-pub const QPACK_DECODER_MAX_BLOCKED_STREAMS: u64 = 16;
-
-/// QPACK maximum dynamic table capacity.
-pub const QPACK_DECODER_MAX_TABLE_CAPACITY: u64 = 65536;
-
-/// HTTP/3 Setting: `ENABLE_CONNECT_PROTOCOL`.
-pub const SETTINGS_ENABLE_CONNECT_PROTOCOL: u64 = 0x8;
-
-/// HTTP/3 Setting: `H3_DATAGRAM`.
-pub const SETTINGS_H3_DATAGRAM: u64 = 0x33;
-
-/// HTTP/3 Setting: `QPACK_BLOCKED_STREAMS`.
-pub const SETTINGS_QPACK_BLOCKED_STREAMS: u64 = 0x7;
-
-/// HTTP/3 Setting: `QPACK_MAX_TABLE_CAPACITY`.
-pub const SETTINGS_QPACK_MAX_TABLE_CAPACITY: u64 = 0x1;
-
-/// HTTP/3 Setting: `WEBTRANSPORT_INITIAL_MAX_DATA`.
-pub const SETTINGS_WT_INITIAL_MAX_DATA: u64 = 0x2B61;
-
-/// HTTP/3 Setting: `WEBTRANSPORT_INITIAL_MAX_STREAMS_BIDI`.
-pub const SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI: u64 = 0x2B65;
-
-/// HTTP/3 Setting: `WEBTRANSPORT_INITIAL_MAX_STREAMS_UNI`.
-pub const SETTINGS_WT_INITIAL_MAX_STREAMS_UNI: u64 = 0x2B64;
-
-/// Unidirectional stream ID mask.
-pub const UNIDIRECTIONAL_STREAM: u64 = 0x2;
-
-/// WebTransport frame type: `DATA_BLOCKED`.
-pub const WT_DATA_BLOCKED_TYPE: u64 = 0x190B_4D41;
-
-/// WebTransport frame type: `MAX_DATA`.
-pub const WT_MAX_DATA_TYPE: u64 = 0x190B_4D3D;
-
-/// WebTransport frame type: `MAX_STREAM_DATA`.
-pub const WT_MAX_STREAM_DATA_TYPE: u64 = 0x190B_4D3E;
-
-/// WebTransport frame type: `MAX_STREAMS_BIDI`.
-pub const WT_MAX_STREAMS_BIDI_TYPE: u64 = 0x190B_4D3F;
-
-/// WebTransport frame type: `MAX_STREAMS_UNI`.
-pub const WT_MAX_STREAMS_UNI_TYPE: u64 = 0x190B_4D40;
-
-/// WebTransport frame type: `STREAM_DATA_BLOCKED`.
-pub const WT_STREAM_DATA_BLOCKED_TYPE: u64 = 0x190B_4D42;
-
-/// WebTransport frame type: `STREAMS_BLOCKED_BIDI`.
-pub const WT_STREAMS_BLOCKED_BIDI_TYPE: u64 = 0x190B_4D43;
-
-/// WebTransport frame type: `STREAMS_BLOCKED_UNI`.
-pub const WT_STREAMS_BLOCKED_UNI_TYPE: u64 = 0x190B_4D44;
-
 /// Default ALPN protocol identifier list.
 pub const DEFAULT_ALPN_PROTOCOLS: &[&str] = &[ALPN_H3];
 
@@ -144,14 +30,17 @@ pub const DEFAULT_CLOSE_TIMEOUT: f64 = 5.0;
 /// Default congestion control algorithm.
 pub const DEFAULT_CONGESTION_CONTROL_ALGORITHM: &str = "cubic";
 
-/// Default connection establishment timeout.
-pub const DEFAULT_CONNECT_TIMEOUT: f64 = 30.0;
-
 /// Default connection idle timeout.
 pub const DEFAULT_CONNECTION_IDLE_TIMEOUT: f64 = 60.0;
 
+/// Default connection establishment timeout.
+pub const DEFAULT_CONNECT_TIMEOUT: f64 = 30.0;
+
 /// Default development server port.
 pub const DEFAULT_DEV_PORT: u16 = 4433;
+
+/// Stateless retry enablement flag.
+pub const DEFAULT_ENABLE_STATELESS_RETRY: bool = false;
 
 /// Flow control window auto-scaling enablement flag.
 pub const DEFAULT_FLOW_CONTROL_WINDOW_AUTO_SCALE: bool = true;
@@ -168,8 +57,8 @@ pub const DEFAULT_INITIAL_MAX_STREAMS_BIDI: u64 = 100;
 /// Default initial maximum unidirectional streams.
 pub const DEFAULT_INITIAL_MAX_STREAMS_UNI: u64 = 100;
 
-/// Keep-alive packet enablement flag.
-pub const DEFAULT_KEEP_ALIVE: bool = true;
+/// Default keep-alive time.
+pub const DEFAULT_KEEP_ALIVE: f64 = 30.0;
 
 /// Default logging level.
 pub const DEFAULT_LOG_LEVEL: &str = "INFO";
@@ -234,11 +123,14 @@ pub const DEFAULT_SERVER_MAX_SESSIONS: u64 = 10000;
 /// Default stream creation timeout.
 pub const DEFAULT_STREAM_CREATION_TIMEOUT: f64 = 10.0;
 
+/// Default maximum concurrent streams capacity per connection.
+pub const DEFAULT_TRANSPORT_STREAMS_CAP: u64 = 65535;
+
 /// Default stream write operation timeout.
 pub const DEFAULT_WRITE_TIMEOUT: f64 = 30.0;
 
 /// Supported congestion control algorithm list.
-pub const SUPPORTED_CONGESTION_CONTROL_ALGORITHMS: &[&str] = &["reno", "cubic"];
+pub const SUPPORTED_CONGESTION_CONTROL_ALGORITHMS: &[&str] = &["bbr", "cubic", "reno"];
 
 /// Error: AEAD limit reached.
 pub const ERR_AEAD_LIMIT_REACHED: u64 = 0xF;
@@ -398,6 +290,129 @@ pub const ERR_WT_FLOW_CONTROL_ERROR: u64 = 0x045D_4487;
 
 /// Error: WebTransport session gone.
 pub const ERR_WT_SESSION_GONE: u64 = 0x170D_7B68;
+
+/// Maximum UDP datagram size.
+pub const MAX_DATAGRAM_SIZE: u64 = 65535;
+
+/// Protocol-defined maximum concurrent stream limit.
+pub const MAX_PROTOCOL_STREAMS_LIMIT: u64 = 1 << 60;
+
+// Bidirectional stream ID mask.
+pub(crate) const BIDIRECTIONAL_STREAM: u64 = 0x0;
+
+// WebTransport session closure capsule type.
+pub(crate) const CLOSE_WEBTRANSPORT_SESSION_TYPE: u64 = 0x2843;
+
+// Datagram queue capacity.
+pub(crate) const DATAGRAM_QUEUE_CAPACITY: u64 = 64;
+
+// WebTransport session drain capsule type.
+pub(crate) const DRAIN_WEBTRANSPORT_SESSION_TYPE: u64 = 0x78AE;
+
+// HTTP/3 frame type: `CANCEL_PUSH`.
+pub(crate) const H3_FRAME_TYPE_CANCEL_PUSH: u64 = 0x3;
+
+// HTTP/3 frame type: `DATA`.
+pub(crate) const H3_FRAME_TYPE_DATA: u64 = 0x0;
+
+// HTTP/3 frame type: `GOAWAY`.
+pub(crate) const H3_FRAME_TYPE_GOAWAY: u64 = 0x7;
+
+// HTTP/3 frame type: `HEADERS`.
+pub(crate) const H3_FRAME_TYPE_HEADERS: u64 = 0x1;
+
+// HTTP/3 frame type: `MAX_PUSH_ID`.
+pub(crate) const H3_FRAME_TYPE_MAX_PUSH_ID: u64 = 0xD;
+
+// HTTP/3 frame type: `PUSH_PROMISE`.
+pub(crate) const H3_FRAME_TYPE_PUSH_PROMISE: u64 = 0x5;
+
+// HTTP/3 frame type: `SETTINGS`.
+pub(crate) const H3_FRAME_TYPE_SETTINGS: u64 = 0x4;
+
+// HTTP/3 frame type: `WEBTRANSPORT_STREAM`.
+pub(crate) const H3_FRAME_TYPE_WEBTRANSPORT_STREAM: u64 = 0x41;
+
+// HTTP/3 minimum reserved unidirectional stream count.
+pub(crate) const H3_MIN_UNI_STREAM_COUNT: u64 = 3;
+
+// HTTP/3 stream type: `CONTROL`.
+pub(crate) const H3_STREAM_TYPE_CONTROL: u64 = 0x0;
+
+// HTTP/3 stream type: `PUSH`.
+pub(crate) const H3_STREAM_TYPE_PUSH: u64 = 0x1;
+
+// HTTP/3 stream type: `QPACK_DECODER`.
+pub(crate) const H3_STREAM_TYPE_QPACK_DECODER: u64 = 0x3;
+
+// HTTP/3 stream type: `QPACK_ENCODER`.
+pub(crate) const H3_STREAM_TYPE_QPACK_ENCODER: u64 = 0x2;
+
+// HTTP/3 stream type: `WEBTRANSPORT`.
+pub(crate) const H3_STREAM_TYPE_WEBTRANSPORT: u64 = 0x54;
+
+// Maximum close reason phrase length.
+pub(crate) const MAX_CLOSE_REASON_BYTES: usize = 1024;
+
+// Maximum valid stream identifier.
+pub(crate) const MAX_STREAM_ID: u64 = (1 << 62) - 1;
+
+// QPACK maximum number of blocked streams.
+pub(crate) const QPACK_DECODER_MAX_BLOCKED_STREAMS: u64 = 16;
+
+// QPACK maximum dynamic table capacity.
+pub(crate) const QPACK_DECODER_MAX_TABLE_CAPACITY: u64 = 65536;
+
+// HTTP/3 Setting: `ENABLE_CONNECT_PROTOCOL`.
+pub(crate) const SETTINGS_ENABLE_CONNECT_PROTOCOL: u64 = 0x8;
+
+// HTTP/3 Setting: `H3_DATAGRAM`.
+pub(crate) const SETTINGS_H3_DATAGRAM: u64 = 0x33;
+
+// HTTP/3 Setting: `QPACK_BLOCKED_STREAMS`.
+pub(crate) const SETTINGS_QPACK_BLOCKED_STREAMS: u64 = 0x7;
+
+// HTTP/3 Setting: `QPACK_MAX_TABLE_CAPACITY`.
+pub(crate) const SETTINGS_QPACK_MAX_TABLE_CAPACITY: u64 = 0x1;
+
+// HTTP/3 Setting: `WEBTRANSPORT_INITIAL_MAX_DATA`.
+pub(crate) const SETTINGS_WT_INITIAL_MAX_DATA: u64 = 0x2B61;
+
+// HTTP/3 Setting: `WEBTRANSPORT_INITIAL_MAX_STREAMS_BIDI`.
+pub(crate) const SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI: u64 = 0x2B65;
+
+// HTTP/3 Setting: `WEBTRANSPORT_INITIAL_MAX_STREAMS_UNI`.
+pub(crate) const SETTINGS_WT_INITIAL_MAX_STREAMS_UNI: u64 = 0x2B64;
+
+// Unidirectional stream ID mask.
+pub(crate) const UNIDIRECTIONAL_STREAM: u64 = 0x2;
+
+// WebTransport frame type: `DATA_BLOCKED`.
+pub(crate) const WT_DATA_BLOCKED_TYPE: u64 = 0x190B_4D41;
+
+// WebTransport frame type: `MAX_DATA`.
+pub(crate) const WT_MAX_DATA_TYPE: u64 = 0x190B_4D3D;
+
+// WebTransport frame type: `MAX_STREAMS_BIDI`.
+pub(crate) const WT_MAX_STREAMS_BIDI_TYPE: u64 = 0x190B_4D3F;
+
+// WebTransport frame type: `MAX_STREAMS_UNI`.
+pub(crate) const WT_MAX_STREAMS_UNI_TYPE: u64 = 0x190B_4D40;
+
+// WebTransport frame type: `MAX_STREAM_DATA`.
+pub(crate) const WT_MAX_STREAM_DATA_TYPE: u64 = 0x190B_4D3E;
+
+// WebTransport session bidirectional control stream count.
+pub(crate) const WT_SESSION_CONTROL_BIDI_STREAM_COUNT: u64 = 1;
+
+// WebTransport frame type: `STREAMS_BLOCKED_BIDI`.
+pub(crate) const WT_STREAMS_BLOCKED_BIDI_TYPE: u64 = 0x190B_4D43;
+
+// WebTransport frame type: `STREAMS_BLOCKED_UNI`.
+pub(crate) const WT_STREAMS_BLOCKED_UNI_TYPE: u64 = 0x190B_4D44;
+
+// WebTransport frame type: `STREAM_DATA_BLOCKED`.
+pub(crate) const WT_STREAM_DATA_BLOCKED_TYPE: u64 = 0x190B_4D42;
 
 #[cfg(test)]
 mod tests;

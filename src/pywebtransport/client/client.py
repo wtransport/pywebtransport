@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass, field
 from types import TracebackType
 from typing import Any, Final, Self
 
+from pywebtransport._driver.driver import EndpointDriver, create_client
 from pywebtransport.client.utils import normalize_headers, parse_webtransport_url
 from pywebtransport.config import ClientConfig
 from pywebtransport.connection import WebTransportConnection
@@ -108,11 +109,14 @@ class WebTransportClient(EventEmitter):
         self._config = effective_config
 
         self._closed = False
-        self._default_headers: Headers = []
-        self._stats = ClientStats()
-        self._connection_manager = ConnectionManager(max_connections=effective_config.max_connections)
-
+        self._init_lock = asyncio.Lock()
         self._close_task: asyncio.Task[None] | None = None
+        self._connection_manager = ConnectionManager(max_connections=self._config.max_connections)
+        self._default_headers: Headers = []
+
+        self._driver: EndpointDriver | None = None
+        self._stats = ClientStats()
+        self._transport: asyncio.DatagramTransport | None = None
 
         _logger.info("WebTransport client initialized")
 
@@ -189,8 +193,24 @@ class WebTransportClient(EventEmitter):
 
                 conn_config = self._config.update(headers=normalized_headers)
 
-                connection = await WebTransportConnection.connect(
-                    host=host, port=port, config=conn_config, loop=asyncio.get_running_loop()
+                if self._driver is None or self._transport is None:
+                    async with self._init_lock:
+                        if self._driver is None or self._transport is None:
+                            self._transport, self._driver = await create_client(
+                                config=self._config, loop=asyncio.get_running_loop()
+                            )
+
+                assert self._driver is not None
+                assert self._transport is not None
+
+                handle = self._driver.connect(remote_host=host, remote_port=port, server_name=host)
+
+                connection = WebTransportConnection(
+                    config=conn_config,
+                    driver=self._driver,
+                    handle=handle,
+                    transport=self._transport,
+                    is_client=True,
                 )
 
                 if connection.state != ConnectionState.CONNECTED:
@@ -259,6 +279,10 @@ class WebTransportClient(EventEmitter):
         _logger.info("Closing WebTransport client...")
         self._closed = True
         await self._connection_manager.shutdown()
+
+        if self._transport is not None and not self._transport.is_closing():
+            self._transport.close()
+
         _logger.info("WebTransport client closed.")
 
     def _update_success_stats(self, *, connect_time: float) -> None:

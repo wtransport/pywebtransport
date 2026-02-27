@@ -1,9 +1,26 @@
 //! Unit tests for the `crate::common::error` module.
 
-use rstest::*;
-
 use super::*;
-use crate::common::types::ErrorSource;
+
+#[test]
+fn test_configuration_error_formatting() {
+    let error = WebTransportError::Configuration(Some(400), "invalid setting".to_owned());
+
+    assert_eq!(
+        error.to_string(),
+        "Configuration error: invalid setting (code: Some(400))"
+    );
+}
+
+#[test]
+fn test_connection_error_formatting() {
+    let error = WebTransportError::Connection(None, "connection reset".to_owned());
+
+    assert_eq!(
+        error.to_string(),
+        "Connection error: connection reset (code: None)"
+    );
+}
 
 #[test]
 fn test_debug_formatting() {
@@ -12,19 +29,6 @@ fn test_debug_formatting() {
 
     assert!(debug_str.contains("Protocol"));
     assert!(debug_str.contains("debug check"));
-}
-
-#[rstest]
-#[case(
-    WebTransportError::Protocol(None, "proto".into()),
-    ErrorSource::Protocol
-)]
-#[case(
-    WebTransportError::Unknown(None, "unknown".into()),
-    ErrorSource::Unspecified
-)]
-fn test_error_source_mapping(#[case] error: WebTransportError, #[case] expected: ErrorSource) {
-    assert_eq!(error.source(), expected);
 }
 
 #[test]

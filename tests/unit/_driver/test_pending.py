@@ -1,8 +1,8 @@
-"""Unit tests for the pywebtransport._adapter.pending module."""
+"""Unit tests for the pywebtransport._driver.pending module."""
 
 import pytest
 
-from pywebtransport._adapter.pending import PendingRequestManager
+from pywebtransport._driver.pending import PendingRequestManager
 
 
 class TestPendingRequestManager:
@@ -10,10 +10,6 @@ class TestPendingRequestManager:
     @pytest.fixture
     def manager(self) -> PendingRequestManager:
         return PendingRequestManager()
-
-    def test_init(self, manager: PendingRequestManager) -> None:
-        assert manager._requests == {}
-        assert not hasattr(manager, "__dict__")
 
     @pytest.mark.asyncio
     async def test_complete_request_already_done(self, manager: PendingRequestManager) -> None:
@@ -90,3 +86,7 @@ class TestPendingRequestManager:
         assert future.done()
         assert future.exception() == exc
         assert request_id not in manager._requests
+
+    def test_init(self, manager: PendingRequestManager) -> None:
+        assert manager._requests == {}
+        assert not hasattr(manager, "__dict__")

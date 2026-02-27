@@ -3,12 +3,11 @@
 use std::io::Cursor;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use serde::Serializer;
-use serde::ser::SerializeSeq;
 
 use crate::common::constants::{
-    ERR_H3_FRAME_ERROR, ERR_LIB_INTERNAL_ERROR, ERR_WT_APPLICATION_ERROR_FIRST,
-    ERR_WT_APPLICATION_ERROR_LAST, MAX_STREAM_ID,
+    BIDIRECTIONAL_STREAM, ERR_H3_FRAME_ERROR, ERR_LIB_INTERNAL_ERROR,
+    ERR_WT_APPLICATION_ERROR_FIRST, ERR_WT_APPLICATION_ERROR_LAST, MAX_STREAM_ID,
+    UNIDIRECTIONAL_STREAM,
 };
 use crate::common::types::{ErrorCode, Headers, StreamDirection, StreamId};
 
@@ -53,7 +52,7 @@ pub(super) fn find_header(headers: &Headers, key: &str) -> Option<Bytes> {
 }
 
 // Header value search and UTF-8 decoding.
-pub(super) fn find_header_str(headers: &Headers, key: &str) -> Option<String> {
+pub(crate) fn find_header_str(headers: &Headers, key: &str) -> Option<String> {
     let val = find_header(headers, key)?;
     String::from_utf8(val.to_vec()).ok()
 }
@@ -77,7 +76,7 @@ pub(super) fn http_to_wt_error(http_error_code: u64) -> Option<ErrorCode> {
 
 // Bidirectional stream check.
 pub(super) fn is_bidirectional_stream(stream_id: StreamId) -> bool {
-    (stream_id & 0x2) == 0
+    (stream_id & UNIDIRECTIONAL_STREAM) == BIDIRECTIONAL_STREAM
 }
 
 // Peer-initiated stream check.
@@ -96,7 +95,7 @@ pub(super) fn is_request_response_stream(stream_id: StreamId) -> bool {
 
 // Unidirectional stream check.
 pub(super) fn is_unidirectional_stream(stream_id: StreamId) -> bool {
-    (stream_id & 0x2) != 0
+    (stream_id & UNIDIRECTIONAL_STREAM) == UNIDIRECTIONAL_STREAM
 }
 
 // Header set merging operation.
@@ -176,22 +175,6 @@ pub(super) fn read_varint(buf: &mut Cursor<&[u8]>) -> Result<u64, ErrorCode> {
     Ok(val)
 }
 
-// Header serialization for diagnostics.
-pub(super) fn serialize_headers<S>(headers: &Headers, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    let mut seq = serializer.serialize_seq(Some(headers.len()))?;
-
-    for (k, v) in headers {
-        let k_str = String::from_utf8_lossy(k);
-        let v_str = String::from_utf8_lossy(v);
-        seq.serialize_element(&(k_str, v_str))?;
-    }
-
-    seq.end()
-}
-
 // Stream direction resolution from ID.
 pub(super) fn stream_dir_from_id(stream_id: StreamId, is_client: bool) -> StreamDirection {
     if cfg!(debug_assertions) {
@@ -202,12 +185,13 @@ pub(super) fn stream_dir_from_id(stream_id: StreamId, is_client: bool) -> Stream
     }
 
     match (
-        is_bidirectional_stream(stream_id),
         can_send_on_stream(stream_id, is_client),
+        can_receive_on_stream(stream_id, is_client),
     ) {
-        (true, _) => StreamDirection::Bidirectional,
-        (false, true) => StreamDirection::SendOnly,
-        (false, false) => StreamDirection::ReceiveOnly,
+        (true, true) => StreamDirection::Bidirectional,
+        (true, false) => StreamDirection::SendOnly,
+        (false, true) => StreamDirection::ReceiveOnly,
+        (false, false) => unreachable!("Valid QUIC stream ID must be sendable or receivable"),
     }
 }
 

@@ -3,7 +3,6 @@
 use std::collections::{HashMap, HashSet};
 
 use bytes::Bytes;
-use serde::Serialize;
 use tracing::{debug, error, warn};
 
 use crate::common::constants::{
@@ -14,11 +13,11 @@ use crate::common::constants::{
 };
 use crate::common::types::{
     ConnectionId, ConnectionState, ErrorCode, ErrorSource, EventType, Headers, RequestId,
-    SessionId, SessionState, StreamId,
+    SessionId, SessionState, StreamDirection, StreamId,
 };
 use crate::protocol::events::{Effect, ProtocolEvent, RequestResult};
 use crate::protocol::session::Session;
-use crate::protocol::utils::find_header_str;
+use crate::protocol::utils::{find_header_str, is_unidirectional_stream, stream_dir_from_id};
 
 // Representation of a WebTransport connection state machine.
 pub(crate) struct Connection {
@@ -256,21 +255,25 @@ impl Connection {
     // Connection diagnostics event handling.
     pub(crate) fn diagnose(&self, request_id: RequestId) -> Vec<Effect> {
         let diag = self.diagnostics_snapshot();
-        let json_str = serde_json::to_string(&diag).unwrap_or_else(|_| "{}".to_owned());
         vec![Effect::NotifyRequestDone {
             request_id,
-            result: RequestResult::Diagnostics(json_str),
+            result: RequestResult::ConnectionDiagnostics(Box::new(diag)),
         }]
     }
 
     // H3 session creation failure handling.
-    pub(crate) fn fail_session(&mut self, request_id: RequestId, reason: String) -> Vec<Effect> {
+    pub(crate) fn fail_session(
+        &mut self,
+        request_id: RequestId,
+        error_code: Option<ErrorCode>,
+        reason: String,
+    ) -> Vec<Effect> {
         error!("H3 Session creation failed for request {request_id}: {reason}");
         self.pending_session_configs.remove(&request_id);
         vec![Effect::NotifyRequestFailed {
             request_id,
             source: ErrorSource::Session,
-            error_code: None,
+            error_code,
             reason,
         }]
     }
@@ -368,6 +371,7 @@ impl Connection {
     pub(crate) fn prune_early_events(&mut self, now: f64, timeout: f64) -> Vec<Effect> {
         let mut effects = Vec::new();
         let mut streams_to_remove = Vec::new();
+        let mut terminated_child_streams = HashSet::new();
 
         let mut stream_ids: Vec<StreamId> = self.early_event_buffer.keys().copied().collect();
         stream_ids.sort_unstable();
@@ -375,11 +379,42 @@ impl Connection {
         for stream_id in stream_ids {
             if let Some(events) = self.early_event_buffer.get_mut(&stream_id) {
                 let mut valid_events = Vec::new();
+
                 for (timestamp, evt) in events.drain(..) {
                     if now - timestamp < timeout {
                         valid_events.push((timestamp, evt));
-                    } else if self.early_event_count > 0 {
+                    } else {
                         self.early_event_count -= 1;
+
+                        if let ProtocolEvent::TransportStreamDataReceived {
+                            stream_id: child_id,
+                            ..
+                        } = evt
+                            && terminated_child_streams.insert(child_id)
+                        {
+                            let dir = stream_dir_from_id(child_id, self.is_client);
+                            let can_send = matches!(
+                                dir,
+                                StreamDirection::Bidirectional | StreamDirection::SendOnly
+                            );
+                            let can_receive = matches!(
+                                dir,
+                                StreamDirection::Bidirectional | StreamDirection::ReceiveOnly
+                            );
+
+                            if can_send {
+                                effects.push(Effect::ResetQuicStream {
+                                    stream_id: child_id,
+                                    error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
+                                });
+                            }
+                            if can_receive {
+                                effects.push(Effect::StopQuicStream {
+                                    stream_id: child_id,
+                                    error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
+                                });
+                            }
+                        }
                     }
                 }
 
@@ -395,10 +430,22 @@ impl Connection {
             self.early_event_buffer.remove(&stream_id);
             if !self.sessions.contains_key(&stream_id) {
                 debug!("Early event buffer timed out for stream {stream_id}, resetting");
-                effects.push(Effect::ResetQuicStream {
-                    stream_id,
-                    error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
-                });
+
+                if is_unidirectional_stream(stream_id) {
+                    effects.push(Effect::StopQuicStream {
+                        stream_id,
+                        error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
+                    });
+                } else {
+                    effects.push(Effect::ResetQuicStream {
+                        stream_id,
+                        error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
+                    });
+                    effects.push(Effect::StopQuicStream {
+                        stream_id,
+                        error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
+                    });
+                }
             }
         }
 
@@ -534,6 +581,7 @@ impl Connection {
         &mut self,
         stream_id: StreamId,
         headers: Headers,
+        stream_ended: bool,
         now: f64,
     ) -> Vec<Effect> {
         let mut effects = Vec::new();
@@ -541,17 +589,24 @@ impl Connection {
         if self.is_client {
             let Some(request_id) = self.pending_requests.remove(&stream_id) else {
                 warn!("Received headers on unknown client stream {stream_id} (no pending request)");
-                return Vec::new();
+                if stream_ended {
+                    effects.extend(self.recv_connect_close(stream_id, now));
+                }
+                return effects;
             };
 
             let Some(init_data) = self.pending_session_configs.remove(&request_id) else {
                 error!("Internal State Error: Missing init data for request {request_id:?}");
-                return vec![Effect::NotifyRequestFailed {
+                if stream_ended {
+                    effects.extend(self.recv_connect_close(stream_id, now));
+                }
+                effects.push(Effect::NotifyRequestFailed {
                     request_id,
                     source: ErrorSource::Unspecified,
                     error_code: Some(ERR_LIB_INTERNAL_ERROR),
                     reason: "Internal state inconsistency: Session init data missing".to_owned(),
-                }];
+                });
+                return effects;
             };
 
             let status_str = find_header_str(&headers, ":status");
@@ -619,7 +674,10 @@ impl Connection {
         } else {
             if self.sessions.contains_key(&stream_id) {
                 debug!("Received trailers on existing session stream {stream_id}, ignoring.");
-                return Vec::new();
+                if stream_ended {
+                    effects.extend(self.recv_connect_close(stream_id, now));
+                }
+                return effects;
             }
 
             if self.state != ConnectionState::Connected {
@@ -631,6 +689,10 @@ impl Connection {
                     stream_id,
                     status: 429,
                     end_stream: true,
+                });
+                effects.push(Effect::StopQuicStream {
+                    stream_id,
+                    error_code: ERR_H3_REQUEST_REJECTED,
                 });
                 return effects;
             }
@@ -644,6 +706,10 @@ impl Connection {
                     stream_id,
                     status: 429,
                     end_stream: true,
+                });
+                effects.push(Effect::StopQuicStream {
+                    stream_id,
+                    error_code: ERR_H3_REQUEST_REJECTED,
                 });
                 return effects;
             }
@@ -660,6 +726,10 @@ impl Connection {
                     stream_id,
                     status: 400,
                     end_stream: true,
+                });
+                effects.push(Effect::StopQuicStream {
+                    stream_id,
+                    error_code: ERR_H3_REQUEST_REJECTED,
                 });
                 return effects;
             }
@@ -712,6 +782,11 @@ impl Connection {
                 }
             }
         }
+
+        if stream_ended {
+            effects.extend(self.recv_connect_close(stream_id, now));
+        }
+
         effects
     }
 
@@ -997,18 +1072,6 @@ impl Connection {
         effects
     }
 
-    // Unread stream data return handling (delegated).
-    pub(crate) fn unread_stream(&mut self, stream_id: StreamId, data: Bytes) -> Vec<Effect> {
-        if let Some(session) = self
-            .stream_map
-            .get(&stream_id)
-            .and_then(|sid| self.sessions.get_mut(sid))
-        {
-            return session.unread_stream(stream_id, data);
-        }
-        Vec::new()
-    }
-
     // Early protocol event buffering.
     fn buffer_early_event(&mut self, session_id: SessionId, event: ProtocolEvent, now: f64) {
         self.early_event_count += 1;
@@ -1076,7 +1139,7 @@ impl Connection {
 }
 
 // Diagnostic information snapshot for a connection.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug)]
 pub(crate) struct ConnectionDiagnostics {
     pub(crate) connection_id: String,
     pub(crate) is_client: bool,

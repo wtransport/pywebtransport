@@ -24,7 +24,7 @@ impl<'a> TryFrom<&Bound<'a, PyAny>> for TransportConfig {
         let initial_max_data: u64 = conf.getattr("initial_max_data")?.extract()?;
         let initial_max_streams_bidi: u64 = conf.getattr("initial_max_streams_bidi")?.extract()?;
         let initial_max_streams_uni: u64 = conf.getattr("initial_max_streams_uni")?.extract()?;
-        let keep_alive: bool = conf.getattr("keep_alive")?.extract()?;
+        let keep_alive: Option<f64> = conf.getattr("keep_alive")?.extract()?;
         let max_capsule_size: u64 = conf.getattr("max_capsule_size")?.extract()?;
         let max_connections: u64 = conf.getattr("max_connections")?.extract()?;
         let max_datagram_size: u64 = conf.getattr("max_datagram_size")?.extract()?;
@@ -42,6 +42,7 @@ impl<'a> TryFrom<&Bound<'a, PyAny>> for TransportConfig {
         let resource_cleanup_interval: f64 =
             conf.getattr("resource_cleanup_interval")?.extract()?;
         let stream_creation_timeout: f64 = conf.getattr("stream_creation_timeout")?.extract()?;
+        let transport_streams_cap: u64 = conf.getattr("transport_streams_cap")?.extract()?;
 
         let read_timeout: Option<f64> = conf.getattr("read_timeout")?.extract()?;
         let write_timeout: Option<f64> = conf.getattr("write_timeout")?.extract()?;
@@ -56,7 +57,7 @@ impl<'a> TryFrom<&Bound<'a, PyAny>> for TransportConfig {
             initial_max_data,
             initial_max_streams_bidi,
             initial_max_streams_uni,
-            keep_alive,
+            keep_alive: keep_alive.map(Duration::from_secs_f64),
             max_capsule_size,
             max_connections,
             max_datagram_size,
@@ -73,6 +74,7 @@ impl<'a> TryFrom<&Bound<'a, PyAny>> for TransportConfig {
             read_timeout: read_timeout.map(Duration::from_secs_f64),
             resource_cleanup_interval: Duration::from_secs_f64(resource_cleanup_interval),
             stream_creation_timeout: Duration::from_secs_f64(stream_creation_timeout),
+            transport_streams_cap,
             write_timeout: write_timeout.map(Duration::from_secs_f64),
         })
     }
@@ -134,6 +136,7 @@ impl<'a> TryFrom<&Bound<'a, PyAny>> for RustServerConfig {
         let bind_host: String = conf.getattr("bind_host")?.extract()?;
         let bind_port: u16 = conf.getattr("bind_port")?.extract()?;
         let certfile: String = conf.getattr("certfile")?.extract()?;
+        let enable_stateless_retry: bool = conf.getattr("enable_stateless_retry")?.extract()?;
         let keyfile: String = conf.getattr("keyfile")?.extract()?;
 
         let verify_mode_obj = conf.getattr("verify_mode")?;
@@ -148,6 +151,7 @@ impl<'a> TryFrom<&Bound<'a, PyAny>> for RustServerConfig {
             bind_host,
             bind_port,
             certfile: PathBuf::from(certfile),
+            enable_stateless_retry,
             keyfile: PathBuf::from(keyfile),
             require_client_auth,
             transport,

@@ -35,8 +35,8 @@ pub struct TransportConfig {
     /// Initial max unidirectional streams.
     pub initial_max_streams_uni: u64,
 
-    /// Keep-alive packet enablement flag.
-    pub keep_alive: bool,
+    /// Keep-alive time.
+    pub keep_alive: Option<Duration>,
 
     /// Maximum H3 capsule size.
     pub max_capsule_size: u64,
@@ -86,6 +86,9 @@ pub struct TransportConfig {
     /// Stream creation timeout.
     pub stream_creation_timeout: Duration,
 
+    /// Default maximum concurrent streams capacity per connection.
+    pub transport_streams_cap: u64,
+
     /// Stream write operation timeout.
     pub write_timeout: Option<Duration>,
 }
@@ -105,7 +108,7 @@ impl Default for TransportConfig {
             initial_max_data: constants::DEFAULT_INITIAL_MAX_DATA,
             initial_max_streams_bidi: constants::DEFAULT_INITIAL_MAX_STREAMS_BIDI,
             initial_max_streams_uni: constants::DEFAULT_INITIAL_MAX_STREAMS_UNI,
-            keep_alive: constants::DEFAULT_KEEP_ALIVE,
+            keep_alive: Some(Duration::from_secs_f64(constants::DEFAULT_KEEP_ALIVE)),
             max_capsule_size: constants::DEFAULT_MAX_CAPSULE_SIZE,
             max_connections: constants::DEFAULT_CLIENT_MAX_CONNECTIONS,
             max_datagram_size: constants::DEFAULT_MAX_DATAGRAM_SIZE,
@@ -126,6 +129,7 @@ impl Default for TransportConfig {
             stream_creation_timeout: Duration::from_secs_f64(
                 constants::DEFAULT_STREAM_CREATION_TIMEOUT,
             ),
+            transport_streams_cap: constants::DEFAULT_TRANSPORT_STREAMS_CAP,
             write_timeout: Some(Duration::from_secs_f64(constants::DEFAULT_WRITE_TIMEOUT)),
         }
     }
@@ -201,6 +205,9 @@ pub struct RustServerConfig {
 
     /// Server certificate chain file path.
     pub certfile: PathBuf,
+
+    /// Stateless retry enablement flag.
+    pub enable_stateless_retry: bool,
 
     /// Server private key file path.
     pub keyfile: PathBuf,

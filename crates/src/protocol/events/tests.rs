@@ -1,14 +1,16 @@
 //! Unit tests for the `crate::protocol::events` module.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use bytes::Bytes;
 use rstest::*;
 
 use super::*;
 use crate::common::types::{
-    ErrorCode, ErrorSource, EventType, Headers, RequestId, SessionId, StreamDirection, StreamId,
+    ConnectionState, ErrorCode, ErrorSource, EventType, Headers, RequestId, SessionId,
+    SessionState, StreamDirection, StreamId, StreamState,
 };
+use crate::protocol::{ConnectionDiagnostics, SessionDiagnostics, StreamDiagnostics};
 
 #[fixture]
 fn fixture_bytes() -> Bytes {
@@ -144,21 +146,6 @@ fn test_effect_emit_stream_event_full_fields_success(
 }
 
 #[rstest]
-fn test_effect_log_h3_frame_structure_success() {
-    let effect = Effect::LogH3Frame {
-        category: "TRANSPORT".to_owned(),
-        event: "PACKET_SENT".to_owned(),
-        data: "payload=0x00".to_owned(),
-    };
-
-    assert!(matches!(effect, Effect::LogH3Frame { .. }));
-
-    if let Effect::LogH3Frame { category, .. } = effect {
-        assert_eq!(category, "TRANSPORT");
-    }
-}
-
-#[rstest]
 fn test_effect_notify_request_failed_structure_success(
     fixture_request_id: RequestId,
     fixture_error_source: ErrorSource,
@@ -214,7 +201,7 @@ fn test_effect_send_h3_headers_lifecycle_success(fixture_stream_id: StreamId) {
 
 #[rstest]
 fn test_protocol_event_clone_integrity_success(fixture_stream_id: StreamId, fixture_bytes: Bytes) {
-    let original = ProtocolEvent::InternalReturnStreamData {
+    let original = ProtocolEvent::DatagramReceived {
         stream_id: fixture_stream_id,
         data: fixture_bytes.clone(),
     };
@@ -224,17 +211,17 @@ fn test_protocol_event_clone_integrity_success(fixture_stream_id: StreamId, fixt
     assert!(matches!(
         (&original, &cloned),
         (
-            ProtocolEvent::InternalReturnStreamData { .. },
-            ProtocolEvent::InternalReturnStreamData { .. }
+            ProtocolEvent::DatagramReceived { .. },
+            ProtocolEvent::DatagramReceived { .. }
         )
     ));
 
     if let (
-        ProtocolEvent::InternalReturnStreamData {
+        ProtocolEvent::DatagramReceived {
             stream_id: id1,
             data: d1,
         },
-        ProtocolEvent::InternalReturnStreamData {
+        ProtocolEvent::DatagramReceived {
             stream_id: id2,
             data: d2,
         },
@@ -352,11 +339,75 @@ fn test_request_result_read_data_content_success(fixture_bytes: Bytes) {
 }
 
 #[rstest]
-#[case::diagnostics(RequestResult::Diagnostics("info".to_owned()))]
 #[case::none(RequestResult::None)]
 #[case::read_data(RequestResult::ReadData(Bytes::from_static(b"data")))]
 #[case::session(RequestResult::SessionId(1))]
 #[case::stream(RequestResult::StreamId(2))]
+#[case::conn_diag(RequestResult::ConnectionDiagnostics(Box::new(ConnectionDiagnostics {
+    connection_id: "test".to_owned(),
+    is_client: true,
+    state: ConnectionState::Connected,
+    max_datagram_size: 1200,
+    remote_max_datagram_frame_size: None,
+    handshake_complete: true,
+    peer_settings_received: true,
+    local_goaway_sent: false,
+    session_count: 0,
+    stream_count: 0,
+    pending_request_count: 0,
+    early_event_count: 0,
+    connected_at: None,
+    closed_at: None,
+})))]
+#[case::sess_diag(RequestResult::SessionDiagnostics(Box::new(SessionDiagnostics {
+    session_id: 1,
+    state: SessionState::Connected,
+    path: "/".to_owned(),
+    headers: vec![],
+    created_at: 0.0,
+    local_max_data: 0,
+    local_data_sent: 0,
+    local_data_consumed: 0,
+    peer_max_data: 0,
+    peer_data_sent: 0,
+    local_max_streams_bidi: 0,
+    local_streams_bidi_opened: 0,
+    peer_max_streams_bidi: 0,
+    peer_streams_bidi_opened: 0,
+    peer_streams_bidi_closed: 0,
+    local_max_streams_uni: 0,
+    local_streams_uni_opened: 0,
+    peer_max_streams_uni: 0,
+    peer_streams_uni_opened: 0,
+    peer_streams_uni_closed: 0,
+    pending_bidi_stream_requests: VecDeque::new(),
+    pending_uni_stream_requests: VecDeque::new(),
+    datagrams_sent: 0,
+    datagram_bytes_sent: 0,
+    datagrams_received: 0,
+    datagram_bytes_received: 0,
+    active_streams: HashSet::new(),
+    blocked_streams: HashSet::new(),
+    close_code: None,
+    close_reason: None,
+    closed_at: None,
+    ready_at: None,
+})))]
+#[case::stream_diag(RequestResult::StreamDiagnostics(Box::new(StreamDiagnostics {
+    stream_id: 1,
+    session_id: 1,
+    direction: StreamDirection::Bidirectional,
+    state: StreamState::Open,
+    is_peer_initiated: false,
+    created_at: 0.0,
+    bytes_sent: 0,
+    bytes_received: 0,
+    read_buffer_size: 0,
+    write_buffer_size: 0,
+    close_code: None,
+    close_reason: None,
+    closed_at: None,
+})))]
 fn test_request_result_variants_instantiation_success(#[case] result: RequestResult) {
     let debug_str = format!("{result:?}");
 

@@ -31,14 +31,16 @@ pub(super) fn create_py_exception(
 impl From<WebTransportError> for PyErr {
     fn from(err: WebTransportError) -> PyErr {
         Python::attach(|py| {
-            let source = err.source();
-            let (code, reason) = match &err {
-                WebTransportError::Protocol(c, r) | WebTransportError::Unknown(c, r) => {
-                    (*c, r.clone())
-                }
+            let (class_name, code, reason) = match &err {
+                WebTransportError::Configuration(c, r) => ("ConfigurationError", *c, r.clone()),
+                WebTransportError::Connection(c, r) => ("ConnectionError", *c, r.clone()),
+                WebTransportError::Protocol(c, r) => ("ProtocolError", *c, r.clone()),
+                WebTransportError::Unknown(c, r) => ("WebTransportError", *c, r.clone()),
             };
 
-            create_py_exception(py, source, code, reason)
+            let kwargs = make_kwargs(py, code);
+
+            instantiate_py_exception(py, class_name, reason, &kwargs)
         })
     }
 }

@@ -215,9 +215,12 @@ impl WebTransportEngine {
                     new_effects.extend(self.connection.prune_resources());
                 }
                 ProtocolEvent::InternalFailH3Session {
-                    request_id, reason, ..
+                    request_id,
+                    error_code,
+                    reason,
                 } => {
-                    new_effects.extend(self.connection.fail_session(request_id, reason));
+                    new_effects
+                        .extend(self.connection.fail_session(request_id, error_code, reason));
                 }
                 ProtocolEvent::InternalFailQuicStream {
                     request_id,
@@ -233,9 +236,6 @@ impl WebTransportEngine {
                         error_code,
                         reason,
                     ));
-                }
-                ProtocolEvent::InternalReturnStreamData { stream_id, data } => {
-                    new_effects.extend(self.connection.unread_stream(stream_id, data));
                 }
                 ProtocolEvent::TransportConnectionTerminated { error_code, reason } => {
                     new_effects.extend(self.connection.terminated(error_code, reason.clone(), now));
@@ -307,10 +307,6 @@ impl WebTransportEngine {
                             .recv_transport_parameters(remote_max_datagram_frame_size),
                     );
                 }
-                ProtocolEvent::TransportQuicTimerFired => {
-                    new_effects.push(Effect::TriggerQuicTimer);
-                    new_effects.push(Effect::RescheduleQuicTimer);
-                }
                 ProtocolEvent::TransportStopSendingReceived {
                     stream_id,
                     error_code,
@@ -348,9 +344,16 @@ impl WebTransportEngine {
                     new_effects.extend(self.connection.recv_goaway(now));
                 }
                 ProtocolEvent::HeadersReceived {
-                    stream_id, headers, ..
+                    stream_id,
+                    headers,
+                    stream_ended,
                 } => {
-                    new_effects.extend(self.connection.recv_headers(stream_id, headers, now));
+                    new_effects.extend(self.connection.recv_headers(
+                        stream_id,
+                        headers,
+                        stream_ended,
+                        now,
+                    ));
                 }
                 ProtocolEvent::SettingsReceived { settings } => {
                     debug!("Processing H3 SETTINGS frame.");
@@ -625,7 +628,6 @@ impl WebTransportEngine {
             }
         }
 
-        all_effects.push(Effect::RescheduleQuicTimer);
         all_effects
     }
 
@@ -675,9 +677,9 @@ impl WebTransportEngine {
             )
         })?;
 
-        let log_control = format!("{{\"new\": \"control\", \"stream_id\": {control_id}}}");
-        let log_encoder = format!("{{\"new\": \"qpack_encoder\", \"stream_id\": {encoder_id}}}");
-        let log_decoder = format!("{{\"new\": \"qpack_decoder\", \"stream_id\": {decoder_id}}}");
+        debug!("Set infrastructure stream type Control for stream_id={control_id}");
+        debug!("Set infrastructure stream type QPACK Encoder for stream_id={encoder_id}");
+        debug!("Set infrastructure stream type QPACK Decoder for stream_id={decoder_id}");
 
         let effects = vec![
             Effect::SendQuicData {
@@ -694,21 +696,6 @@ impl WebTransportEngine {
                 stream_id: decoder_id,
                 data: decoder_data.freeze(),
                 end_stream: false,
-            },
-            Effect::LogH3Frame {
-                category: "http".to_owned(),
-                event: "stream_type_set".to_owned(),
-                data: log_control,
-            },
-            Effect::LogH3Frame {
-                category: "http".to_owned(),
-                event: "stream_type_set".to_owned(),
-                data: log_encoder,
-            },
-            Effect::LogH3Frame {
-                category: "http".to_owned(),
-                event: "stream_type_set".to_owned(),
-                data: log_decoder,
             },
         ];
 

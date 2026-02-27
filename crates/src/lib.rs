@@ -6,6 +6,7 @@ pub mod common;
 pub mod tls;
 
 pub(crate) mod protocol;
+pub(crate) mod transport;
 
 mod ffi;
 

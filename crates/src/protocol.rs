@@ -1,11 +1,15 @@
 //! Protocol logic and state machine implementation.
 
-pub(crate) mod connection;
+pub(crate) use connection::ConnectionDiagnostics;
+pub(crate) use session::SessionDiagnostics;
+pub(crate) use stream::StreamDiagnostics;
+
 pub(crate) mod engine;
 pub(crate) mod events;
-pub(crate) mod session;
-pub(crate) mod stream;
+pub(crate) mod utils;
 
+mod connection;
 mod h3;
 mod qpack;
-mod utils;
+mod session;
+mod stream;

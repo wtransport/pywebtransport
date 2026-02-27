@@ -8,7 +8,7 @@ The test configuration detailed below serves as the reference environment for al
 
 | Component            | Specification                             |
 | :------------------- | :---------------------------------------- |
-| **Library Version**  | `PyWebTransport v0.13.0` (Ref: `HEAD`)    |
+| **Library Version**  | `PyWebTransport v0.14.0` (Ref: `HEAD`)    |
 | **Python Runtime**   | CPython 3.12.12                           |
 | **Event Loop**       | `uvloop` v0.22.1+                         |
 | **Cryptography**     | OpenSSL 3.0.17                            |
@@ -39,9 +39,9 @@ This section details the sustained goodput over reliable WebTransport streams, u
 
 | Scenario     | Result (MB/s) |
 | :----------- | :------------ |
-| **Upload**   | `4.88` MB/s   |
-| **Download** | `5.31` MB/s   |
-| **Duplex**   | `8.05` MB/s   |
+| **Upload**   | `18.60` MB/s  |
+| **Download** | `18.57` MB/s  |
+| **Duplex**   | `29.79` MB/s  |
 
 ## 4. Latency & RTT
 
@@ -49,10 +49,10 @@ This section measures the Round-Trip Time (RTT) for application-layer interactio
 
 | Metric                          | Min        | Median (p50) | Max        |
 | :------------------------------ | :--------- | :----------- | :--------- |
-| **Handshake** (Connect → Ready) | `12.61` ms | `23.68` ms   | `33.87` ms |
-| **Request-Response** (64B)      | `23.07` ms | `27.99` ms   | `55.91` ms |
-| **Request-Response** (1KB)      | `24.62` ms | `26.75` ms   | `30.39` ms |
-| **Datagram RTT**                | `24.70` ms | `25.75` ms   | `28.80` ms |
+| **Handshake** (Connect → Ready) | `5.43` ms  | `9.75` ms    | `14.96` ms |
+| **Request-Response** (64B)      | `10.91` ms | `11.51` ms   | `17.08` ms |
+| **Request-Response** (1KB)      | `10.37` ms | `11.60` ms   | `17.98` ms |
+| **Datagram RTT**                | `10.14` ms | `10.69` ms   | `16.20` ms |
 
 ## 5. Concurrency & Multiplexing
 
@@ -60,21 +60,21 @@ This section evaluates connection scalability when handling concurrent flows on 
 
 | Metric              | Result       | Description                                                                 |
 | :------------------ | :----------- | :-------------------------------------------------------------------------- |
-| **RPC Throughput**  | `35.59` RPS  | Measures Requests Per Second with 100 concurrent streams using 64KB payload |
-| **Connection Rate** | `109.95` CPS | Measures Connections Per Second sustaining 50 concurrent handshakes         |
+| **RPC Throughput**  | `206.92` RPS | Measures Requests Per Second with 100 concurrent streams using 64KB payload |
+| **Connection Rate** | `247.68` CPS | Measures Connections Per Second sustaining 50 concurrent handshakes         |
 
 ## 6. Datagram Performance
 
 This section measures the packet processing rate for unreliable datagrams (HTTP/3 Datagrams).
 
-| Metric        | Result         | Description                                                          |
-| :------------ | :------------- | :------------------------------------------------------------------- |
-| **Send Rate** | `9,755.58` PPS | Tests utilize a 64-byte payload transmitted in a non-blocking burst. |
+| Metric        | Result          | Description                                                          |
+| :------------ | :-------------- | :------------------------------------------------------------------- |
+| **Send Rate** | `40,620.12` PPS | Tests utilize a 64-byte payload transmitted in a non-blocking burst. |
 
 ## 7. Resource Utilization
 
 This section measures the system memory footprint per connection in a steady, idle state.
 
-| Metric                         | Result      |
-| :----------------------------- | :---------- |
-| **Memory per Idle Connection** | `125.01` KB |
+| Metric                         | Result     |
+| :----------------------------- | :--------- |
+| **Memory per Idle Connection** | `67.69` KB |

@@ -1,32 +1,8 @@
 //! Unit tests for the `crate::common::types` module.
 
 use bytes::Bytes;
-use rstest::*;
-use serde_json::to_string;
 
 use super::*;
-
-#[rstest]
-#[case(ConnectionState::Closed, "\"closed\"")]
-#[case(ConnectionState::Closing, "\"closing\"")]
-#[case(ConnectionState::Connected, "\"connected\"")]
-#[case(ConnectionState::Connecting, "\"connecting\"")]
-#[case(ConnectionState::Draining, "\"draining\"")]
-#[case(ConnectionState::Failed, "\"failed\"")]
-#[case(ConnectionState::Idle, "\"idle\"")]
-fn test_connection_state_serialization_mapping_success(
-    #[case] state: ConnectionState,
-    #[case] expected_json: &str,
-) {
-    let res = to_string(&state);
-
-    assert!(
-        res.is_ok(),
-        "Serialization failed: {:?}",
-        res.as_ref().err()
-    );
-    assert_eq!(res.unwrap_or_default(), expected_json);
-}
 
 #[test]
 fn test_connection_state_traits_behavior_success() {
@@ -37,28 +13,6 @@ fn test_connection_state_traits_behavior_success() {
 
     assert_eq!(state, state_copy);
     assert_eq!(debug_output, "Connected");
-}
-
-#[rstest]
-#[case(ErrorSource::Connection, "\"connection\"")]
-#[case(ErrorSource::Datagram, "\"datagram\"")]
-#[case(ErrorSource::FlowControl, "\"flow_control\"")]
-#[case(ErrorSource::Protocol, "\"protocol\"")]
-#[case(ErrorSource::Session, "\"session\"")]
-#[case(ErrorSource::Stream, "\"stream\"")]
-#[case(ErrorSource::Unspecified, "\"unspecified\"")]
-fn test_error_source_serialization_mapping_success(
-    #[case] source: ErrorSource,
-    #[case] expected_json: &str,
-) {
-    let res = to_string(&source);
-
-    assert!(
-        res.is_ok(),
-        "Serialization failed: {:?}",
-        res.as_ref().err()
-    );
-    assert_eq!(res.unwrap_or_default(), expected_json);
 }
 
 #[test]
@@ -72,53 +26,6 @@ fn test_error_source_traits_behavior_success() {
     assert_eq!(debug_output, "Protocol");
 }
 
-#[rstest]
-#[case(EventType::CapsuleReceived, "\"capsule_received\"")]
-#[case(EventType::ConnectionClosed, "\"connection_closed\"")]
-#[case(EventType::ConnectionEstablished, "\"connection_established\"")]
-#[case(EventType::ConnectionFailed, "\"connection_failed\"")]
-#[case(EventType::ConnectionLost, "\"connection_lost\"")]
-#[case(EventType::DatagramError, "\"datagram_error\"")]
-#[case(EventType::DatagramReceived, "\"datagram_received\"")]
-#[case(EventType::DatagramSent, "\"datagram_sent\"")]
-#[case(EventType::ProtocolError, "\"protocol_error\"")]
-#[case(EventType::SessionClosed, "\"session_closed\"")]
-#[case(EventType::SessionDataBlocked, "\"session_data_blocked\"")]
-#[case(EventType::SessionDraining, "\"session_draining\"")]
-#[case(EventType::SessionMaxDataUpdated, "\"session_max_data_updated\"")]
-#[case(
-    EventType::SessionMaxStreamsBidiUpdated,
-    "\"session_max_streams_bidi_updated\""
-)]
-#[case(
-    EventType::SessionMaxStreamsUniUpdated,
-    "\"session_max_streams_uni_updated\""
-)]
-#[case(EventType::SessionReady, "\"session_ready\"")]
-#[case(EventType::SessionRequest, "\"session_request\"")]
-#[case(EventType::SessionStreamsBlocked, "\"session_streams_blocked\"")]
-#[case(EventType::SettingsReceived, "\"settings_received\"")]
-#[case(EventType::StopSendingReceived, "\"stop_sending_received\"")]
-#[case(EventType::StreamClosed, "\"stream_closed\"")]
-#[case(EventType::StreamDataReceived, "\"stream_data_received\"")]
-#[case(EventType::StreamError, "\"stream_error\"")]
-#[case(EventType::StreamOpened, "\"stream_opened\"")]
-#[case(EventType::StreamResetReceived, "\"stream_reset_received\"")]
-#[case(EventType::TimeoutError, "\"timeout_error\"")]
-fn test_event_type_serialization_mapping_success(
-    #[case] event: EventType,
-    #[case] expected_json: &str,
-) {
-    let res = to_string(&event);
-
-    assert!(
-        res.is_ok(),
-        "Serialization failed: {:?}",
-        res.as_ref().err()
-    );
-    assert_eq!(res.unwrap_or_default(), expected_json);
-}
-
 #[test]
 fn test_event_type_traits_behavior_success() {
     let event = EventType::StreamOpened;
@@ -130,51 +37,15 @@ fn test_event_type_traits_behavior_success() {
     assert_eq!(debug_output, "StreamOpened");
 }
 
-#[rstest]
-#[case(SessionState::Closed, "\"closed\"")]
-#[case(SessionState::Closing, "\"closing\"")]
-#[case(SessionState::Connected, "\"connected\"")]
-#[case(SessionState::Connecting, "\"connecting\"")]
-#[case(SessionState::Draining, "\"draining\"")]
-fn test_session_state_serialization_mapping_success(
-    #[case] state: SessionState,
-    #[case] expected_json: &str,
-) {
-    let res = to_string(&state);
-
-    assert!(
-        res.is_ok(),
-        "Serialization failed: {:?}",
-        res.as_ref().err()
-    );
-    assert_eq!(res.unwrap_or_default(), expected_json);
-}
-
 #[test]
 fn test_session_state_traits_behavior_success() {
     let state = SessionState::Connected;
 
     let state_copy = state;
+    let debug_output = format!("{state:?}");
 
     assert_eq!(state, state_copy);
-}
-
-#[rstest]
-#[case(StreamDirection::Bidirectional, "\"bidirectional\"")]
-#[case(StreamDirection::ReceiveOnly, "\"receive_only\"")]
-#[case(StreamDirection::SendOnly, "\"send_only\"")]
-fn test_stream_direction_serialization_mapping_success(
-    #[case] direction: StreamDirection,
-    #[case] expected_json: &str,
-) {
-    let res = to_string(&direction);
-
-    assert!(
-        res.is_ok(),
-        "Serialization failed: {:?}",
-        res.as_ref().err()
-    );
-    assert_eq!(res.unwrap_or_default(), expected_json);
+    assert_eq!(debug_output, "Connected");
 }
 
 #[test]
@@ -182,29 +53,10 @@ fn test_stream_direction_traits_behavior_success() {
     let direction = StreamDirection::Bidirectional;
 
     let direction_copy = direction;
+    let debug_output = format!("{direction:?}");
 
     assert_eq!(direction, direction_copy);
-}
-
-#[rstest]
-#[case(StreamState::Closed, "\"closed\"")]
-#[case(StreamState::HalfClosedLocal, "\"half_closed_local\"")]
-#[case(StreamState::HalfClosedRemote, "\"half_closed_remote\"")]
-#[case(StreamState::Open, "\"open\"")]
-#[case(StreamState::ResetReceived, "\"reset_received\"")]
-#[case(StreamState::ResetSent, "\"reset_sent\"")]
-fn test_stream_state_serialization_mapping_success(
-    #[case] state: StreamState,
-    #[case] expected_json: &str,
-) {
-    let res = to_string(&state);
-
-    assert!(
-        res.is_ok(),
-        "Serialization failed: {:?}",
-        res.as_ref().err()
-    );
-    assert_eq!(res.unwrap_or_default(), expected_json);
+    assert_eq!(debug_output, "Bidirectional");
 }
 
 #[test]
@@ -212,8 +64,10 @@ fn test_stream_state_traits_behavior_success() {
     let state = StreamState::ResetSent;
 
     let state_copy = state;
+    let debug_output = format!("{state:?}");
 
     assert_eq!(state, state_copy);
+    assert_eq!(debug_output, "ResetSent");
 }
 
 #[test]

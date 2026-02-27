@@ -4,16 +4,15 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Cursor;
 
 use bytes::{Bytes, BytesMut};
-use serde::Serialize;
 use tracing::{debug, error, info, warn};
 
 use crate::common::constants::{
     CLOSE_WEBTRANSPORT_SESSION_TYPE, DRAIN_WEBTRANSPORT_SESSION_TYPE, ERR_FLOW_CONTROL_ERROR,
     ERR_H3_FRAME_UNEXPECTED, ERR_H3_GENERAL_PROTOCOL_ERROR, ERR_LIB_INTERNAL_ERROR,
-    ERR_LIB_SESSION_STATE_ERROR, ERR_LIB_STREAM_STATE_ERROR, MAX_PROTOCOL_STREAMS_LIMIT,
-    WT_DATA_BLOCKED_TYPE, WT_MAX_DATA_TYPE, WT_MAX_STREAM_DATA_TYPE, WT_MAX_STREAMS_BIDI_TYPE,
-    WT_MAX_STREAMS_UNI_TYPE, WT_STREAM_DATA_BLOCKED_TYPE, WT_STREAMS_BLOCKED_BIDI_TYPE,
-    WT_STREAMS_BLOCKED_UNI_TYPE,
+    ERR_LIB_SESSION_STATE_ERROR, ERR_LIB_STREAM_STATE_ERROR, MAX_CLOSE_REASON_BYTES,
+    MAX_PROTOCOL_STREAMS_LIMIT, WT_DATA_BLOCKED_TYPE, WT_MAX_DATA_TYPE, WT_MAX_STREAM_DATA_TYPE,
+    WT_MAX_STREAMS_BIDI_TYPE, WT_MAX_STREAMS_UNI_TYPE, WT_STREAM_DATA_BLOCKED_TYPE,
+    WT_STREAMS_BLOCKED_BIDI_TYPE, WT_STREAMS_BLOCKED_UNI_TYPE,
 };
 use crate::common::types::{
     ErrorCode, ErrorSource, EventType, Headers, RequestId, SessionId, SessionState,
@@ -22,8 +21,8 @@ use crate::common::types::{
 use crate::protocol::events::{Effect, RequestResult};
 use crate::protocol::stream::Stream;
 use crate::protocol::utils::{
-    can_receive_on_stream, is_peer_initiated_stream, is_unidirectional_stream, next_data_limit,
-    next_stream_limit, read_varint, serialize_headers, stream_dir_from_id, write_varint,
+    is_peer_initiated_stream, is_unidirectional_stream, next_data_limit, next_stream_limit,
+    read_varint, stream_dir_from_id, write_varint,
 };
 
 // Representation of a WebTransport session.
@@ -285,8 +284,10 @@ impl Session {
         } else {
             let reason_str = reason.as_deref().unwrap_or("");
             let reason_bytes = reason_str.as_bytes();
-            let truncated_reason = if reason_bytes.len() > 1024 {
-                reason_bytes.get(..1024).unwrap_or(reason_bytes)
+            let truncated_reason = if reason_bytes.len() > MAX_CLOSE_REASON_BYTES {
+                reason_bytes
+                    .get(..MAX_CLOSE_REASON_BYTES)
+                    .unwrap_or(reason_bytes)
             } else {
                 reason_bytes
             };
@@ -413,10 +414,9 @@ impl Session {
     // User session diagnostics event handling.
     pub(crate) fn diagnose(&self, request_id: RequestId) -> Vec<Effect> {
         let diag = self.diagnostics_snapshot();
-        let json_str = serde_json::to_string(&diag).unwrap_or_else(|_| "{}".to_owned());
         vec![Effect::NotifyRequestDone {
             request_id,
-            result: RequestResult::Diagnostics(json_str),
+            result: RequestResult::SessionDiagnostics(Box::new(diag)),
         }]
     }
 
@@ -1127,6 +1127,12 @@ impl Session {
             effects.extend(stream.reset(request_id, error_code, now));
             stream.state == StreamState::Closed
         } else {
+            effects.push(Effect::NotifyRequestFailed {
+                request_id,
+                source: ErrorSource::Stream,
+                error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
+                reason: format!("Stream {stream_id} not found or already pruned"),
+            });
             false
         };
 
@@ -1255,6 +1261,12 @@ impl Session {
             effects.extend(stream.stop(request_id, error_code, now));
             stream.state == StreamState::Closed
         } else {
+            effects.push(Effect::NotifyRequestFailed {
+                request_id,
+                source: ErrorSource::Stream,
+                error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
+                reason: format!("Stream {stream_id} not found or already pruned"),
+            });
             false
         };
 
@@ -1318,14 +1330,6 @@ impl Session {
         }
 
         effects
-    }
-
-    // Unread stream data return handling.
-    pub(crate) fn unread_stream(&mut self, stream_id: StreamId, data: Bytes) -> Vec<Effect> {
-        if let Some(stream) = self.streams.get_mut(&stream_id) {
-            return stream.unread(data);
-        }
-        Vec::new()
     }
 
     // Session error abort handling.
@@ -1573,8 +1577,19 @@ impl Session {
                 .get_mut(&stream_id)
                 .filter(|s| s.state != StreamState::Closed)
             {
-                effects.extend(stream.reset(0, error_code, now));
-                if can_receive_on_stream(stream_id, self.is_client) {
+                let can_send = matches!(
+                    stream.direction,
+                    StreamDirection::Bidirectional | StreamDirection::SendOnly
+                );
+                let can_receive = matches!(
+                    stream.direction,
+                    StreamDirection::Bidirectional | StreamDirection::ReceiveOnly
+                );
+
+                if can_send {
+                    effects.extend(stream.reset(0, error_code, now));
+                }
+                if can_receive {
                     effects.extend(stream.stop(0, error_code, now));
                 }
             }
@@ -1607,12 +1622,11 @@ impl Session {
 }
 
 // Diagnostic information snapshot for a session.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug)]
 pub(crate) struct SessionDiagnostics {
     pub(crate) session_id: SessionId,
     pub(crate) state: SessionState,
     pub(crate) path: String,
-    #[serde(serialize_with = "serialize_headers")]
     pub(crate) headers: Headers,
     pub(crate) created_at: f64,
     pub(crate) local_max_data: u64,

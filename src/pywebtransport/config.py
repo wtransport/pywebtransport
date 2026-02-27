@@ -20,6 +20,7 @@ from pywebtransport.constants import (
     DEFAULT_CONNECT_TIMEOUT,
     DEFAULT_CONNECTION_IDLE_TIMEOUT,
     DEFAULT_DEV_PORT,
+    DEFAULT_ENABLE_STATELESS_RETRY,
     DEFAULT_FLOW_CONTROL_WINDOW_AUTO_SCALE,
     DEFAULT_FLOW_CONTROL_WINDOW_SIZE,
     DEFAULT_INITIAL_MAX_DATA,
@@ -47,7 +48,10 @@ from pywebtransport.constants import (
     DEFAULT_SERVER_MAX_CONNECTIONS,
     DEFAULT_SERVER_MAX_SESSIONS,
     DEFAULT_STREAM_CREATION_TIMEOUT,
+    DEFAULT_TRANSPORT_STREAMS_CAP,
     DEFAULT_WRITE_TIMEOUT,
+    MAX_DATAGRAM_SIZE,
+    MAX_PROTOCOL_STREAMS_LIMIT,
     SUPPORTED_CONGESTION_CONTROL_ALGORITHMS,
 )
 from pywebtransport.exceptions import ConfigurationError
@@ -71,7 +75,7 @@ class BaseConfig(ABC):
     initial_max_data: int = DEFAULT_INITIAL_MAX_DATA
     initial_max_streams_bidi: int = DEFAULT_INITIAL_MAX_STREAMS_BIDI
     initial_max_streams_uni: int = DEFAULT_INITIAL_MAX_STREAMS_UNI
-    keep_alive: bool = DEFAULT_KEEP_ALIVE
+    keep_alive: float | None = DEFAULT_KEEP_ALIVE
     keyfile: str | None = None
     log_level: str = DEFAULT_LOG_LEVEL
     max_capsule_size: int = DEFAULT_MAX_CAPSULE_SIZE
@@ -90,6 +94,7 @@ class BaseConfig(ABC):
     read_timeout: float | None = DEFAULT_READ_TIMEOUT
     resource_cleanup_interval: float = DEFAULT_RESOURCE_CLEANUP_INTERVAL
     stream_creation_timeout: float = DEFAULT_STREAM_CREATION_TIMEOUT
+    transport_streams_cap: int = DEFAULT_TRANSPORT_STREAMS_CAP
     write_timeout: float | None = DEFAULT_WRITE_TIMEOUT
 
     def copy(self) -> Self:
@@ -176,6 +181,7 @@ class BaseConfig(ABC):
         timeouts_to_check = [
             "close_timeout",
             "connection_idle_timeout",
+            "keep_alive",
             "pending_event_ttl",
             "read_timeout",
             "resource_cleanup_interval",
@@ -221,9 +227,9 @@ class BaseConfig(ABC):
                 config_value=self.max_sessions,
             )
 
-        if self.max_datagram_size <= 0 or self.max_datagram_size > 65535:
+        if self.max_datagram_size <= 0 or self.max_datagram_size > MAX_DATAGRAM_SIZE:
             raise ConfigurationError(
-                message="Invalid value for 'max_datagram_size': must be between 1 and 65535",
+                message=f"Invalid value for 'max_datagram_size': must be between 1 and {MAX_DATAGRAM_SIZE}",
                 config_key="max_datagram_size",
                 config_value=self.max_datagram_size,
             )
@@ -282,6 +288,15 @@ class BaseConfig(ABC):
                 message="Invalid value for 'max_stream_write_buffer': must be positive",
                 config_key="max_stream_write_buffer",
                 config_value=self.max_stream_write_buffer,
+            )
+
+        if self.transport_streams_cap <= 0 or self.transport_streams_cap > MAX_PROTOCOL_STREAMS_LIMIT:
+            raise ConfigurationError(
+                message=(
+                    f"Invalid value for 'transport_streams_cap': " f"must be between 1 and {MAX_PROTOCOL_STREAMS_LIMIT}"
+                ),
+                config_key="transport_streams_cap",
+                config_value=self.transport_streams_cap,
             )
 
 
@@ -362,6 +377,7 @@ class ServerConfig(BaseConfig):
 
     bind_host: str = DEFAULT_BIND_HOST
     bind_port: int = DEFAULT_DEV_PORT
+    enable_stateless_retry: bool = DEFAULT_ENABLE_STATELESS_RETRY
     max_connections: int = DEFAULT_SERVER_MAX_CONNECTIONS
     max_sessions: int = DEFAULT_SERVER_MAX_SESSIONS
     verify_mode: ssl.VerifyMode = ssl.CERT_NONE

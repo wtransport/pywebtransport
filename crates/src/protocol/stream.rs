@@ -3,7 +3,6 @@
 use std::collections::VecDeque;
 
 use bytes::{BufMut, Bytes};
-use serde::Serialize;
 use tracing::{debug, error, warn};
 
 use crate::common::constants::{
@@ -78,10 +77,9 @@ impl Stream {
     // User diagnostics event handling.
     pub(crate) fn diagnose(&self, request_id: RequestId) -> Vec<Effect> {
         let diag = self.diagnostics_snapshot();
-        let json_str = serde_json::to_string(&diag).unwrap_or_else(|_| "{}".to_owned());
         vec![Effect::NotifyRequestDone {
             request_id,
-            result: RequestResult::Diagnostics(json_str),
+            result: RequestResult::StreamDiagnostics(Box::new(diag)),
         }]
     }
 
@@ -454,6 +452,16 @@ impl Stream {
     ) -> Vec<Effect> {
         let mut effects = Vec::new();
 
+        if self.direction == StreamDirection::ReceiveOnly {
+            effects.push(Effect::NotifyRequestFailed {
+                request_id,
+                source: ErrorSource::Stream,
+                error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
+                reason: format!("Cannot reset receive-only stream {}", self.id),
+            });
+            return effects;
+        }
+
         if matches!(self.state, StreamState::Closed | StreamState::ResetSent) {
             effects.push(Effect::NotifyRequestDone {
                 request_id,
@@ -521,6 +529,16 @@ impl Stream {
     ) -> Vec<Effect> {
         let mut effects = Vec::new();
 
+        if self.direction == StreamDirection::SendOnly {
+            effects.push(Effect::NotifyRequestFailed {
+                request_id,
+                source: ErrorSource::Stream,
+                error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
+                reason: format!("Cannot stop send-only stream {}", self.id),
+            });
+            return effects;
+        }
+
         if matches!(
             self.state,
             StreamState::HalfClosedRemote | StreamState::Closed | StreamState::ResetReceived
@@ -579,16 +597,6 @@ impl Stream {
         );
 
         effects
-    }
-
-    // Unread data operation handling.
-    pub(crate) fn unread(&mut self, data: Bytes) -> Vec<Effect> {
-        if !data.is_empty() {
-            let len = data.len() as u64;
-            self.read_buffer.push_front(data);
-            self.read_buffer_size += len;
-        }
-        Vec::new()
     }
 
     // User write request handling.
@@ -703,7 +711,7 @@ impl Stream {
             );
 
             self.write_buffer
-                .push_back((remaining_data, request_id, end_stream));
+                .push_front((remaining_data, request_id, end_stream));
             self.write_buffer_size += remaining_len;
 
             let mut buf = bytes::BytesMut::with_capacity(8);
@@ -836,7 +844,7 @@ impl Stream {
 }
 
 // Diagnostic information snapshot for a stream.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug)]
 pub(crate) struct StreamDiagnostics {
     pub(crate) stream_id: StreamId,
     pub(crate) session_id: SessionId,

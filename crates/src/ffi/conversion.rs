@@ -1,27 +1,17 @@
 //! FFI conversion logic between Python objects and Rust protocol types.
 
-use std::collections::HashMap;
-
 use bytes::{Bytes, BytesMut};
 use pyo3::buffer::PyBuffer;
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyBytes, PyDict, PyList, PyString, PyTuple};
-use pyo3::{Borrowed, Bound};
+use pyo3::types::{PyBytes, PyDict, PyList, PyString, PyTuple};
+use pyo3::{Borrowed, Bound, IntoPyObjectExt};
 
-use crate::common::types::{ErrorSource, Headers};
+use crate::common::types::Headers;
+use crate::ffi::abi;
 use crate::ffi::error::create_py_exception;
 use crate::protocol::events::{Effect, ProtocolEvent, RequestResult};
-
-// Effect vector to Python list conversion.
-pub(super) fn effects_to_py(py: Python<'_>, effects: Vec<Effect>) -> PyResult<Py<PyAny>> {
-    let list = PyList::empty(py);
-    for effect in effects {
-        list.append(effect.into_pyobject(py)?)?;
-    }
-
-    Ok(list.into())
-}
+use crate::protocol::{ConnectionDiagnostics, SessionDiagnostics, StreamDiagnostics};
 
 // Bytes extraction from Python object using buffer protocol or UTF-8 encoding.
 pub(super) fn extract_bytes(obj: &Bound<'_, PyAny>) -> PyResult<Bytes> {
@@ -42,6 +32,7 @@ pub(super) fn extract_bytes_or_list(obj: &Bound<'_, PyAny>) -> PyResult<Bytes> {
         Ok(b)
     } else if let Ok(list) = obj.extract::<Bound<'_, PyList>>() {
         let mut buf = BytesMut::new();
+
         for item in list.iter() {
             let b = extract_bytes(&item).map_err(|e| {
                 PyValueError::new_err(format!(
@@ -72,9 +63,11 @@ pub(super) fn extract_headers(obj: &Bound<'_, PyAny>) -> PyResult<Headers> {
             let tuple = item.extract::<Bound<'_, PyTuple>>().map_err(|e| {
                 PyValueError::new_err(format!("Headers list must contain tuples: {e}"))
             })?;
+
             if tuple.len() != 2 {
                 return Err(PyValueError::new_err("Header tuple must have 2 elements"));
             }
+
             process_header_item(&tuple.get_item(0)?, &tuple.get_item(1)?, &mut headers)?;
         }
     } else {
@@ -89,808 +82,115 @@ impl<'a, 'py> FromPyObject<'a, 'py> for ProtocolEvent {
 
     fn extract(ob: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
         let bound = ob.as_borrowed();
-        let type_name = bound.get_type().name()?;
+        let tuple = bound.extract::<Bound<'_, PyTuple>>().map_err(|e| {
+            PyValueError::new_err(format!("Expected FFI tagged tuple structure: {e}"))
+        })?;
 
-        let get = |name: &str| bound.getattr(name);
-        let get_bytes = |name: &str| -> PyResult<Bytes> {
-            let val = bound.getattr(name)?;
-            extract_bytes(&val)
-                .map_err(|e| PyValueError::new_err(format!("Field {name} must be bytes-like: {e}")))
+        let opcode = tuple.get_item(0)?.extract::<u8>()?;
+        let payload = tuple
+            .get_item(1)?
+            .extract::<Bound<'_, PyTuple>>()
+            .map_err(|e| {
+                PyValueError::new_err(format!("Expected FFI payload tuple extraction: {e}"))
+            })?;
+
+        let extract_bytes_at_index = |idx: usize| -> PyResult<Bytes> {
+            let val = payload.get_item(idx)?;
+            extract_bytes(&val).map_err(|e| {
+                PyValueError::new_err(format!("Field at index {idx} must be bytes-like: {e}"))
+            })
         };
 
-        match type_name.to_str()? {
-            "InternalBindH3Session" => Ok(ProtocolEvent::InternalBindH3Session {
-                request_id: get("request_id")?.extract()?,
-                stream_id: get("stream_id")?.extract()?,
+        match opcode {
+            abi::CONNECTION_CLOSE => Ok(ProtocolEvent::ConnectionClose {
+                request_id: payload.get_item(0)?.extract()?,
+                error_code: payload.get_item(1)?.extract()?,
+                reason: payload.get_item(2)?.extract()?,
             }),
-            "InternalBindQuicStream" => Ok(ProtocolEvent::InternalBindQuicStream {
-                request_id: get("request_id")?.extract()?,
-                stream_id: get("stream_id")?.extract()?,
-                session_id: get("session_id")?.extract()?,
-                is_unidirectional: get("is_unidirectional")?.extract()?,
+            abi::USER_ACCEPT_SESSION => Ok(ProtocolEvent::UserAcceptSession {
+                request_id: payload.get_item(0)?.extract()?,
+                session_id: payload.get_item(1)?.extract()?,
             }),
-            "InternalCleanupEarlyEvents" => Ok(ProtocolEvent::InternalCleanupEarlyEvents),
-            "InternalCleanupResources" => Ok(ProtocolEvent::InternalCleanupResources),
-            "InternalFailH3Session" => {
-                let exc = get("exception")?;
-                let (reason, error_code) = extract_exception_details(&exc);
-
-                Ok(ProtocolEvent::InternalFailH3Session {
-                    request_id: get("request_id")?.extract()?,
-                    error_code,
-                    reason,
+            abi::USER_CLOSE_SESSION => Ok(ProtocolEvent::UserCloseSession {
+                request_id: payload.get_item(0)?.extract()?,
+                session_id: payload.get_item(1)?.extract()?,
+                error_code: payload.get_item(2)?.extract()?,
+                reason: payload.get_item(3)?.extract()?,
+            }),
+            abi::USER_CONNECTION_GRACEFUL_CLOSE => Ok(ProtocolEvent::UserConnectionGracefulClose {
+                request_id: payload.get_item(0)?.extract()?,
+            }),
+            abi::USER_CREATE_SESSION => Ok(ProtocolEvent::UserCreateSession {
+                request_id: payload.get_item(0)?.extract()?,
+                path: payload.get_item(1)?.extract()?,
+                headers: extract_headers(&payload.get_item(2)?)?,
+            }),
+            abi::USER_CREATE_STREAM => Ok(ProtocolEvent::UserCreateStream {
+                request_id: payload.get_item(0)?.extract()?,
+                session_id: payload.get_item(1)?.extract()?,
+                is_unidirectional: payload.get_item(2)?.extract()?,
+            }),
+            abi::USER_GET_CONNECTION_DIAGNOSTICS => {
+                Ok(ProtocolEvent::UserGetConnectionDiagnostics {
+                    request_id: payload.get_item(0)?.extract()?,
                 })
             }
-            "InternalFailQuicStream" => {
-                let exc = get("exception")?;
-                let (reason, error_code) = extract_exception_details(&exc);
-
-                Ok(ProtocolEvent::InternalFailQuicStream {
-                    request_id: get("request_id")?.extract()?,
-                    session_id: get("session_id")?.extract()?,
-                    is_unidirectional: get("is_unidirectional")?.extract()?,
-                    error_code,
-                    reason,
-                })
-            }
-            "InternalReturnStreamData" => Ok(ProtocolEvent::InternalReturnStreamData {
-                stream_id: get("stream_id")?.extract()?,
-                data: get_bytes("data")?,
+            abi::USER_GET_SESSION_DIAGNOSTICS => Ok(ProtocolEvent::UserGetSessionDiagnostics {
+                request_id: payload.get_item(0)?.extract()?,
+                session_id: payload.get_item(1)?.extract()?,
             }),
-            "TransportConnectionTerminated" => Ok(ProtocolEvent::TransportConnectionTerminated {
-                error_code: get("error_code")?.extract()?,
-                reason: get("reason")?.extract()?,
+            abi::USER_GET_STREAM_DIAGNOSTICS => Ok(ProtocolEvent::UserGetStreamDiagnostics {
+                request_id: payload.get_item(0)?.extract()?,
+                stream_id: payload.get_item(1)?.extract()?,
             }),
-            "TransportDatagramFrameReceived" => Ok(ProtocolEvent::TransportDatagramFrameReceived {
-                data: get_bytes("data")?,
+            abi::USER_GRANT_DATA_CREDIT => Ok(ProtocolEvent::UserGrantDataCredit {
+                request_id: payload.get_item(0)?.extract()?,
+                session_id: payload.get_item(1)?.extract()?,
+                max_data: payload.get_item(2)?.extract()?,
             }),
-            "TransportHandshakeCompleted" => Ok(ProtocolEvent::TransportHandshakeCompleted),
-            "TransportQuicParametersReceived" => {
-                Ok(ProtocolEvent::TransportQuicParametersReceived {
-                    remote_max_datagram_frame_size: get("remote_max_datagram_frame_size")?
-                        .extract()?,
-                })
-            }
-            "TransportQuicTimerFired" => Ok(ProtocolEvent::TransportQuicTimerFired),
-            "TransportStreamDataReceived" => Ok(ProtocolEvent::TransportStreamDataReceived {
-                stream_id: get("stream_id")?.extract()?,
-                data: get_bytes("data")?,
-                end_stream: get("end_stream")?.extract()?,
+            abi::USER_GRANT_STREAMS_CREDIT => Ok(ProtocolEvent::UserGrantStreamsCredit {
+                request_id: payload.get_item(0)?.extract()?,
+                session_id: payload.get_item(1)?.extract()?,
+                is_unidirectional: payload.get_item(2)?.extract()?,
+                max_streams: payload.get_item(3)?.extract()?,
             }),
-            "TransportStopSendingReceived" => Ok(ProtocolEvent::TransportStopSendingReceived {
-                stream_id: get("stream_id")?.extract()?,
-                error_code: get("error_code")?.extract()?,
+            abi::USER_REJECT_SESSION => Ok(ProtocolEvent::UserRejectSession {
+                request_id: payload.get_item(0)?.extract()?,
+                session_id: payload.get_item(1)?.extract()?,
+                status_code: payload.get_item(2)?.extract()?,
             }),
-            "TransportStreamResetReceived" => Ok(ProtocolEvent::TransportStreamResetReceived {
-                stream_id: get("stream_id")?.extract()?,
-                error_code: get("error_code")?.extract()?,
+            abi::USER_RESET_STREAM => Ok(ProtocolEvent::UserResetStream {
+                request_id: payload.get_item(0)?.extract()?,
+                stream_id: payload.get_item(1)?.extract()?,
+                error_code: payload.get_item(2)?.extract()?,
             }),
-            "CapsuleReceived" => Ok(ProtocolEvent::CapsuleReceived {
-                stream_id: get("stream_id")?.extract()?,
-                capsule_type: get("capsule_type")?.extract()?,
-                capsule_data: get_bytes("capsule_data")?,
+            abi::USER_SEND_DATAGRAM => Ok(ProtocolEvent::UserSendDatagram {
+                request_id: payload.get_item(0)?.extract()?,
+                session_id: payload.get_item(1)?.extract()?,
+                data: extract_bytes_or_list(&payload.get_item(2)?)?,
             }),
-            "ConnectStreamClosed" => Ok(ProtocolEvent::ConnectStreamClosed {
-                stream_id: get("stream_id")?.extract()?,
+            abi::USER_SEND_STREAM_DATA => Ok(ProtocolEvent::UserSendStreamData {
+                request_id: payload.get_item(0)?.extract()?,
+                stream_id: payload.get_item(1)?.extract()?,
+                data: extract_bytes_at_index(2)?,
+                end_stream: payload.get_item(3)?.extract()?,
             }),
-            "DatagramReceived" => Ok(ProtocolEvent::DatagramReceived {
-                stream_id: get("stream_id")?.extract()?,
-                data: get_bytes("data")?,
+            abi::USER_STOP_SENDING => Ok(ProtocolEvent::UserStopSending {
+                request_id: payload.get_item(0)?.extract()?,
+                stream_id: payload.get_item(1)?.extract()?,
+                error_code: payload.get_item(2)?.extract()?,
             }),
-            "GoawayReceived" => Ok(ProtocolEvent::GoawayReceived),
-            "HeadersReceived" => Ok(ProtocolEvent::HeadersReceived {
-                stream_id: get("stream_id")?.extract()?,
-                headers: extract_headers(&get("headers")?)?,
-                stream_ended: get("stream_ended")?.extract()?,
-            }),
-            "SettingsReceived" => Ok(ProtocolEvent::SettingsReceived {
-                settings: get("settings")?.extract::<HashMap<u64, u64>>()?,
-            }),
-            "WebTransportStreamDataReceived" => Ok(ProtocolEvent::WebTransportStreamDataReceived {
-                session_id: get("session_id")?.extract()?,
-                stream_id: get("stream_id")?.extract()?,
-                data: get_bytes("data")?,
-                stream_ended: get("stream_ended")?.extract()?,
-            }),
-            "ConnectionClose" => Ok(ProtocolEvent::ConnectionClose {
-                request_id: get("request_id")?.extract()?,
-                error_code: get("error_code")?.extract()?,
-                reason: get("reason")?.extract()?,
-            }),
-            "UserAcceptSession" => Ok(ProtocolEvent::UserAcceptSession {
-                request_id: get("request_id")?.extract()?,
-                session_id: get("session_id")?.extract()?,
-            }),
-            "UserCloseSession" => Ok(ProtocolEvent::UserCloseSession {
-                request_id: get("request_id")?.extract()?,
-                session_id: get("session_id")?.extract()?,
-                error_code: get("error_code")?.extract()?,
-                reason: get("reason")?.extract()?,
-            }),
-            "UserConnectionGracefulClose" => Ok(ProtocolEvent::UserConnectionGracefulClose {
-                request_id: get("request_id")?.extract()?,
-            }),
-            "UserCreateSession" => Ok(ProtocolEvent::UserCreateSession {
-                request_id: get("request_id")?.extract()?,
-                path: get("path")?.extract()?,
-                headers: extract_headers(&get("headers")?)?,
-            }),
-            "UserCreateStream" => Ok(ProtocolEvent::UserCreateStream {
-                request_id: get("request_id")?.extract()?,
-                session_id: get("session_id")?.extract()?,
-                is_unidirectional: get("is_unidirectional")?.extract()?,
-            }),
-            "UserGetConnectionDiagnostics" => Ok(ProtocolEvent::UserGetConnectionDiagnostics {
-                request_id: get("request_id")?.extract()?,
-            }),
-            "UserGetSessionDiagnostics" => Ok(ProtocolEvent::UserGetSessionDiagnostics {
-                request_id: get("request_id")?.extract()?,
-                session_id: get("session_id")?.extract()?,
-            }),
-            "UserGetStreamDiagnostics" => Ok(ProtocolEvent::UserGetStreamDiagnostics {
-                request_id: get("request_id")?.extract()?,
-                stream_id: get("stream_id")?.extract()?,
-            }),
-            "UserGrantDataCredit" => Ok(ProtocolEvent::UserGrantDataCredit {
-                request_id: get("request_id")?.extract()?,
-                session_id: get("session_id")?.extract()?,
-                max_data: get("max_data")?.extract()?,
-            }),
-            "UserGrantStreamsCredit" => Ok(ProtocolEvent::UserGrantStreamsCredit {
-                request_id: get("request_id")?.extract()?,
-                session_id: get("session_id")?.extract()?,
-                is_unidirectional: get("is_unidirectional")?.extract()?,
-                max_streams: get("max_streams")?.extract()?,
-            }),
-            "UserRejectSession" => Ok(ProtocolEvent::UserRejectSession {
-                request_id: get("request_id")?.extract()?,
-                session_id: get("session_id")?.extract()?,
-                status_code: get("status_code")?.extract()?,
-            }),
-            "UserResetStream" => Ok(ProtocolEvent::UserResetStream {
-                request_id: get("request_id")?.extract()?,
-                stream_id: get("stream_id")?.extract()?,
-                error_code: get("error_code")?.extract()?,
-            }),
-            "UserSendDatagram" => Ok(ProtocolEvent::UserSendDatagram {
-                request_id: get("request_id")?.extract()?,
-                session_id: get("session_id")?.extract()?,
-                data: extract_bytes_or_list(&get("data")?)?,
-            }),
-            "UserSendStreamData" => Ok(ProtocolEvent::UserSendStreamData {
-                request_id: get("request_id")?.extract()?,
-                stream_id: get("stream_id")?.extract()?,
-                data: get_bytes("data")?,
-                end_stream: get("end_stream")?.extract()?,
-            }),
-            "UserStopSending" => Ok(ProtocolEvent::UserStopSending {
-                request_id: get("request_id")?.extract()?,
-                stream_id: get("stream_id")?.extract()?,
-                error_code: get("error_code")?.extract()?,
-            }),
-            "UserStreamRead" => Ok(ProtocolEvent::UserStreamRead {
-                request_id: get("request_id")?.extract()?,
-                stream_id: get("stream_id")?.extract()?,
-                max_bytes: get("max_bytes")?
+            abi::USER_STREAM_READ => Ok(ProtocolEvent::UserStreamRead {
+                request_id: payload.get_item(0)?.extract()?,
+                stream_id: payload.get_item(1)?.extract()?,
+                max_bytes: payload
+                    .get_item(2)?
                     .extract::<Option<u64>>()?
                     .unwrap_or(u64::MAX),
             }),
             _ => Err(PyValueError::new_err(format!(
-                "Unknown ProtocolEvent type: {type_name}"
+                "Invalid ABI opcode from Python: {opcode}"
             ))),
-        }
-    }
-}
-
-impl<'py> IntoPyObject<'py> for ProtocolEvent {
-    type Target = PyAny;
-    type Output = Bound<'py, PyAny>;
-    type Error = PyErr;
-
-    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
-        let events_mod = PyModule::import(py, "pywebtransport._protocol.events")?;
-
-        let make =
-            |cls_name: &str, kwargs: Vec<(&str, Py<PyAny>)>| -> PyResult<Bound<'py, PyAny>> {
-                let cls = events_mod.getattr(cls_name)?;
-                let dict = PyDict::new(py);
-                for (k, v) in kwargs {
-                    dict.set_item(k, v)?;
-                }
-                cls.call((), Some(&dict))
-            };
-
-        match self {
-            ProtocolEvent::InternalBindH3Session {
-                request_id,
-                stream_id,
-            } => make(
-                "InternalBindH3Session",
-                vec![
-                    (
-                        "request_id",
-                        request_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "stream_id",
-                        stream_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                ],
-            ),
-            ProtocolEvent::InternalBindQuicStream {
-                request_id,
-                stream_id,
-                session_id,
-                is_unidirectional,
-            } => make(
-                "InternalBindQuicStream",
-                vec![
-                    (
-                        "request_id",
-                        request_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "stream_id",
-                        stream_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "session_id",
-                        session_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "is_unidirectional",
-                        PyBool::new(py, is_unidirectional)
-                            .to_owned()
-                            .into_any()
-                            .unbind(),
-                    ),
-                ],
-            ),
-            ProtocolEvent::InternalCleanupEarlyEvents => make("InternalCleanupEarlyEvents", vec![]),
-            ProtocolEvent::InternalCleanupResources => make("InternalCleanupResources", vec![]),
-            ProtocolEvent::InternalFailH3Session {
-                request_id,
-                error_code,
-                reason,
-            } => make(
-                "InternalFailH3Session",
-                vec![
-                    (
-                        "request_id",
-                        request_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "exception",
-                        create_py_exception(py, ErrorSource::Session, error_code, reason)
-                            .value(py)
-                            .clone()
-                            .into_any()
-                            .unbind(),
-                    ),
-                ],
-            ),
-            ProtocolEvent::InternalFailQuicStream {
-                request_id,
-                session_id,
-                is_unidirectional,
-                error_code,
-                reason,
-            } => make(
-                "InternalFailQuicStream",
-                vec![
-                    (
-                        "request_id",
-                        request_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "session_id",
-                        session_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "is_unidirectional",
-                        PyBool::new(py, is_unidirectional)
-                            .to_owned()
-                            .into_any()
-                            .unbind(),
-                    ),
-                    (
-                        "exception",
-                        create_py_exception(py, ErrorSource::Stream, error_code, reason)
-                            .value(py)
-                            .clone()
-                            .into_any()
-                            .unbind(),
-                    ),
-                ],
-            ),
-            ProtocolEvent::InternalReturnStreamData { stream_id, data } => make(
-                "InternalReturnStreamData",
-                vec![
-                    (
-                        "stream_id",
-                        stream_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    ("data", PyBytes::new(py, &data).into_any().unbind()),
-                ],
-            ),
-            ProtocolEvent::TransportConnectionTerminated { error_code, reason } => make(
-                "TransportConnectionTerminated",
-                vec![
-                    (
-                        "error_code",
-                        error_code.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    ("reason", PyString::new(py, &reason).into_any().unbind()),
-                ],
-            ),
-            ProtocolEvent::TransportDatagramFrameReceived { data } => make(
-                "TransportDatagramFrameReceived",
-                vec![("data", PyBytes::new(py, &data).into_any().unbind())],
-            ),
-            ProtocolEvent::TransportHandshakeCompleted => {
-                make("TransportHandshakeCompleted", vec![])
-            }
-            ProtocolEvent::TransportQuicParametersReceived {
-                remote_max_datagram_frame_size,
-            } => make(
-                "TransportQuicParametersReceived",
-                vec![(
-                    "remote_max_datagram_frame_size",
-                    remote_max_datagram_frame_size
-                        .into_pyobject(py)?
-                        .into_any()
-                        .unbind(),
-                )],
-            ),
-            ProtocolEvent::TransportQuicTimerFired => make("TransportQuicTimerFired", vec![]),
-            ProtocolEvent::TransportStreamDataReceived {
-                stream_id,
-                data,
-                end_stream,
-            } => make(
-                "TransportStreamDataReceived",
-                vec![
-                    (
-                        "stream_id",
-                        stream_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    ("data", PyBytes::new(py, &data).into_any().unbind()),
-                    (
-                        "end_stream",
-                        PyBool::new(py, end_stream).to_owned().into_any().unbind(),
-                    ),
-                ],
-            ),
-            ProtocolEvent::TransportStopSendingReceived {
-                stream_id,
-                error_code,
-            } => make(
-                "TransportStopSendingReceived",
-                vec![
-                    (
-                        "stream_id",
-                        stream_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "error_code",
-                        error_code.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                ],
-            ),
-            ProtocolEvent::TransportStreamResetReceived {
-                stream_id,
-                error_code,
-            } => make(
-                "TransportStreamResetReceived",
-                vec![
-                    (
-                        "stream_id",
-                        stream_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "error_code",
-                        error_code.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                ],
-            ),
-            ProtocolEvent::CapsuleReceived {
-                stream_id,
-                capsule_type,
-                capsule_data,
-            } => make(
-                "CapsuleReceived",
-                vec![
-                    (
-                        "stream_id",
-                        stream_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "capsule_type",
-                        capsule_type.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "capsule_data",
-                        PyBytes::new(py, &capsule_data).into_any().unbind(),
-                    ),
-                ],
-            ),
-            ProtocolEvent::ConnectStreamClosed { stream_id } => make(
-                "ConnectStreamClosed",
-                vec![(
-                    "stream_id",
-                    stream_id.into_pyobject(py)?.into_any().unbind(),
-                )],
-            ),
-            ProtocolEvent::DatagramReceived { stream_id, data } => make(
-                "DatagramReceived",
-                vec![
-                    (
-                        "stream_id",
-                        stream_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    ("data", PyBytes::new(py, &data).into_any().unbind()),
-                ],
-            ),
-            ProtocolEvent::GoawayReceived => make("GoawayReceived", vec![]),
-            ProtocolEvent::HeadersReceived {
-                stream_id,
-                headers,
-                stream_ended,
-            } => make(
-                "HeadersReceived",
-                vec![
-                    (
-                        "stream_id",
-                        stream_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    ("headers", headers_to_py(py, headers)?.into_any().unbind()),
-                    (
-                        "stream_ended",
-                        PyBool::new(py, stream_ended).to_owned().into_any().unbind(),
-                    ),
-                ],
-            ),
-            ProtocolEvent::SettingsReceived { settings } => make(
-                "SettingsReceived",
-                vec![("settings", settings.into_pyobject(py)?.into_any().unbind())],
-            ),
-            ProtocolEvent::WebTransportStreamDataReceived {
-                session_id,
-                stream_id,
-                data,
-                stream_ended,
-            } => make(
-                "WebTransportStreamDataReceived",
-                vec![
-                    (
-                        "session_id",
-                        session_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "stream_id",
-                        stream_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    ("data", PyBytes::new(py, &data).into_any().unbind()),
-                    (
-                        "stream_ended",
-                        PyBool::new(py, stream_ended).to_owned().into_any().unbind(),
-                    ),
-                ],
-            ),
-            ProtocolEvent::ConnectionClose {
-                request_id,
-                error_code,
-                reason,
-            } => make(
-                "ConnectionClose",
-                vec![
-                    (
-                        "request_id",
-                        request_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "error_code",
-                        error_code.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    ("reason", reason.into_pyobject(py)?.into_any().unbind()),
-                ],
-            ),
-            ProtocolEvent::UserAcceptSession {
-                request_id,
-                session_id,
-            } => make(
-                "UserAcceptSession",
-                vec![
-                    (
-                        "request_id",
-                        request_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "session_id",
-                        session_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                ],
-            ),
-            ProtocolEvent::UserCloseSession {
-                request_id,
-                session_id,
-                error_code,
-                reason,
-            } => make(
-                "UserCloseSession",
-                vec![
-                    (
-                        "request_id",
-                        request_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "session_id",
-                        session_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "error_code",
-                        error_code.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    ("reason", reason.into_pyobject(py)?.into_any().unbind()),
-                ],
-            ),
-            ProtocolEvent::UserConnectionGracefulClose { request_id } => make(
-                "UserConnectionGracefulClose",
-                vec![(
-                    "request_id",
-                    request_id.into_pyobject(py)?.into_any().unbind(),
-                )],
-            ),
-            ProtocolEvent::UserCreateSession {
-                request_id,
-                path,
-                headers,
-            } => make(
-                "UserCreateSession",
-                vec![
-                    (
-                        "request_id",
-                        request_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    ("path", PyString::new(py, &path).into_any().unbind()),
-                    ("headers", headers_to_py(py, headers)?.into_any().unbind()),
-                ],
-            ),
-            ProtocolEvent::UserCreateStream {
-                request_id,
-                session_id,
-                is_unidirectional,
-            } => make(
-                "UserCreateStream",
-                vec![
-                    (
-                        "request_id",
-                        request_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "session_id",
-                        session_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "is_unidirectional",
-                        PyBool::new(py, is_unidirectional)
-                            .to_owned()
-                            .into_any()
-                            .unbind(),
-                    ),
-                ],
-            ),
-            ProtocolEvent::UserGetConnectionDiagnostics { request_id } => make(
-                "UserGetConnectionDiagnostics",
-                vec![(
-                    "request_id",
-                    request_id.into_pyobject(py)?.into_any().unbind(),
-                )],
-            ),
-            ProtocolEvent::UserGetSessionDiagnostics {
-                request_id,
-                session_id,
-            } => make(
-                "UserGetSessionDiagnostics",
-                vec![
-                    (
-                        "request_id",
-                        request_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "session_id",
-                        session_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                ],
-            ),
-            ProtocolEvent::UserGetStreamDiagnostics {
-                request_id,
-                stream_id,
-            } => make(
-                "UserGetStreamDiagnostics",
-                vec![
-                    (
-                        "request_id",
-                        request_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "stream_id",
-                        stream_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                ],
-            ),
-            ProtocolEvent::UserGrantDataCredit {
-                request_id,
-                session_id,
-                max_data,
-            } => make(
-                "UserGrantDataCredit",
-                vec![
-                    (
-                        "request_id",
-                        request_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "session_id",
-                        session_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    ("max_data", max_data.into_pyobject(py)?.into_any().unbind()),
-                ],
-            ),
-            ProtocolEvent::UserGrantStreamsCredit {
-                request_id,
-                session_id,
-                is_unidirectional,
-                max_streams,
-            } => make(
-                "UserGrantStreamsCredit",
-                vec![
-                    (
-                        "request_id",
-                        request_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "session_id",
-                        session_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "is_unidirectional",
-                        PyBool::new(py, is_unidirectional)
-                            .to_owned()
-                            .into_any()
-                            .unbind(),
-                    ),
-                    (
-                        "max_streams",
-                        max_streams.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                ],
-            ),
-            ProtocolEvent::UserRejectSession {
-                request_id,
-                session_id,
-                status_code,
-            } => make(
-                "UserRejectSession",
-                vec![
-                    (
-                        "request_id",
-                        request_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "session_id",
-                        session_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "status_code",
-                        status_code.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                ],
-            ),
-            ProtocolEvent::UserResetStream {
-                request_id,
-                stream_id,
-                error_code,
-            } => make(
-                "UserResetStream",
-                vec![
-                    (
-                        "request_id",
-                        request_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "stream_id",
-                        stream_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "error_code",
-                        error_code.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                ],
-            ),
-            ProtocolEvent::UserSendDatagram {
-                request_id,
-                session_id,
-                data,
-            } => make(
-                "UserSendDatagram",
-                vec![
-                    (
-                        "request_id",
-                        request_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "session_id",
-                        session_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    ("data", PyBytes::new(py, &data).into_any().unbind()),
-                ],
-            ),
-            ProtocolEvent::UserSendStreamData {
-                request_id,
-                stream_id,
-                data,
-                end_stream,
-            } => make(
-                "UserSendStreamData",
-                vec![
-                    (
-                        "request_id",
-                        request_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "stream_id",
-                        stream_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    ("data", PyBytes::new(py, &data).into_any().unbind()),
-                    (
-                        "end_stream",
-                        PyBool::new(py, end_stream).to_owned().into_any().unbind(),
-                    ),
-                ],
-            ),
-            ProtocolEvent::UserStopSending {
-                request_id,
-                stream_id,
-                error_code,
-            } => make(
-                "UserStopSending",
-                vec![
-                    (
-                        "request_id",
-                        request_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "stream_id",
-                        stream_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "error_code",
-                        error_code.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                ],
-            ),
-            ProtocolEvent::UserStreamRead {
-                request_id,
-                stream_id,
-                max_bytes,
-            } => make(
-                "UserStreamRead",
-                vec![
-                    (
-                        "request_id",
-                        request_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "stream_id",
-                        stream_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "max_bytes",
-                        max_bytes.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                ],
-            ),
         }
     }
 }
@@ -901,105 +201,44 @@ impl<'py> IntoPyObject<'py> for Effect {
     type Error = PyErr;
 
     fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
-        let events_mod = PyModule::import(py, "pywebtransport._protocol.events")?;
-
-        let make =
-            |cls_name: &str, kwargs: Vec<(&str, Py<PyAny>)>| -> PyResult<Bound<'py, PyAny>> {
-                let cls = events_mod.getattr(cls_name)?;
-                let dict = PyDict::new(py);
-                for (k, v) in kwargs {
-                    dict.set_item(k, v)?;
-                }
-
-                cls.call((), Some(&dict))
-            };
-
         match self {
-            Effect::CleanupH3Stream { stream_id } => make(
-                "CleanupH3Stream",
-                vec![(
-                    "stream_id",
-                    stream_id.into_pyobject(py)?.into_any().unbind(),
-                )],
-            ),
-            Effect::CloseQuicConnection { error_code, reason } => make(
-                "CloseQuicConnection",
-                vec![
-                    (
-                        "error_code",
-                        error_code.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    ("reason", reason.into_pyobject(py)?.into_any().unbind()),
-                ],
-            ),
-            Effect::CreateH3Session {
-                request_id,
-                path,
-                headers,
-            } => make(
-                "CreateH3Session",
-                vec![
-                    (
-                        "request_id",
-                        request_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    ("path", PyString::new(py, &path).into_any().unbind()),
-                    ("headers", headers_to_py(py, headers)?.into_any().unbind()),
-                ],
-            ),
-            Effect::CreateQuicStream {
-                request_id,
-                session_id,
-                is_unidirectional,
-            } => make(
-                "CreateQuicStream",
-                vec![
-                    (
-                        "request_id",
-                        request_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "session_id",
-                        session_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "is_unidirectional",
-                        PyBool::new(py, is_unidirectional)
-                            .to_owned()
-                            .into_any()
-                            .unbind(),
-                    ),
-                ],
-            ),
+            Effect::CleanupH3Stream { stream_id } => {
+                let payload = PyTuple::new(py, &[stream_id.into_pyobject(py)?.into_any()])?;
+
+                Ok(PyTuple::new(
+                    py,
+                    &[
+                        abi::CLEANUP_H3_STREAM.into_pyobject(py)?.into_any(),
+                        payload.into_any(),
+                    ],
+                )?
+                .into_any())
+            }
             Effect::EmitConnectionEvent {
                 connection_id,
                 event_type,
                 error_code,
                 reason,
-            } => make(
-                "EmitConnectionEvent",
-                vec![
-                    (
-                        "connection_id",
-                        PyString::new(py, &connection_id).into_any().unbind(),
-                    ),
-                    (
-                        "event_type",
-                        event_type.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    ("data", {
-                        let d = PyDict::new(py);
-                        d.set_item("connection_id", &connection_id)?;
-                        if let Some(ec) = error_code {
-                            d.set_item("error_code", ec)?;
-                        }
-                        if let Some(r) = reason {
-                            d.set_item("reason", r)?;
-                        }
-                        d.into_any().unbind()
-                    }),
-                ],
-            ),
+            } => {
+                let payload = PyTuple::new(
+                    py,
+                    &[
+                        connection_id.into_pyobject(py)?.into_any(),
+                        event_type.into_pyobject(py)?.into_any(),
+                        error_code.into_pyobject(py)?.into_any(),
+                        reason.into_pyobject(py)?.into_any(),
+                    ],
+                )?;
+
+                Ok(PyTuple::new(
+                    py,
+                    &[
+                        abi::EMIT_CONNECTION_EVENT.into_pyobject(py)?.into_any(),
+                        payload.into_any(),
+                    ],
+                )?
+                .into_any())
+            }
             Effect::EmitSessionEvent {
                 session_id,
                 event_type,
@@ -1012,52 +251,43 @@ impl<'py> IntoPyObject<'py> for Effect {
                 ready_at,
                 error_code,
                 reason,
-            } => make(
-                "EmitSessionEvent",
-                vec![
-                    (
-                        "session_id",
-                        session_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "event_type",
-                        event_type.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    ("data", {
-                        let d = PyDict::new(py);
-                        d.set_item("session_id", session_id)?;
-                        if let Some(p) = path {
-                            d.set_item("path", p)?;
-                        }
-                        if let Some(h) = headers {
-                            let list = headers_to_py(py, h)?;
-                            d.set_item("headers", list)?;
-                        }
-                        if let Some(dat) = data {
-                            d.set_item("data", PyBytes::new(py, &dat))?;
-                        }
-                        if let Some(uni) = is_unidirectional {
-                            d.set_item("is_unidirectional", uni)?;
-                        }
-                        if let Some(md) = max_data {
-                            d.set_item("max_data", md)?;
-                        }
-                        if let Some(ms) = max_streams {
-                            d.set_item("max_streams", ms)?;
-                        }
-                        if let Some(ra) = ready_at {
-                            d.set_item("ready_at", ra)?;
-                        }
-                        if let Some(ec) = error_code {
-                            d.set_item("error_code", ec)?;
-                        }
-                        if let Some(r) = reason {
-                            d.set_item("reason", r)?;
-                        }
-                        d.into_any().unbind()
-                    }),
-                ],
-            ),
+            } => {
+                let py_headers = match headers {
+                    Some(h) => headers_to_py(py, &h)?.into_any(),
+                    None => py.None().into_bound(py).into_any(),
+                };
+
+                let py_data = match data {
+                    Some(d) => PyBytes::new(py, &d).into_any(),
+                    None => py.None().into_bound(py).into_any(),
+                };
+
+                let payload = PyTuple::new(
+                    py,
+                    &[
+                        session_id.into_pyobject(py)?.into_any(),
+                        event_type.into_pyobject(py)?.into_any(),
+                        path.into_pyobject(py)?.into_any(),
+                        py_headers,
+                        py_data,
+                        is_unidirectional.into_pyobject(py)?.into_any(),
+                        max_data.into_pyobject(py)?.into_any(),
+                        max_streams.into_pyobject(py)?.into_any(),
+                        ready_at.into_pyobject(py)?.into_any(),
+                        error_code.into_pyobject(py)?.into_any(),
+                        reason.into_pyobject(py)?.into_any(),
+                    ],
+                )?;
+
+                Ok(PyTuple::new(
+                    py,
+                    &[
+                        abi::EMIT_SESSION_EVENT.into_pyobject(py)?.into_any(),
+                        payload.into_any(),
+                    ],
+                )?
+                .into_any())
+            }
             Effect::EmitStreamEvent {
                 stream_id,
                 event_type,
@@ -1065,242 +295,126 @@ impl<'py> IntoPyObject<'py> for Effect {
                 direction,
                 is_peer_initiated,
                 error_code,
-            } => make(
-                "EmitStreamEvent",
-                vec![
-                    (
-                        "stream_id",
-                        stream_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "event_type",
-                        event_type.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    ("data", {
-                        let d = PyDict::new(py);
-                        d.set_item("stream_id", stream_id)?;
-                        if let Some(sid) = session_id {
-                            d.set_item("session_id", sid)?;
-                        }
-                        if let Some(dir) = direction {
-                            d.set_item("direction", dir.into_pyobject(py)?.into_any().unbind())?;
-                        }
-                        if let Some(is_remote) = is_peer_initiated {
-                            d.set_item("is_remote", is_remote)?;
-                        }
-                        if let Some(ec) = error_code {
-                            d.set_item("error_code", ec)?;
-                        }
-                        d.into_any().unbind()
-                    }),
-                ],
-            ),
-            Effect::LogH3Frame {
-                category,
-                event,
-                data,
             } => {
-                let json_mod = PyModule::import(py, "json")?;
-                let dict_data = json_mod.call_method1("loads", (data,))?;
-
-                make(
-                    "LogH3Frame",
-                    vec![
-                        ("category", PyString::new(py, &category).into_any().unbind()),
-                        ("event", PyString::new(py, &event).into_any().unbind()),
-                        ("data", dict_data.into_any().unbind()),
+                let payload = PyTuple::new(
+                    py,
+                    &[
+                        stream_id.into_pyobject(py)?.into_any(),
+                        event_type.into_pyobject(py)?.into_any(),
+                        session_id.into_pyobject(py)?.into_any(),
+                        direction.into_pyobject(py)?.into_any(),
+                        is_peer_initiated.into_pyobject(py)?.into_any(),
+                        error_code.into_pyobject(py)?.into_any(),
                     ],
-                )
+                )?;
+
+                Ok(PyTuple::new(
+                    py,
+                    &[
+                        abi::EMIT_STREAM_EVENT.into_pyobject(py)?.into_any(),
+                        payload.into_any(),
+                    ],
+                )?
+                .into_any())
             }
             Effect::NotifyRequestDone { request_id, result } => {
                 let py_result = match result {
-                    RequestResult::None => py.None().into_any(),
+                    RequestResult::None => py.None().into_bound(py).into_any(),
                     RequestResult::SessionId(sid) | RequestResult::StreamId(sid) => {
-                        sid.into_pyobject(py)?.into_any().unbind()
+                        sid.into_pyobject(py)?.into_any()
                     }
-                    RequestResult::ReadData(bytes) => PyBytes::new(py, &bytes).into_any().unbind(),
-                    RequestResult::Diagnostics(s) => {
-                        let json_mod = PyModule::import(py, "json")?;
-                        json_mod.call_method1("loads", (s,))?.into_any().unbind()
+                    RequestResult::ReadData(bytes) => PyBytes::new(py, &bytes).into_any(),
+                    RequestResult::ConnectionDiagnostics(diag) => {
+                        connection_diagnostics_to_py(py, &diag)?
                     }
+                    RequestResult::SessionDiagnostics(diag) => {
+                        session_diagnostics_to_py(py, &diag)?
+                    }
+                    RequestResult::StreamDiagnostics(diag) => stream_diagnostics_to_py(py, &diag)?,
                 };
 
-                make(
-                    "NotifyRequestDone",
-                    vec![
-                        (
-                            "request_id",
-                            request_id.into_pyobject(py)?.into_any().unbind(),
-                        ),
-                        ("result", py_result),
+                let payload =
+                    PyTuple::new(py, &[request_id.into_pyobject(py)?.into_any(), py_result])?;
+
+                Ok(PyTuple::new(
+                    py,
+                    &[
+                        abi::NOTIFY_REQUEST_DONE.into_pyobject(py)?.into_any(),
+                        payload.into_any(),
                     ],
-                )
+                )?
+                .into_any())
             }
             Effect::NotifyRequestFailed {
                 request_id,
                 source,
                 error_code,
                 reason,
-            } => make(
-                "NotifyRequestFailed",
-                vec![
-                    (
-                        "request_id",
-                        request_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "exception",
-                        create_py_exception(py, source, error_code, reason)
-                            .value(py)
-                            .clone()
-                            .into_any()
-                            .unbind(),
-                    ),
-                ],
-            ),
-            Effect::ProcessProtocolEvent { event } => make(
-                "ProcessProtocolEvent",
-                vec![("event", (*event).into_pyobject(py)?.into_any().unbind())],
-            ),
-            Effect::RescheduleQuicTimer => make("RescheduleQuicTimer", vec![]),
-            Effect::ResetQuicStream {
-                stream_id,
-                error_code,
-            } => make(
-                "ResetQuicStream",
-                vec![
-                    (
-                        "stream_id",
-                        stream_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "error_code",
-                        error_code.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                ],
-            ),
-            Effect::SendH3Capsule {
-                stream_id,
-                capsule_type,
-                capsule_data,
-                end_stream,
-            } => make(
-                "SendH3Capsule",
-                vec![
-                    (
-                        "stream_id",
-                        stream_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "capsule_type",
-                        capsule_type.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "capsule_data",
-                        PyBytes::new(py, &capsule_data).into_any().unbind(),
-                    ),
-                    (
-                        "end_stream",
-                        PyBool::new(py, end_stream).to_owned().into_any().unbind(),
-                    ),
-                ],
-            ),
-            Effect::SendH3Datagram { stream_id, data } => make(
-                "SendH3Datagram",
-                vec![
-                    (
-                        "stream_id",
-                        stream_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    ("data", PyBytes::new(py, &data).into_any().unbind()),
-                ],
-            ),
-            Effect::SendH3Goaway => make("SendH3Goaway", vec![]),
-            Effect::SendH3Headers {
-                stream_id,
-                status,
-                end_stream,
-            } => make(
-                "SendH3Headers",
-                vec![
-                    (
-                        "stream_id",
-                        stream_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    ("status", status.into_pyobject(py)?.into_any().unbind()),
-                    (
-                        "end_stream",
-                        PyBool::new(py, end_stream).to_owned().into_any().unbind(),
-                    ),
-                ],
-            ),
-            Effect::SendQuicData {
-                stream_id,
-                data,
-                end_stream,
-            } => make(
-                "SendQuicData",
-                vec![
-                    (
-                        "stream_id",
-                        stream_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    ("data", PyBytes::new(py, &data).into_any().unbind()),
-                    (
-                        "end_stream",
-                        PyBool::new(py, end_stream).to_owned().into_any().unbind(),
-                    ),
-                ],
-            ),
-            Effect::SendQuicDatagram { data } => make(
-                "SendQuicDatagram",
-                vec![("data", PyBytes::new(py, &data).into_any().unbind())],
-            ),
-            Effect::StopQuicStream {
-                stream_id,
-                error_code,
-            } => make(
-                "StopQuicStream",
-                vec![
-                    (
-                        "stream_id",
-                        stream_id.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                    (
-                        "error_code",
-                        error_code.into_pyobject(py)?.into_any().unbind(),
-                    ),
-                ],
-            ),
-            Effect::TriggerQuicTimer => make("TriggerQuicTimer", vec![]),
+            } => {
+                let py_exc = create_py_exception(py, source, error_code, reason);
+                let payload = PyTuple::new(
+                    py,
+                    &[
+                        request_id.into_pyobject(py)?.into_any(),
+                        py_exc.into_bound_py_any(py)?,
+                    ],
+                )?;
+
+                Ok(PyTuple::new(
+                    py,
+                    &[
+                        abi::NOTIFY_REQUEST_FAILED.into_pyobject(py)?.into_any(),
+                        payload.into_any(),
+                    ],
+                )?
+                .into_any())
+            }
+            _ => Err(PyRuntimeError::new_err(format!(
+                "Internal engine error: non-FFI effect leaked to Python boundary: {self:?}"
+            ))),
         }
     }
 }
 
-// Exception detail extraction.
-fn extract_exception_details(exc: &Bound<'_, PyAny>) -> (String, Option<u64>) {
-    let reason = exc.to_string();
-    let error_code = exc
-        .getattr("error_code")
-        .ok()
-        .and_then(|v| v.extract::<Option<u64>>().ok())
-        .flatten();
-    (reason, error_code)
+fn connection_diagnostics_to_py<'py>(
+    py: Python<'py>,
+    diag: &ConnectionDiagnostics,
+) -> PyResult<Bound<'py, PyAny>> {
+    let dict = PyDict::new(py);
+    dict.set_item("connection_id", &diag.connection_id)?;
+    dict.set_item("is_client", diag.is_client)?;
+    dict.set_item("state", diag.state)?;
+    dict.set_item("max_datagram_size", diag.max_datagram_size)?;
+    dict.set_item(
+        "remote_max_datagram_frame_size",
+        diag.remote_max_datagram_frame_size,
+    )?;
+    dict.set_item("handshake_complete", diag.handshake_complete)?;
+    dict.set_item("peer_settings_received", diag.peer_settings_received)?;
+    dict.set_item("local_goaway_sent", diag.local_goaway_sent)?;
+    dict.set_item("session_count", diag.session_count)?;
+    dict.set_item("stream_count", diag.stream_count)?;
+    dict.set_item("pending_request_count", diag.pending_request_count)?;
+    dict.set_item("early_event_count", diag.early_event_count)?;
+    dict.set_item("connected_at", diag.connected_at)?;
+    dict.set_item("closed_at", diag.closed_at)?;
+    Ok(dict.into_any())
 }
 
-// Rust Headers to Python list conversion.
-fn headers_to_py(py: Python<'_>, headers: Headers) -> PyResult<Bound<'_, PyList>> {
+fn headers_to_py<'py>(py: Python<'py>, headers: &Headers) -> PyResult<Bound<'py, PyList>> {
     let list = PyList::empty(py);
+
     for (k, v) in headers {
-        let key = PyBytes::new(py, &k);
-        let val = PyBytes::new(py, &v);
+        let key = PyBytes::new(py, k);
+        let val = PyBytes::new(py, v);
         let tuple = PyTuple::new(py, &[key, val])?;
+
         list.append(tuple)?;
     }
+
     Ok(list)
 }
 
-// Single header item processing.
 fn process_header_item(
     key: &Bound<'_, PyAny>,
     value: &Bound<'_, PyAny>,
@@ -1318,4 +432,92 @@ fn process_header_item(
     acc.push((key_lower, val_bytes));
 
     Ok(())
+}
+
+fn session_diagnostics_to_py<'py>(
+    py: Python<'py>,
+    diag: &SessionDiagnostics,
+) -> PyResult<Bound<'py, PyAny>> {
+    let dict = PyDict::new(py);
+    dict.set_item("session_id", diag.session_id)?;
+    dict.set_item("state", diag.state)?;
+    dict.set_item("path", &diag.path)?;
+    dict.set_item("headers", headers_to_py(py, &diag.headers)?)?;
+    dict.set_item("created_at", diag.created_at)?;
+    dict.set_item("local_max_data", diag.local_max_data)?;
+    dict.set_item("local_data_sent", diag.local_data_sent)?;
+    dict.set_item("local_data_consumed", diag.local_data_consumed)?;
+    dict.set_item("peer_max_data", diag.peer_max_data)?;
+    dict.set_item("peer_data_sent", diag.peer_data_sent)?;
+    dict.set_item("local_max_streams_bidi", diag.local_max_streams_bidi)?;
+    dict.set_item("local_streams_bidi_opened", diag.local_streams_bidi_opened)?;
+    dict.set_item("peer_max_streams_bidi", diag.peer_max_streams_bidi)?;
+    dict.set_item("peer_streams_bidi_opened", diag.peer_streams_bidi_opened)?;
+    dict.set_item("peer_streams_bidi_closed", diag.peer_streams_bidi_closed)?;
+    dict.set_item("local_max_streams_uni", diag.local_max_streams_uni)?;
+    dict.set_item("local_streams_uni_opened", diag.local_streams_uni_opened)?;
+    dict.set_item("peer_max_streams_uni", diag.peer_max_streams_uni)?;
+    dict.set_item("peer_streams_uni_opened", diag.peer_streams_uni_opened)?;
+    dict.set_item("peer_streams_uni_closed", diag.peer_streams_uni_closed)?;
+
+    let pending_bidi = PyList::empty(py);
+    for v in &diag.pending_bidi_stream_requests {
+        pending_bidi.append(v.into_pyobject(py)?)?;
+    }
+    dict.set_item("pending_bidi_stream_requests", pending_bidi)?;
+
+    let pending_uni = PyList::empty(py);
+    for v in &diag.pending_uni_stream_requests {
+        pending_uni.append(v.into_pyobject(py)?)?;
+    }
+    dict.set_item("pending_uni_stream_requests", pending_uni)?;
+
+    dict.set_item("datagrams_sent", diag.datagrams_sent)?;
+    dict.set_item("datagram_bytes_sent", diag.datagram_bytes_sent)?;
+    dict.set_item("datagrams_received", diag.datagrams_received)?;
+    dict.set_item("datagram_bytes_received", diag.datagram_bytes_received)?;
+
+    let mut active_streams_vec: Vec<_> = diag.active_streams.iter().copied().collect();
+    active_streams_vec.sort_unstable();
+    let active_streams_list = PyList::empty(py);
+    for v in active_streams_vec {
+        active_streams_list.append(v.into_pyobject(py)?)?;
+    }
+    dict.set_item("active_streams", active_streams_list)?;
+
+    let mut blocked_streams_vec: Vec<_> = diag.blocked_streams.iter().copied().collect();
+    blocked_streams_vec.sort_unstable();
+    let blocked_streams_list = PyList::empty(py);
+    for v in blocked_streams_vec {
+        blocked_streams_list.append(v.into_pyobject(py)?)?;
+    }
+    dict.set_item("blocked_streams", blocked_streams_list)?;
+
+    dict.set_item("close_code", diag.close_code)?;
+    dict.set_item("close_reason", &diag.close_reason)?;
+    dict.set_item("closed_at", diag.closed_at)?;
+    dict.set_item("ready_at", diag.ready_at)?;
+
+    Ok(dict.into_any())
+}
+
+fn stream_diagnostics_to_py<'py>(
+    py: Python<'py>,
+    diag: &StreamDiagnostics,
+) -> PyResult<Bound<'py, PyAny>> {
+    let dict = PyDict::new(py);
+    dict.set_item("stream_id", diag.stream_id)?;
+    dict.set_item("session_id", diag.session_id)?;
+    dict.set_item("direction", diag.direction)?;
+    dict.set_item("state", diag.state)?;
+    dict.set_item("is_peer_initiated", diag.is_peer_initiated)?;
+    dict.set_item("created_at", diag.created_at)?;
+    dict.set_item("bytes_sent", diag.bytes_sent)?;
+    dict.set_item("bytes_received", diag.bytes_received)?;
+    dict.set_item("read_buffer_size", diag.read_buffer_size)?;
+    dict.set_item("write_buffer_size", diag.write_buffer_size)?;
+    dict.set_item("close_code", diag.close_code)?;
+    dict.set_item("close_reason", &diag.close_reason)?;
+    dict.set_item("closed_at", diag.closed_at)?;
+    Ok(dict.into_any())
 }

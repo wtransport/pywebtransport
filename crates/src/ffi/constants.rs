@@ -13,116 +13,6 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         constants::WEBTRANSPORT_DEFAULT_PORT,
     )?;
     m.add("WEBTRANSPORT_SCHEME", constants::WEBTRANSPORT_SCHEME)?;
-    m.add("BIDIRECTIONAL_STREAM", constants::BIDIRECTIONAL_STREAM)?;
-    m.add(
-        "CLOSE_WEBTRANSPORT_SESSION_TYPE",
-        constants::CLOSE_WEBTRANSPORT_SESSION_TYPE,
-    )?;
-    m.add(
-        "DRAIN_WEBTRANSPORT_SESSION_TYPE",
-        constants::DRAIN_WEBTRANSPORT_SESSION_TYPE,
-    )?;
-    m.add(
-        "H3_FRAME_TYPE_CANCEL_PUSH",
-        constants::H3_FRAME_TYPE_CANCEL_PUSH,
-    )?;
-    m.add("H3_FRAME_TYPE_DATA", constants::H3_FRAME_TYPE_DATA)?;
-    m.add("H3_FRAME_TYPE_GOAWAY", constants::H3_FRAME_TYPE_GOAWAY)?;
-    m.add("H3_FRAME_TYPE_HEADERS", constants::H3_FRAME_TYPE_HEADERS)?;
-    m.add(
-        "H3_FRAME_TYPE_MAX_PUSH_ID",
-        constants::H3_FRAME_TYPE_MAX_PUSH_ID,
-    )?;
-    m.add(
-        "H3_FRAME_TYPE_PUSH_PROMISE",
-        constants::H3_FRAME_TYPE_PUSH_PROMISE,
-    )?;
-    m.add("H3_FRAME_TYPE_SETTINGS", constants::H3_FRAME_TYPE_SETTINGS)?;
-    m.add(
-        "H3_FRAME_TYPE_WEBTRANSPORT_STREAM",
-        constants::H3_FRAME_TYPE_WEBTRANSPORT_STREAM,
-    )?;
-    m.add("H3_STREAM_TYPE_CONTROL", constants::H3_STREAM_TYPE_CONTROL)?;
-    m.add("H3_STREAM_TYPE_PUSH", constants::H3_STREAM_TYPE_PUSH)?;
-    m.add(
-        "H3_STREAM_TYPE_QPACK_DECODER",
-        constants::H3_STREAM_TYPE_QPACK_DECODER,
-    )?;
-    m.add(
-        "H3_STREAM_TYPE_QPACK_ENCODER",
-        constants::H3_STREAM_TYPE_QPACK_ENCODER,
-    )?;
-    m.add(
-        "H3_STREAM_TYPE_WEBTRANSPORT",
-        constants::H3_STREAM_TYPE_WEBTRANSPORT,
-    )?;
-    m.add("MAX_CLOSE_REASON_BYTES", constants::MAX_CLOSE_REASON_BYTES)?;
-    m.add("MAX_DATAGRAM_SIZE", constants::MAX_DATAGRAM_SIZE)?;
-    m.add(
-        "MAX_PROTOCOL_STREAMS_LIMIT",
-        constants::MAX_PROTOCOL_STREAMS_LIMIT,
-    )?;
-    m.add("MAX_STREAM_ID", constants::MAX_STREAM_ID)?;
-    m.add(
-        "QPACK_DECODER_MAX_BLOCKED_STREAMS",
-        constants::QPACK_DECODER_MAX_BLOCKED_STREAMS,
-    )?;
-    m.add(
-        "QPACK_DECODER_MAX_TABLE_CAPACITY",
-        constants::QPACK_DECODER_MAX_TABLE_CAPACITY,
-    )?;
-    m.add(
-        "SETTINGS_ENABLE_CONNECT_PROTOCOL",
-        constants::SETTINGS_ENABLE_CONNECT_PROTOCOL,
-    )?;
-    m.add("SETTINGS_H3_DATAGRAM", constants::SETTINGS_H3_DATAGRAM)?;
-    m.add(
-        "SETTINGS_QPACK_BLOCKED_STREAMS",
-        constants::SETTINGS_QPACK_BLOCKED_STREAMS,
-    )?;
-    m.add(
-        "SETTINGS_QPACK_MAX_TABLE_CAPACITY",
-        constants::SETTINGS_QPACK_MAX_TABLE_CAPACITY,
-    )?;
-    m.add(
-        "SETTINGS_WT_INITIAL_MAX_DATA",
-        constants::SETTINGS_WT_INITIAL_MAX_DATA,
-    )?;
-    m.add(
-        "SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI",
-        constants::SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI,
-    )?;
-    m.add(
-        "SETTINGS_WT_INITIAL_MAX_STREAMS_UNI",
-        constants::SETTINGS_WT_INITIAL_MAX_STREAMS_UNI,
-    )?;
-    m.add("UNIDIRECTIONAL_STREAM", constants::UNIDIRECTIONAL_STREAM)?;
-    m.add("WT_DATA_BLOCKED_TYPE", constants::WT_DATA_BLOCKED_TYPE)?;
-    m.add("WT_MAX_DATA_TYPE", constants::WT_MAX_DATA_TYPE)?;
-    m.add(
-        "WT_MAX_STREAM_DATA_TYPE",
-        constants::WT_MAX_STREAM_DATA_TYPE,
-    )?;
-    m.add(
-        "WT_MAX_STREAMS_BIDI_TYPE",
-        constants::WT_MAX_STREAMS_BIDI_TYPE,
-    )?;
-    m.add(
-        "WT_MAX_STREAMS_UNI_TYPE",
-        constants::WT_MAX_STREAMS_UNI_TYPE,
-    )?;
-    m.add(
-        "WT_STREAM_DATA_BLOCKED_TYPE",
-        constants::WT_STREAM_DATA_BLOCKED_TYPE,
-    )?;
-    m.add(
-        "WT_STREAMS_BLOCKED_BIDI_TYPE",
-        constants::WT_STREAMS_BLOCKED_BIDI_TYPE,
-    )?;
-    m.add(
-        "WT_STREAMS_BLOCKED_UNI_TYPE",
-        constants::WT_STREAMS_BLOCKED_UNI_TYPE,
-    )?;
     m.add("DEFAULT_ALPN_PROTOCOLS", constants::DEFAULT_ALPN_PROTOCOLS)?;
     m.add("DEFAULT_BIND_HOST", constants::DEFAULT_BIND_HOST)?;
     m.add(
@@ -139,14 +29,18 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         constants::DEFAULT_CONGESTION_CONTROL_ALGORITHM,
     )?;
     m.add(
-        "DEFAULT_CONNECT_TIMEOUT",
-        constants::DEFAULT_CONNECT_TIMEOUT,
-    )?;
-    m.add(
         "DEFAULT_CONNECTION_IDLE_TIMEOUT",
         constants::DEFAULT_CONNECTION_IDLE_TIMEOUT,
     )?;
+    m.add(
+        "DEFAULT_CONNECT_TIMEOUT",
+        constants::DEFAULT_CONNECT_TIMEOUT,
+    )?;
     m.add("DEFAULT_DEV_PORT", constants::DEFAULT_DEV_PORT)?;
+    m.add(
+        "DEFAULT_ENABLE_STATELESS_RETRY",
+        constants::DEFAULT_ENABLE_STATELESS_RETRY,
+    )?;
     m.add(
         "DEFAULT_FLOW_CONTROL_WINDOW_AUTO_SCALE",
         constants::DEFAULT_FLOW_CONTROL_WINDOW_AUTO_SCALE,
@@ -239,6 +133,10 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add(
         "DEFAULT_STREAM_CREATION_TIMEOUT",
         constants::DEFAULT_STREAM_CREATION_TIMEOUT,
+    )?;
+    m.add(
+        "DEFAULT_TRANSPORT_STREAMS_CAP",
+        constants::DEFAULT_TRANSPORT_STREAMS_CAP,
     )?;
     m.add("DEFAULT_WRITE_TIMEOUT", constants::DEFAULT_WRITE_TIMEOUT)?;
     m.add(
@@ -385,6 +283,11 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         constants::ERR_WT_FLOW_CONTROL_ERROR,
     )?;
     m.add("ERR_WT_SESSION_GONE", constants::ERR_WT_SESSION_GONE)?;
+    m.add("MAX_DATAGRAM_SIZE", constants::MAX_DATAGRAM_SIZE)?;
+    m.add(
+        "MAX_PROTOCOL_STREAMS_LIMIT",
+        constants::MAX_PROTOCOL_STREAMS_LIMIT,
+    )?;
 
     Ok(())
 }

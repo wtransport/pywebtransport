@@ -40,21 +40,21 @@ fn test_diagnose_snapshot_generation_success(fixture_stream: Stream) {
     assert!(matches!(
         effects.as_slice(),
         [Effect::NotifyRequestDone {
-            result: RequestResult::Diagnostics(_),
+            result: RequestResult::StreamDiagnostics(_),
             ..
         }]
     ));
 
     if let [
         Effect::NotifyRequestDone {
-            result: RequestResult::Diagnostics(json),
+            result: RequestResult::StreamDiagnostics(diag),
             ..
         },
     ] = effects.as_slice()
     {
-        assert!(json.contains("\"stream_id\":0"));
-        assert!(json.contains("\"state\":\"open\""));
-        assert!(json.contains("\"is_peer_initiated\":false"));
+        assert_eq!(diag.stream_id, 0);
+        assert_eq!(diag.state, StreamState::Open);
+        assert!(!diag.is_peer_initiated);
     }
 }
 
@@ -67,19 +67,19 @@ fn test_diagnose_with_close_reason(mut fixture_stream: Stream) {
     assert!(matches!(
         effects.as_slice(),
         [Effect::NotifyRequestDone {
-            result: RequestResult::Diagnostics(_),
+            result: RequestResult::StreamDiagnostics(_),
             ..
         }]
     ));
 
     if let [
         Effect::NotifyRequestDone {
-            result: RequestResult::Diagnostics(json),
+            result: RequestResult::StreamDiagnostics(diag),
             ..
         },
     ] = effects.as_slice()
     {
-        assert!(json.contains("\"close_reason\":\"Application Error\""));
+        assert_eq!(diag.close_reason.as_deref(), Some("Application Error"));
     }
 }
 
@@ -175,7 +175,7 @@ fn test_new_stream_initialization_success(fixture_stream: Stream) {
 
 #[rstest]
 fn test_read_all_buffered_data_using_zero_size_success(mut fixture_stream: Stream) {
-    fixture_stream.unread(Bytes::from_static(b"buffered"));
+    fixture_stream.recv_data(Bytes::from_static(b"buffered"), false, 1.0);
 
     let req_id = 1;
     let (effects, consumed) = fixture_stream.read(req_id, 0);
@@ -196,7 +196,7 @@ fn test_read_all_buffered_data_using_zero_size_success(mut fixture_stream: Strea
 
 #[rstest]
 fn test_read_immediate_from_buffer_success(mut fixture_stream: Stream) {
-    fixture_stream.unread(Bytes::from_static(b"buffered"));
+    fixture_stream.recv_data(Bytes::from_static(b"buffered"), false, 1.0);
 
     let req_id = 1;
     let (effects, consumed) = fixture_stream.read(req_id, 100);
@@ -573,6 +573,30 @@ fn test_reset_on_half_closed_remote_transitions_to_closed_success(mut fixture_st
 }
 
 #[rstest]
+fn test_reset_receive_only_fails() {
+    let mut stream = Stream::new(
+        0,
+        0,
+        StreamDirection::ReceiveOnly,
+        false,
+        0.0,
+        MAX_READ_BUF,
+        MAX_WRITE_BUF,
+    );
+
+    let effects = stream.reset(1, 404, 1.0);
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Stream,
+            error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
+            ..
+        }]
+    ));
+}
+
+#[rstest]
 fn test_stop_local_command_on_closed_stream_idempotency_success(mut fixture_stream: Stream) {
     fixture_stream.state = StreamState::Closed;
     let effects = fixture_stream.stop(1, 500, 1.0);
@@ -633,9 +657,33 @@ fn test_stop_on_half_closed_local_transitions_to_closed_success(mut fixture_stre
 }
 
 #[rstest]
+fn test_stop_send_only_fails() {
+    let mut stream = Stream::new(
+        0,
+        0,
+        StreamDirection::SendOnly,
+        false,
+        0.0,
+        MAX_READ_BUF,
+        MAX_WRITE_BUF,
+    );
+
+    let effects = stream.stop(1, 500, 1.0);
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Stream,
+            error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
+            ..
+        }]
+    ));
+}
+
+#[rstest]
 fn test_take_data_exact_chunk_match(mut fixture_stream: Stream) {
     let chunk = Bytes::from(vec![0u8; 50]);
-    fixture_stream.unread(chunk);
+    fixture_stream.recv_data(chunk, false, 1.0);
 
     let (effects, consumed) = fixture_stream.read(1, 50);
 
@@ -655,8 +703,8 @@ fn test_take_data_exact_chunk_match(mut fixture_stream: Stream) {
 
 #[rstest]
 fn test_take_data_multi_chunk_merge_success(mut fixture_stream: Stream) {
-    fixture_stream.unread(Bytes::from_static(b"world"));
-    fixture_stream.unread(Bytes::from_static(b"hello "));
+    fixture_stream.recv_data(Bytes::from_static(b"hello "), false, 1.0);
+    fixture_stream.recv_data(Bytes::from_static(b"world"), false, 1.0);
 
     let (effects, consumed) = fixture_stream.read(1, 11);
 
@@ -685,7 +733,7 @@ fn test_take_data_multi_chunk_merge_success(mut fixture_stream: Stream) {
 #[rstest]
 fn test_take_data_slicing_optimization_success(mut fixture_stream: Stream) {
     let chunk = Bytes::from(vec![0u8; 100]);
-    fixture_stream.unread(chunk);
+    fixture_stream.recv_data(chunk, false, 1.0);
 
     let (effects, consumed) = fixture_stream.read(1, 50);
 

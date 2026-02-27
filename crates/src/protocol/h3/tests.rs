@@ -817,6 +817,39 @@ fn test_recv_request_data_incomplete_frame_buffered() {
 }
 
 #[test]
+fn test_recv_request_data_push_promise_frame_fails() {
+    let mut h3 = create_h3(true);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    let stream_id = 0;
+    h3.settings_received = true;
+
+    let mut data = BytesMut::new();
+    data.put_u8(0x05);
+    data.put_u8(0x00);
+
+    let (_, effects) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: data.freeze(),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
+        assert_eq!(*error_code, ERR_H3_FRAME_UNEXPECTED);
+    } else {
+        assert_eq!(
+            effects.len(),
+            0,
+            "Expected CloseQuicConnection effect for PUSH_PROMISE frame"
+        );
+    }
+}
+
+#[test]
 fn test_recv_request_data_unknown_frame_ignored() {
     let mut h3 = create_h3(true);
     let mock = MockConnectionLayout {
@@ -867,6 +900,47 @@ fn test_recv_request_settings_frame_fails() {
         assert_eq!(*error_code, ERR_H3_FRAME_UNEXPECTED);
     } else {
         assert_eq!(effects.len(), 0);
+    }
+}
+
+#[test]
+fn test_recv_uni_stream_cancel_push_frame_fails() {
+    let mut h3 = create_h3(true);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    h3.settings_received = true;
+
+    h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id: 3,
+            data: Bytes::from(vec![0x00]),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    let mut data = BytesMut::new();
+    data.put_u8(0x03);
+    data.put_u8(0x00);
+
+    let (_, effects) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id: 3,
+            data: data.freeze(),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
+        assert_eq!(*error_code, ERR_H3_FRAME_UNEXPECTED);
+    } else {
+        assert_eq!(
+            effects.len(),
+            0,
+            "Expected CloseQuicConnection effect for CANCEL_PUSH"
+        );
     }
 }
 
@@ -956,11 +1030,8 @@ fn test_recv_uni_stream_data_identifies_control_stream() {
 
     let (_, effects) = h3.handle_transport_event(&event, mock.as_connection());
 
-    assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::LogH3Frame { event, .. } if event == "stream_type_set"))
-    );
+    assert!(effects.is_empty());
+    assert_eq!(h3.peer_control_stream_id, Some(stream_id));
 }
 
 #[test]
@@ -1050,6 +1121,47 @@ fn test_recv_uni_stream_duplicate_control_failure() {
 }
 
 #[test]
+fn test_recv_uni_stream_max_push_id_frame_fails() {
+    let mut h3 = create_h3(true);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    h3.settings_received = true;
+
+    h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id: 3,
+            data: Bytes::from(vec![0x00]),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    let mut data = BytesMut::new();
+    data.put_u8(0x0D);
+    data.put_u8(0x00);
+
+    let (_, effects) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id: 3,
+            data: data.freeze(),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
+        assert_eq!(*error_code, ERR_H3_FRAME_UNEXPECTED);
+    } else {
+        assert_eq!(
+            effects.len(),
+            0,
+            "Expected CloseQuicConnection effect for MAX_PUSH_ID"
+        );
+    }
+}
+
+#[test]
 fn test_recv_uni_stream_push_rejected() {
     let mut h3 = create_h3(true);
     let mock = MockConnectionLayout {
@@ -1093,11 +1205,8 @@ fn test_recv_uni_stream_qpack_decoder_feed() {
         end_stream: false,
     };
     let (_, effects) = h3.handle_transport_event(&event, mock.as_connection());
-    assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::LogH3Frame { event, .. } if event == "stream_type_set"))
-    );
+    assert!(effects.is_empty());
+    assert_eq!(h3.peer_decoder_stream_id, Some(stream_id));
 }
 
 #[test]
@@ -1114,11 +1223,7 @@ fn test_recv_uni_stream_unknown_type_logging() {
         end_stream: false,
     };
     let (_, effects) = h3.handle_transport_event(&event, mock.as_connection());
-    assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::LogH3Frame { .. }))
-    );
+    assert!(effects.is_empty());
 }
 
 #[test]

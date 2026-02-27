@@ -2,71 +2,33 @@
 
 from __future__ import annotations
 
-from typing import final
+from typing import Any, Self, final
 
-from pywebtransport._protocol.events import Effect, ProtocolEvent
 from pywebtransport.config import ClientConfig, ServerConfig
 from pywebtransport.types import Buffer
+
+ABI_VERSION: int
 
 ALPN_H3: str
 USER_AGENT_HEADER: str
 WEBTRANSPORT_DEFAULT_PORT: int
 WEBTRANSPORT_SCHEME: str
-
-BIDIRECTIONAL_STREAM: int
-CLOSE_WEBTRANSPORT_SESSION_TYPE: int
-DRAIN_WEBTRANSPORT_SESSION_TYPE: int
-H3_FRAME_TYPE_CANCEL_PUSH: int
-H3_FRAME_TYPE_DATA: int
-H3_FRAME_TYPE_GOAWAY: int
-H3_FRAME_TYPE_HEADERS: int
-H3_FRAME_TYPE_MAX_PUSH_ID: int
-H3_FRAME_TYPE_PUSH_PROMISE: int
-H3_FRAME_TYPE_SETTINGS: int
-H3_FRAME_TYPE_WEBTRANSPORT_STREAM: int
-H3_STREAM_TYPE_CONTROL: int
-H3_STREAM_TYPE_PUSH: int
-H3_STREAM_TYPE_QPACK_DECODER: int
-H3_STREAM_TYPE_QPACK_ENCODER: int
-H3_STREAM_TYPE_WEBTRANSPORT: int
-MAX_CLOSE_REASON_BYTES: int
-MAX_DATAGRAM_SIZE: int
-MAX_PROTOCOL_STREAMS_LIMIT: int
-MAX_STREAM_ID: int
-QPACK_DECODER_MAX_BLOCKED_STREAMS: int
-QPACK_DECODER_MAX_TABLE_CAPACITY: int
-SETTINGS_ENABLE_CONNECT_PROTOCOL: int
-SETTINGS_H3_DATAGRAM: int
-SETTINGS_QPACK_BLOCKED_STREAMS: int
-SETTINGS_QPACK_MAX_TABLE_CAPACITY: int
-SETTINGS_WT_INITIAL_MAX_DATA: int
-SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI: int
-SETTINGS_WT_INITIAL_MAX_STREAMS_UNI: int
-UNIDIRECTIONAL_STREAM: int
-WT_DATA_BLOCKED_TYPE: int
-WT_MAX_DATA_TYPE: int
-WT_MAX_STREAM_DATA_TYPE: int
-WT_MAX_STREAMS_BIDI_TYPE: int
-WT_MAX_STREAMS_UNI_TYPE: int
-WT_STREAM_DATA_BLOCKED_TYPE: int
-WT_STREAMS_BLOCKED_BIDI_TYPE: int
-WT_STREAMS_BLOCKED_UNI_TYPE: int
-
 DEFAULT_ALPN_PROTOCOLS: list[str]
 DEFAULT_BIND_HOST: str
 DEFAULT_CLIENT_MAX_CONNECTIONS: int
 DEFAULT_CLIENT_MAX_SESSIONS: int
 DEFAULT_CLOSE_TIMEOUT: float
 DEFAULT_CONGESTION_CONTROL_ALGORITHM: str
-DEFAULT_CONNECT_TIMEOUT: float
 DEFAULT_CONNECTION_IDLE_TIMEOUT: float
+DEFAULT_CONNECT_TIMEOUT: float
 DEFAULT_DEV_PORT: int
+DEFAULT_ENABLE_STATELESS_RETRY: bool
 DEFAULT_FLOW_CONTROL_WINDOW_AUTO_SCALE: bool
 DEFAULT_FLOW_CONTROL_WINDOW_SIZE: int
 DEFAULT_INITIAL_MAX_DATA: int
 DEFAULT_INITIAL_MAX_STREAMS_BIDI: int
 DEFAULT_INITIAL_MAX_STREAMS_UNI: int
-DEFAULT_KEEP_ALIVE: bool
+DEFAULT_KEEP_ALIVE: float
 DEFAULT_LOG_LEVEL: str
 DEFAULT_MAX_CAPSULE_SIZE: int
 DEFAULT_MAX_CONNECTION_RETRIES: int
@@ -88,9 +50,9 @@ DEFAULT_RETRY_DELAY: float
 DEFAULT_SERVER_MAX_CONNECTIONS: int
 DEFAULT_SERVER_MAX_SESSIONS: int
 DEFAULT_STREAM_CREATION_TIMEOUT: float
+DEFAULT_TRANSPORT_STREAMS_CAP: int
 DEFAULT_WRITE_TIMEOUT: float
 SUPPORTED_CONGESTION_CONTROL_ALGORITHMS: list[str]
-
 ERR_AEAD_LIMIT_REACHED: int
 ERR_APP_AUTHENTICATION_FAILED: int
 ERR_APP_CONNECTION_TIMEOUT: int
@@ -144,6 +106,8 @@ ERR_WT_APPLICATION_ERROR_LAST: int
 ERR_WT_BUFFERED_STREAM_REJECTED: int
 ERR_WT_FLOW_CONTROL_ERROR: int
 ERR_WT_SESSION_GONE: int
+MAX_DATAGRAM_SIZE: int
+MAX_PROTOCOL_STREAMS_LIMIT: int
 
 def generate_self_signed_cert(
     *, hostname: str, output_dir: str = ".", validity_days: int = 365
@@ -152,55 +116,39 @@ def generate_self_signed_cert(
     ...
 
 @final
-class WebTransportEngine:
-    """Orchestrates the unified protocol state machine."""
+class Endpoint:
+    """WebTransport endpoint scheduling state machine."""
 
-    def __new__(cls, connection_id: str, config: ClientConfig | ServerConfig, is_client: bool) -> WebTransportEngine:
-        """Initialize the WebTransport engine."""
+    def __new__(cls, is_client: bool, config: ClientConfig | ServerConfig, now: float) -> Self:
+        """Initialize a new QUIC endpoint with either server or client behaviors."""
         ...
 
-    def cleanup_stream(self, stream_id: int) -> None:
-        """Clean up H3 state for a closed stream."""
+    def connect(self, remote: tuple[str, int], server_name: str, now: float) -> int:
+        """Initiate an outbound QUIC connection and initialize the WebTransport engine."""
         ...
 
-    @staticmethod
-    def encode_capsule(
-        stream_id: int, capsule_type: int, capsule_data: bytes, end_stream: bool = False
-    ) -> list[Effect]:
-        """Encode a capsule and return effects to send it."""
+    def get_remote_address(self, handle: int) -> tuple[str, int] | None:
+        """Retrieve the current validated remote socket address for a connection."""
         ...
 
-    @staticmethod
-    def encode_datagram(stream_id: int, data: Buffer | list[Buffer]) -> list[Effect]:
-        """Encode a datagram and return effects to send it."""
+    def handle_datagram(
+        self, data: Buffer, remote: tuple[str, int], local: tuple[str, int] | None, now: float
+    ) -> tuple[int, Any]:
+        """Process an incoming UDP datagram and route it to the appropriate state machine."""
         ...
 
-    def encode_goaway(self) -> list[Effect]:
-        """Encode a GOAWAY frame and return effects to send it."""
+    def handle_timeout(self, now: float) -> list[tuple[int, Any]]:
+        """Evaluate timeouts across the entire multiplexer and trigger necessary logic."""
         ...
 
-    def encode_headers(self, stream_id: int, status: int, end_stream: bool = False) -> list[Effect]:
-        """Encode headers and return effects to send them."""
+    def handle_user_event(self, handle: int, event: tuple[int, Any], now: float) -> tuple[int, Any] | None:
+        """Route a user-level application event to the specified connection handle."""
         ...
 
-    def encode_session_request(
-        self,
-        stream_id: int,
-        path: str,
-        authority: str,
-        headers: dict[str | bytes, str | bytes] | list[tuple[str | bytes, str | bytes]],
-    ) -> list[Effect]:
-        """Encode a WebTransport session establishment request."""
+    def poll_transmit(self, now: float) -> tuple[int, Any] | None:
+        """Poll for any pending endpoint-level or connection-level transmission datagrams."""
         ...
 
-    def encode_stream_creation(self, stream_id: int, control_stream_id: int, is_unidirectional: bool) -> list[Effect]:
-        """Encode the preamble for a new WebTransport stream."""
-        ...
-
-    def handle_event(self, event: ProtocolEvent, now: float) -> list[Effect]:
-        """Process a single event and return resulting effects."""
-        ...
-
-    def initialize_h3_transport(self, control_id: int, encoder_id: int, decoder_id: int) -> list[Effect]:
-        """Initialize HTTP/3 unidirectional streams and settings."""
+    def timeout(self) -> float | None:
+        """Compute the earliest wakeup instant required by any entity within the endpoint."""
         ...

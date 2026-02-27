@@ -269,7 +269,6 @@ class ServerCluster:
         self, *, server: WebTransportServer, config: ServerConfig
     ) -> WebTransportServer | None:
         """Register the newly started server."""
-        # 移除了冗余的 cast(asyncio.Lock, self._lock), 因为 self._lock 已经在 __init__ 中声明
         async with self._lock:
             if not self._running:
                 _logger.warning("Cluster stopped while new server was starting. Shutting down new server.")

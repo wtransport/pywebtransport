@@ -2,6 +2,37 @@
 
 ## Active
 
+### [KI-004] Protocol Compliance Gap due to Lack of `RESET_STREAM_AT` Support
+
+- **Status**: Confirmed
+- **Component**: quinn-proto
+- **Version**: All
+- **Date Discovered**: 2026-02-24
+
+**Summary**
+
+The library does not support the `RESET_STREAM_AT` frame. This limitation originates from the underlying `quinn-proto` library, which currently lacks support for the `draft-ietf-quic-reliable-stream-reset` extension.
+
+**Symptoms**
+
+This issue does not produce direct error logs or crashes. The symptom is a functional gap in protocol compliance where applications cannot utilize reliable reset semantics to ensure delivery of specific bytes before stream termination.
+
+**Root Cause Analysis**
+
+The WebTransport specification mandates support for `RESET_STREAM_AT` to ensure predictable data delivery prior to stream reset. The underlying QUIC implementation adheres strictly to RFC 9000 and lacks support for this draft extension at the transport layer. This behavior cannot be emulated at the application layer.
+
+**Impact Assessment**
+
+- **Functionality**: Standard stream termination (`RESET_STREAM`) functions correctly. Scenarios requiring at-least-once delivery semantics during abrupt stream termination are affected.
+- **Compliance**: Prevents complete alignment with the latest IETF WebTransport drafts.
+
+**Current Status & Resolution**
+
+- **Tracking**: Internal
+- **Strategy**: Monitoring upstream ecosystem adoption of the reliable stream reset specification. No application-layer workaround is available.
+
+---
+
 ### [KI-003] Interoperability Failure with Web Browsers due to Protocol Draft Divergence
 
 - **Status**: Blocked
@@ -31,14 +62,15 @@ The fundamental cause is a divergence in the targeted protocol draft versions be
 - **Tracking**: [wtransport/pywebtransport#2](https://github.com/wtransport/pywebtransport/issues/2)
 - **Strategy**: Classified as Blocked pending ecosystem updates. Resolution is contingent upon browser vendors updating their network stacks to align with the evolving IETF WebTransport standard.
 
----
+## Resolved
 
 ### [KI-002] Protocol Compliance Gap due to Lack of `RESET_STREAM_AT` Support
 
-- **Status**: Confirmed
+- **Status**: Obsolete
 - **Component**: aioquic
 - **Version**: All
 - **Date Discovered**: 2025-09-12
+- **Date Resolved**: 2026-02-24
 
 **Summary**
 
@@ -60,9 +92,9 @@ The WebTransport specification mandates support for `RESET_STREAM_AT` to ensure 
 **Current Status & Resolution**
 
 - **Tracking**: [aiortc/aioquic#596](https://github.com/aiortc/aioquic/issues/596)
-- **Strategy**: No application-layer workaround is available. Monitoring upstream progress.
+- **Strategy**: The underlying transport dependency was replaced, rendering this specific dependency tracking obsolete. Refer to [KI-004] for the current tracking of this protocol limitation.
 
-## Resolved
+---
 
 ### [KI-001] Race Condition in aioquic Core on Connection Shutdown
 

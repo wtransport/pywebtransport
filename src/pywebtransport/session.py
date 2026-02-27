@@ -84,12 +84,10 @@ class WebTransportSession:
         self._headers = headers
 
         self._cached_state = SessionState.CONNECTING
-
-        config = connection.config
         self.events = EventEmitter(
-            max_queue_size=config.max_event_queue_size,
-            max_listeners=config.max_event_listeners,
-            max_history=config.max_event_history_size,
+            max_queue_size=connection.config.max_event_queue_size,
+            max_listeners=connection.config.max_event_listeners,
+            max_history=connection.config.max_event_history_size,
         )
 
         self.events.on(event_type=EventType.SESSION_READY, handler=self._on_session_ready)
@@ -150,11 +148,11 @@ class WebTransportSession:
         if connection is None:
             return
 
-        request_id, future = connection._protocol.create_request()
+        request_id, future = connection._driver.create_request()
         event = UserCloseSession(
             request_id=request_id, session_id=self.session_id, error_code=error_code, reason=reason
         )
-        connection._protocol.send_event(event=event)
+        connection._driver.send_user_event(handle=connection._handle, event=event)
 
         try:
             await future
@@ -181,11 +179,11 @@ class WebTransportSession:
         if connection is None:
             raise ConnectionError("Connection is gone.")
 
-        request_id, future = connection._protocol.create_request()
+        request_id, future = connection._driver.create_request()
         event = UserGetSessionDiagnostics(request_id=request_id, session_id=self.session_id)
 
         try:
-            connection._protocol.send_event(event=event)
+            connection._driver.send_user_event(handle=connection._handle, event=event)
             diag_data: dict[str, Any] = await future
             return SessionDiagnostics(**diag_data)
         except ConnectionError as e:
@@ -197,9 +195,9 @@ class WebTransportSession:
         if connection is None:
             raise ConnectionError("Connection is gone.")
 
-        request_id, future = connection._protocol.create_request()
+        request_id, future = connection._driver.create_request()
         event = UserGrantDataCredit(request_id=request_id, session_id=self.session_id, max_data=max_data)
-        connection._protocol.send_event(event=event)
+        connection._driver.send_user_event(handle=connection._handle, event=event)
         await future
 
     async def grant_streams_credit(self, *, is_unidirectional: bool, max_streams: int) -> None:
@@ -208,14 +206,14 @@ class WebTransportSession:
         if connection is None:
             raise ConnectionError("Connection is gone.")
 
-        request_id, future = connection._protocol.create_request()
+        request_id, future = connection._driver.create_request()
         event = UserGrantStreamsCredit(
             request_id=request_id,
             session_id=self.session_id,
             is_unidirectional=is_unidirectional,
             max_streams=max_streams,
         )
-        connection._protocol.send_event(event=event)
+        connection._driver.send_user_event(handle=connection._handle, event=event)
         await future
 
     async def send_datagram(self, *, data: Buffer | list[Buffer]) -> None:
@@ -224,9 +222,9 @@ class WebTransportSession:
         if connection is None:
             raise ConnectionError("Connection is gone.")
 
-        request_id, future = connection._protocol.create_request()
+        request_id, future = connection._driver.create_request()
         event = UserSendDatagram(request_id=request_id, session_id=self.session_id, data=data)
-        connection._protocol.send_event(event=event)
+        connection._driver.send_user_event(handle=connection._handle, event=event)
         await future
 
     async def _create_stream_internal(self, *, is_unidirectional: bool) -> WebTransportStream | WebTransportSendStream:
@@ -235,9 +233,9 @@ class WebTransportSession:
         if connection is None:
             raise ConnectionError("Connection is gone.")
 
-        request_id, future = connection._protocol.create_request()
+        request_id, future = connection._driver.create_request()
         event = UserCreateStream(request_id=request_id, session_id=self.session_id, is_unidirectional=is_unidirectional)
-        connection._protocol.send_event(event=event)
+        connection._driver.send_user_event(handle=connection._handle, event=event)
 
         try:
             timeout = connection.config.stream_creation_timeout

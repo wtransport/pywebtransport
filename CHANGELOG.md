@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planned for future release
+
+_(No planned changes for the next release yet.)_
+
+## [0.14.0] - 2026-02-27
+
+This release executes a fundamental architectural transition by migrating the core QUIC and network multiplexing layers from the Python-based `aioquic` library to a pure Rust Sans-I/O implementation utilizing `quinn-proto`. This design deeply integrates the Rust protocol state machine with Python's `asyncio` single-threaded reactor model, eliminating cross-language serialization overhead and establishing a lock-free I/O pipeline for maximized concurrency.
+
+### Added
+
+- **Rust Transport Multiplexer**: Implemented `TransportEndpoint` and `TransportConnection` in Rust to natively manage L4 UDP routing, cryptographic handshakes, and per-connection state machines, decoupling protocol logic from Python task lifecycles.
+- **FFI Application Binary Interface (ABI)**: Introduced a lightweight, `u8` opcode-based tagged-tuple ABI (`abi.rs`, `abi.py`) augmented with strict initialization version guards (`ABI_VERSION`) to facilitate safe, zero-serialization cross-language communication.
+- **Python Datagram Driver**: Implemented `_driver.EndpointDriver` extending `asyncio.DatagramProtocol` to serve as a unified, lock-free I/O and monotonic timeout scheduling bridge.
+- **Zero-Copy Memory Management**: Utilized pre-allocated transmission workspaces for UDP datagram dispatching and implemented zero-copy receive buffering via chunk borrowing to minimize memory allocation overhead across the FFI boundary.
+- **Cross-Language Time Synchronization**: Implemented `TimeMapper` in the FFI layer to strictly synchronize Python's monotonic event loop time (`f64`) with Rust's `Instant`, preventing clock drift in protocol timers.
+
+### Changed
+
+- **Client and Server Multiplexing**: Refactored `WebTransportClient` and `WebTransportServer` into singletons that multiplex multiple logical connections over a single underlying UDP socket (`DatagramTransport`) and driver instance, significantly reducing OS file descriptor consumption.
+- **Diagnostic FFI Mapping**: Eliminated `serde_json` serialization across the FFI boundary by dynamically mapping Rust diagnostic structs directly to Python dictionaries via PyO3.
+- **Stream State Enforcement**: Hardened QUIC stream state machines by strictly validating directionality before emitting `RESET_STREAM` or `STOP_SENDING` frames, and implemented precise partial-write flow control via `SendBuffer` queues.
+- **Build Toolchain**: Upgraded the `maturin` build backend to the latest version in `pyproject.toml` to enforce modern PyO3 integration standards and optimize cross-compilation stability.
+
+### Removed
+
+- **Aioquic Dependency**: Completely removed `aioquic` from the project's core dependencies and eradicated all associated Python-side protocol task lifecycles.
+- **Legacy Transport Adapters**: Deleted the entire `_adapter` package, replacing it with the newly architected native driver layer.
+- **Unread Data Mechanism**: Deprecated and removed the legacy `unread` data buffering mechanism across the protocol stack in favor of native Rust flow control queues and zero-copy chunking.
+
 ### Fixed
 
 - **Windows Build Compatibility**: Resolved MSVC compilation failures by conditionally injecting a scoped POSIX compatibility layer (`sys/queue.h`) for the vendored `ls-qpack` dependency.
@@ -88,14 +117,14 @@ This release marks a significant architectural milestone with the introduction o
 - **Utility API**: Standardized header access utilities by renaming `get_header` and `get_header_as_str` to `find_header` and `find_header_str`.
 - **Certificate Generation**: The `generate_self_signed_cert` utility is now backed by Rust's `rcgen`, removing the need for Python-side cryptography logic. **Breaking Change**: The parameter `days_valid` has been renamed to `validity_days`.
 
-### Fixed
-
-- **Client Connection**: Fixed a potential resource leak in the client handshake process by ensuring the protocol instance is explicitly closed if the underlying QUIC transport creation fails.
-
 ### Removed
 
 - **Dependencies**: Removed `cryptography` as a mandatory runtime dependency.
 - **Legacy Protocol**: Removed the legacy pure Python implementation of the HTTP/3 and WebTransport state machines.
+
+### Fixed
+
+- **Client Connection**: Fixed a potential resource leak in the client handshake process by ensuring the protocol instance is explicitly closed if the underlying QUIC transport creation fails.
 
 ## [0.11.1] - 2026-01-04
 
@@ -413,6 +442,12 @@ This is a major internal refactoring release focused entirely on improving **cod
   - Enhanced type safety in `ProtobufSerializer` checks and `server.router` path parameter handling.
 - **Security Improvement**: Changed the default `ServerConfig.verify_mode` from `ssl.CERT_NONE` to the safer `ssl.CERT_OPTIONAL`.
 
+### Removed
+
+- **Removed Redundant Components**: Deleted `client/pooled.py` (replaced by `pool/SessionPool`), `server/utils.py`, `stream/utils.py`, `connection/utils.py`. Moved logic from `connection/manager.py`, `session/manager.py`, `stream/manager.py` to the new `manager/` package. Moved logic from `connection/pool.py`, `stream/pool.py` to the new `pool/` package. Moved logic from `client/monitor.py`, `server/monitor.py`, `datagram/monitor.py` to the new `monitor/` package.
+- **Removed Redundant APIs**: Deleted `ConfigBuilder`, `merge()`, generic `.create()` factories, multiple old diagnostic methods, unsafe `get_*_count()` methods, `EventBus`, `event_handler`, `create_event_emitter`, `connection._transmit`, `datagram._receive/send_framed_data`, and various other internal or unused functions/methods identified during the audit.
+- **Removed Dead Code**: Deleted numerous unused constants from `constants.py`.
+
 ### Fixed
 
 - **Fixed Critical Concurrency Bugs**: Eliminated race conditions in all pooling mechanisms (`ConnectionPool`, `StreamPool`, replaced `PooledClient` with `SessionPool`) by migrating to the robust `_AsyncObjectPool` base class.
@@ -422,12 +457,6 @@ This is a major internal refactoring release focused entirely on improving **cod
 - **Fixed Silent Failures**: Added validation to prevent silent failures in structured messaging registry configuration and unknown event type strings.
 - **Fixed potential task leaks in `ServerApp`**: Ensured session handler tasks are explicitly tracked and cancelled during application shutdown.
 - **Fixed potential `AssertionError` during connection closure**: Updated the required `aioquic` dependency to >= 1.3.0, incorporating an upstream fix for a race condition (`aioquic` issue #597) that could cause noisy errors (`cannot call reset() more than once`) in server logs.
-
-### Removed
-
-- **Removed Redundant Components**: Deleted `client/pooled.py` (replaced by `pool/SessionPool`), `server/utils.py`, `stream/utils.py`, `connection/utils.py`. Moved logic from `connection/manager.py`, `session/manager.py`, `stream/manager.py` to the new `manager/` package. Moved logic from `connection/pool.py`, `stream/pool.py` to the new `pool/` package. Moved logic from `client/monitor.py`, `server/monitor.py`, `datagram/monitor.py` to the new `monitor/` package.
-- **Removed Redundant APIs**: Deleted `ConfigBuilder`, `merge()`, generic `.create()` factories, multiple old diagnostic methods, unsafe `get_*_count()` methods, `EventBus`, `event_handler`, `create_event_emitter`, `connection._transmit`, `datagram._receive/send_framed_data`, and various other internal or unused functions/methods identified during the audit.
-- **Removed Dead Code**: Deleted numerous unused constants from `constants.py`.
 
 ## [0.7.1] - 2025-09-27
 
@@ -762,7 +791,8 @@ This is a major release focused on enhancing runtime safety and modernizing the 
 - cryptography (>=45.0.4,<46.0.0) for SSL/TLS operations
 - typing-extensions (>=4.14.0,<5.0.0) for Python <3.10 support
 
-[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.13.1...HEAD
+[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/wtransport/pywebtransport/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/wtransport/pywebtransport/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/wtransport/pywebtransport/compare/v0.12.1...v0.13.0
 [0.12.1]: https://github.com/wtransport/pywebtransport/compare/v0.12.0...v0.12.1

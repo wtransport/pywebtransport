@@ -8,6 +8,7 @@ use crate::common::types::{
     ConnectionId, ErrorCode, ErrorSource, EventType, Headers, RequestId, SessionId,
     StreamDirection, StreamId,
 };
+use crate::protocol::{ConnectionDiagnostics, SessionDiagnostics, StreamDiagnostics};
 
 // Protocol state machine input events.
 #[derive(Clone, Debug)]
@@ -36,10 +37,6 @@ pub(crate) enum ProtocolEvent {
         error_code: Option<ErrorCode>,
         reason: String,
     },
-    InternalReturnStreamData {
-        stream_id: StreamId,
-        data: Bytes,
-    },
     TransportConnectionTerminated {
         error_code: ErrorCode,
         reason: String,
@@ -51,7 +48,6 @@ pub(crate) enum ProtocolEvent {
     TransportQuicParametersReceived {
         remote_max_datagram_frame_size: u64,
     },
-    TransportQuicTimerFired,
     TransportStreamDataReceived {
         stream_id: StreamId,
         data: Bytes,
@@ -222,11 +218,6 @@ pub(crate) enum Effect {
         is_peer_initiated: Option<bool>,
         error_code: Option<ErrorCode>,
     },
-    LogH3Frame {
-        category: String,
-        event: String,
-        data: String,
-    },
     NotifyRequestDone {
         request_id: RequestId,
         result: RequestResult,
@@ -240,7 +231,6 @@ pub(crate) enum Effect {
     ProcessProtocolEvent {
         event: Box<ProtocolEvent>,
     },
-    RescheduleQuicTimer,
     ResetQuicStream {
         stream_id: StreamId,
         error_code: ErrorCode,
@@ -273,17 +263,22 @@ pub(crate) enum Effect {
         stream_id: StreamId,
         error_code: ErrorCode,
     },
-    TriggerQuicTimer,
 }
 
 // Asynchronous request completion result.
+#[allow(
+    variant_size_differences,
+    reason = "Optimized layout: 32B zero-copy hot-path vs 8B boxed cold-path."
+)]
 #[derive(Clone, Debug)]
 pub(crate) enum RequestResult {
     None,
     SessionId(SessionId),
     StreamId(StreamId),
     ReadData(Bytes),
-    Diagnostics(String),
+    ConnectionDiagnostics(Box<ConnectionDiagnostics>),
+    SessionDiagnostics(Box<SessionDiagnostics>),
+    StreamDiagnostics(Box<StreamDiagnostics>),
 }
 
 #[cfg(test)]

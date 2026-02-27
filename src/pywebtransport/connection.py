@@ -7,15 +7,16 @@ import uuid
 import weakref
 from dataclasses import dataclass
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Self
+from typing import Any, Self
 
-from pywebtransport._adapter.client import create_quic_endpoint
+from pywebtransport._driver.driver import EndpointDriver
 from pywebtransport._protocol.events import (
     ConnectionClose,
     UserConnectionGracefulClose,
     UserCreateSession,
     UserGetConnectionDiagnostics,
 )
+from pywebtransport.config import ClientConfig, ServerConfig
 from pywebtransport.constants import ErrorCodes
 from pywebtransport.events import EventEmitter
 from pywebtransport.exceptions import ConnectionError, SessionError, TimeoutError
@@ -32,13 +33,6 @@ from pywebtransport.types import (
     StreamId,
 )
 from pywebtransport.utils import get_logger
-
-if TYPE_CHECKING:
-    from pywebtransport._adapter.client import WebTransportClientProtocol
-    from pywebtransport._adapter.server import WebTransportServerProtocol
-    from pywebtransport.config import ClientConfig, ServerConfig
-
-    type _AdapterProtocol = WebTransportServerProtocol | WebTransportClientProtocol
 
 __all__: list[str] = ["ConnectionDiagnostics", "WebTransportConnection"]
 
@@ -70,15 +64,17 @@ class ConnectionDiagnostics:
 
 
 class WebTransportConnection:
-    """Manage the high-level WebTransport connection over QUIC."""
+    """Manage the high-level WebTransport connection over the shared multiplexing driver."""
 
     __slots__ = (
         "_config",
-        "_protocol",
+        "_driver",
+        "_handle",
         "_transport",
         "_is_client",
         "_connection_id",
         "_cached_state",
+        "_cached_remote_address",
         "events",
         "_session_handles",
         "_stream_handles",
@@ -89,29 +85,31 @@ class WebTransportConnection:
         self,
         *,
         config: ClientConfig | ServerConfig,
-        protocol: _AdapterProtocol,
+        driver: EndpointDriver,
+        handle: int,
         transport: asyncio.DatagramTransport,
         is_client: bool,
     ) -> None:
         """Initialize the instance."""
         self._config = config
-        self._protocol = protocol
+        self._driver = driver
+        self._handle = handle
         self._transport = transport
         self._is_client = is_client
 
         self._connection_id: ConnectionId = str(uuid.uuid4())
         self._cached_state = ConnectionState.IDLE
-
+        self._cached_remote_address: Address | None = None
         self.events = EventEmitter(
-            max_queue_size=config.max_event_queue_size,
-            max_listeners=config.max_event_listeners,
-            max_history=config.max_event_history_size,
+            max_queue_size=self._config.max_event_queue_size,
+            max_listeners=self._config.max_event_listeners,
+            max_history=self._config.max_event_history_size,
         )
         self._session_handles: dict[SessionId, WebTransportSession] = {}
         self._stream_handles: dict[StreamId, _StreamHandle] = {}
 
-        self._protocol.set_status_callback(callback=self._notify_owner)
-        _logger.debug("WebTransportConnection %s initialized.", self.connection_id)
+        self._driver.register_connection(handle=self._handle, callback=self._notify_owner)
+        _logger.debug("WebTransportConnection %s initialized with handle %d.", self.connection_id, self._handle)
 
     async def __aenter__(self) -> Self:
         """Enter the asynchronous context."""
@@ -164,10 +162,15 @@ class WebTransportConnection:
     @property
     def remote_address(self) -> Address | None:
         """Return the remote address of the connection."""
-        addr = self._transport.get_extra_info("peername")
-        if isinstance(addr, tuple) and len(addr) >= 2:
-            return (addr[0], addr[1])
-        return None
+        if not self.is_closed:
+            try:
+                addr = self._driver.get_remote_address(handle=self._handle)
+                if addr is not None:
+                    self._cached_remote_address = addr
+            except Exception as e:
+                _logger.debug("Failed to query remote address from endpoint driver: %s", e)
+
+        return self._cached_remote_address
 
     @property
     def state(self) -> ConnectionState:
@@ -176,10 +179,10 @@ class WebTransportConnection:
 
     @classmethod
     def accept(
-        cls, *, transport: asyncio.DatagramTransport, protocol: _AdapterProtocol, config: ServerConfig
+        cls, *, driver: EndpointDriver, handle: int, transport: asyncio.DatagramTransport, config: ServerConfig
     ) -> WebTransportConnection:
         """Instantiate a connection wrapper for an accepted server connection."""
-        connection = cls(config=config, protocol=protocol, transport=transport, is_client=False)
+        connection = cls(config=config, driver=driver, handle=handle, transport=transport, is_client=False)
         return connection
 
     async def close(self, *, error_code: int = ErrorCodes.NO_ERROR, reason: str = "Closed by application") -> None:
@@ -190,9 +193,11 @@ class WebTransportConnection:
         _logger.info("Closing connection %s...", self.connection_id)
 
         try:
-            request_id, future = self._protocol.create_request()
+            _ = self.remote_address
+
+            request_id, future = self._driver.create_request()
             event = ConnectionClose(request_id=request_id, error_code=error_code, reason=reason)
-            self._protocol.send_event(event=event)
+            self._driver.send_user_event(handle=self._handle, event=event)
 
             try:
                 async with asyncio.timeout(delay=5.0):
@@ -208,35 +213,20 @@ class WebTransportConnection:
                 _logger.warning("Error during close event processing: %s", e)
 
         finally:
-            if self.is_client:
-                if not self._transport.is_closing():
-                    _logger.debug("Closing underlying transport for connection %s", self.connection_id)
-                    self._transport.close()
-
+            self._driver.unregister_connection(handle=self._handle)
             self._session_handles.clear()
             self._stream_handles.clear()
             self._cached_state = ConnectionState.CLOSED
             _logger.info("Connection %s close process finished.", self.connection_id)
-
-    @classmethod
-    async def connect(
-        cls, *, host: str, port: int, config: ClientConfig, loop: asyncio.AbstractEventLoop | None = None
-    ) -> WebTransportConnection:
-        """Establish and return a client-side WebTransport connection."""
-        loop = loop or asyncio.get_running_loop()
-        transport, protocol = await create_quic_endpoint(host=host, port=port, config=config, loop=loop)
-
-        connection = cls(config=config, protocol=protocol, transport=transport, is_client=True)
-        return connection
 
     async def create_session(self, *, path: str, headers: Headers | None = None) -> WebTransportSession:
         """Initiate a new WebTransport session."""
         if not self.is_client:
             raise ConnectionError("Sessions can only be created by the client.")
 
-        request_id, future = self._protocol.create_request()
+        request_id, future = self._driver.create_request()
         event = UserCreateSession(request_id=request_id, path=path, headers=headers if headers is not None else {})
-        self._protocol.send_event(event=event)
+        self._driver.send_user_event(handle=self._handle, event=event)
 
         try:
             session_id: SessionId = await future
@@ -258,9 +248,9 @@ class WebTransportConnection:
 
     async def diagnostics(self) -> ConnectionDiagnostics:
         """Retrieve diagnostic information about the connection."""
-        request_id, future = self._protocol.create_request()
+        request_id, future = self._driver.create_request()
         event = UserGetConnectionDiagnostics(request_id=request_id)
-        self._protocol.send_event(event=event)
+        self._driver.send_user_event(handle=self._handle, event=event)
 
         diag_data: dict[str, Any] = await future
         diag_data["active_session_handles"] = len(self._session_handles)
@@ -275,9 +265,9 @@ class WebTransportConnection:
         """Initiate a graceful shutdown of the connection."""
         _logger.info("Initiating graceful shutdown for connection %s...", self.connection_id)
 
-        request_id, future = self._protocol.create_request()
+        request_id, future = self._driver.create_request()
         event = UserConnectionGracefulClose(request_id=request_id)
-        self._protocol.send_event(event=event)
+        self._driver.send_user_event(handle=self._handle, event=event)
 
         try:
             async with asyncio.timeout(delay=5.0):
@@ -361,7 +351,7 @@ class WebTransportConnection:
                 _logger.debug("Received %s for unknown or closed stream %d", event_type, stream_id)
 
     def _notify_owner(self, event_type: EventType, data: dict[str, Any]) -> None:
-        """Process status events received from the low-level protocol adapter."""
+        """Process status events received from the low-level driver."""
         try:
             if "connection" not in data:
                 data["connection"] = weakref.proxy(self)

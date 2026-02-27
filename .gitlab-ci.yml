@@ -143,9 +143,15 @@ deploy-image:
   dependencies:
     - build
   before_script:
+    - apk add --no-cache git
     - echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
   script:
     - ls -la dist/
+    - |
+      if git ls-remote --tags origin | grep -q "refs/tags/v$VERSION"; then
+        echo "Version v$VERSION already released - skipping Docker push to prevent overwriting immutable tags"
+        exit 0
+      fi
     - docker build -t $IMAGE_NAME:$VERSION -t $IMAGE_NAME:latest -f examples/interop/Dockerfile .
     - docker push $IMAGE_NAME:$VERSION
     - docker push $IMAGE_NAME:latest

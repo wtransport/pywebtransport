@@ -189,11 +189,11 @@ class ServerApp:
                 session.path,
                 http.HTTPStatus.NOT_FOUND,
             )
-            request_id, future = connection._protocol.create_request()
+            request_id, future = connection._driver.create_request()
             event = UserRejectSession(
                 request_id=request_id, session_id=session.session_id, status_code=http.HTTPStatus.NOT_FOUND
             )
-            connection._protocol.send_event(event=event)
+            connection._driver.send_user_event(handle=connection._handle, event=event)
             await future
             return
 
@@ -201,9 +201,9 @@ class ServerApp:
         _logger.info("Routing session request for path '%s' to handler '%s'", session.path, handler.__name__)
 
         try:
-            accept_req_id, accept_fut = connection._protocol.create_request()
+            accept_req_id, accept_fut = connection._driver.create_request()
             accept_event = UserAcceptSession(request_id=accept_req_id, session_id=session.session_id)
-            connection._protocol.send_event(event=accept_event)
+            connection._driver.send_user_event(handle=connection._handle, event=accept_event)
             await accept_fut
         except Exception as e:
             _logger.error("Failed to accept session %s: %s", session.session_id, e, exc_info=True)
@@ -283,9 +283,9 @@ class ServerApp:
             )
             sid = session.session_id if session is not None else session_id_from_data
             if connection is not None and sid is not None:
-                request_id, future = connection._protocol.create_request()
+                request_id, future = connection._driver.create_request()
                 reject_event = UserRejectSession(request_id=request_id, session_id=sid, status_code=e.status_code)
-                connection._protocol.send_event(event=reject_event)
+                connection._driver.send_user_event(handle=connection._handle, event=reject_event)
                 await future
             if session is not None and not session.is_closed:
                 await session.close()
@@ -295,14 +295,14 @@ class ServerApp:
             _logger.error("Error handling session request for session %s: %s", sid, e, exc_info=True)
             try:
                 if connection is not None and sid is not None:
-                    request_id, future = connection._protocol.create_request()
+                    request_id, future = connection._driver.create_request()
                     close_event = UserCloseSession(
                         request_id=request_id,
                         session_id=sid,
                         error_code=ErrorCodes.INTERNAL_ERROR,
                         reason="Internal server error handling request",
                     )
-                    connection._protocol.send_event(event=close_event)
+                    connection._driver.send_user_event(handle=connection._handle, event=close_event)
                     await future
                 if session is not None and not session.is_closed:
                     await session.close()

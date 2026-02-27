@@ -1,7 +1,6 @@
 //! Common type definitions and state enumerations.
 
 use bytes::Bytes;
-use serde::Serialize;
 
 /// Connection diagnostic identifier.
 pub type ConnectionId = String;
@@ -22,8 +21,7 @@ pub type SessionId = u64;
 pub type StreamId = u64;
 
 /// Connection lifecycle states.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConnectionState {
     /// Initial idle state.
     Idle,
@@ -42,8 +40,7 @@ pub enum ConnectionState {
 }
 
 /// Architectural source context of an error.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ErrorSource {
     /// Connection-level lifecycle or state errors.
     Connection,
@@ -62,8 +59,7 @@ pub enum ErrorSource {
 }
 
 /// System event type definition.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EventType {
     /// Capsule received on a stream.
     CapsuleReceived,
@@ -120,8 +116,7 @@ pub enum EventType {
 }
 
 /// WebTransport session lifecycle states.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionState {
     /// Session handshake in progress.
     Connecting,
@@ -136,8 +131,7 @@ pub enum SessionState {
 }
 
 /// Stream data flow direction.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StreamDirection {
     /// Bidirectional flow.
     Bidirectional,
@@ -148,8 +142,7 @@ pub enum StreamDirection {
 }
 
 /// WebTransport stream lifecycle states.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StreamState {
     /// Stream open and active.
     Open,

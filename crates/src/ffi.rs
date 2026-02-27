@@ -2,19 +2,21 @@
 
 use pyo3::prelude::*;
 
+mod abi;
 mod certificate;
 mod config;
 mod constants;
 mod conversion;
-mod engine;
+mod endpoint;
 mod error;
 mod types;
 
 // FFI sub-module registration.
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    abi::register(m)?;
     certificate::register(m)?;
     constants::register(m)?;
-    engine::register(m)?;
+    endpoint::register(m)?;
 
     Ok(())
 }

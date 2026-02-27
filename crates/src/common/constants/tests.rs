@@ -17,12 +17,14 @@ fn test_alpn_list_integrity() {
 }
 
 #[rstest]
+#[case(DATAGRAM_QUEUE_CAPACITY)]
 #[case(DEFAULT_CLIENT_MAX_CONNECTIONS)]
 #[case(DEFAULT_CLIENT_MAX_SESSIONS)]
 #[case(DEFAULT_MAX_EVENT_LISTENERS)]
 #[case(DEFAULT_MAX_EVENT_QUEUE_SIZE)]
 #[case(DEFAULT_SERVER_MAX_CONNECTIONS)]
 #[case(DEFAULT_SERVER_MAX_SESSIONS)]
+#[case(DEFAULT_TRANSPORT_STREAMS_CAP)]
 #[test]
 fn test_concurrency_limits_are_sane(#[case] limit: u64) {
     let min_limit = 1;
@@ -40,7 +42,8 @@ fn test_congestion_control_algorithms_list() {
     let is_default_supported = supported_algos.contains(&default_algo);
 
     assert!(is_default_supported);
-    assert!(supported_algos.len() >= 2);
+    assert!(supported_algos.len() >= 3);
+    assert!(supported_algos.contains(&"bbr"));
     assert!(supported_algos.contains(&"cubic"));
     assert!(supported_algos.contains(&"reno"));
 }
@@ -63,6 +66,7 @@ fn test_congestion_control_algorithms_list() {
 #[case(ERR_H3_MESSAGE_ERROR, 0x10E)]
 #[case(ERR_H3_CONNECT_ERROR, 0x10F)]
 #[case(ERR_H3_VERSION_FALLBACK, 0x110)]
+#[case(ERR_H3_DATAGRAM_ERROR, 0x33)]
 #[test]
 fn test_http3_error_codes_match_spec(#[case] error_code: u64, #[case] expected: u64) {
     let actual = error_code;
@@ -113,6 +117,19 @@ fn test_http3_settings_identifiers_match_spec(
 #[test]
 fn test_http3_stream_types_match_spec(#[case] stream_type: u64, #[case] expected_value: u64) {
     let actual = stream_type;
+
+    assert_eq!(actual, expected_value);
+}
+
+#[rstest]
+#[case(H3_MIN_UNI_STREAM_COUNT, 3)]
+#[case(WT_SESSION_CONTROL_BIDI_STREAM_COUNT, 1)]
+#[test]
+fn test_infrastructure_stream_counts_match_spec(
+    #[case] stream_count: u64,
+    #[case] expected_value: u64,
+) {
+    let actual = stream_count;
 
     assert_eq!(actual, expected_value);
 }
@@ -216,6 +233,13 @@ fn test_size_configuration_defaults_are_nonzero(#[case] size_value: u64) {
     assert!(value > min_size);
 }
 
+#[test]
+fn test_stateless_retry_configuration() {
+    let is_enabled = DEFAULT_ENABLE_STATELESS_RETRY;
+
+    assert!(!is_enabled);
+}
+
 #[rstest]
 #[case(BIDIRECTIONAL_STREAM, 0x0)]
 #[case(UNIDIRECTIONAL_STREAM, 0x2)]
@@ -230,6 +254,7 @@ fn test_stream_direction_masks(#[case] mask: u64, #[case] expected: u64) {
 #[case(DEFAULT_CLOSE_TIMEOUT)]
 #[case(DEFAULT_CONNECT_TIMEOUT)]
 #[case(DEFAULT_CONNECTION_IDLE_TIMEOUT)]
+#[case(DEFAULT_KEEP_ALIVE)]
 #[case(DEFAULT_MAX_RETRY_DELAY)]
 #[case(DEFAULT_PENDING_EVENT_TTL)]
 #[case(DEFAULT_READ_TIMEOUT)]

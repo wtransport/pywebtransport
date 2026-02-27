@@ -1,13 +1,9 @@
 //! Unit tests for the `crate::protocol::utils` module.
 
-use std::fmt;
 use std::io::Cursor;
 
 use bytes::{Buf, Bytes, BytesMut};
 use rstest::rstest;
-use serde::Serialize;
-use serde::ser::{SerializeSeq, Serializer};
-use serde_json::to_string;
 
 use super::*;
 use crate::common::constants::{
@@ -22,170 +18,6 @@ fn get_reserved_http_code() -> u64 {
             return candidate;
         }
         candidate += 1;
-    }
-}
-
-#[derive(Debug)]
-struct MockError;
-
-impl fmt::Display for MockError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "MockError")
-    }
-}
-
-impl std::error::Error for MockError {}
-
-impl serde::ser::Error for MockError {
-    fn custom<T: fmt::Display>(_msg: T) -> Self {
-        MockError
-    }
-}
-
-struct MockFailSerializer;
-
-impl Serializer for MockFailSerializer {
-    type Ok = ();
-    type Error = MockError;
-    type SerializeSeq = Self;
-    type SerializeTuple = serde::ser::Impossible<(), MockError>;
-    type SerializeTupleStruct = serde::ser::Impossible<(), MockError>;
-    type SerializeTupleVariant = serde::ser::Impossible<(), MockError>;
-    type SerializeMap = serde::ser::Impossible<(), MockError>;
-    type SerializeStruct = serde::ser::Impossible<(), MockError>;
-    type SerializeStructVariant = serde::ser::Impossible<(), MockError>;
-
-    fn serialize_bool(self, _v: bool) -> Result<Self::Ok, Self::Error> {
-        Err(MockError)
-    }
-    fn serialize_i8(self, _v: i8) -> Result<Self::Ok, Self::Error> {
-        Err(MockError)
-    }
-    fn serialize_i16(self, _v: i16) -> Result<Self::Ok, Self::Error> {
-        Err(MockError)
-    }
-    fn serialize_i32(self, _v: i32) -> Result<Self::Ok, Self::Error> {
-        Err(MockError)
-    }
-    fn serialize_i64(self, _v: i64) -> Result<Self::Ok, Self::Error> {
-        Err(MockError)
-    }
-    fn serialize_u8(self, _v: u8) -> Result<Self::Ok, Self::Error> {
-        Err(MockError)
-    }
-    fn serialize_u16(self, _v: u16) -> Result<Self::Ok, Self::Error> {
-        Err(MockError)
-    }
-    fn serialize_u32(self, _v: u32) -> Result<Self::Ok, Self::Error> {
-        Err(MockError)
-    }
-    fn serialize_u64(self, _v: u64) -> Result<Self::Ok, Self::Error> {
-        Err(MockError)
-    }
-    fn serialize_f32(self, _v: f32) -> Result<Self::Ok, Self::Error> {
-        Err(MockError)
-    }
-    fn serialize_f64(self, _v: f64) -> Result<Self::Ok, Self::Error> {
-        Err(MockError)
-    }
-    fn serialize_char(self, _v: char) -> Result<Self::Ok, Self::Error> {
-        Err(MockError)
-    }
-    fn serialize_str(self, _v: &str) -> Result<Self::Ok, Self::Error> {
-        Err(MockError)
-    }
-    fn serialize_bytes(self, _v: &[u8]) -> Result<Self::Ok, Self::Error> {
-        Err(MockError)
-    }
-    fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
-        Err(MockError)
-    }
-    fn serialize_some<T: ?Sized + Serialize>(self, _value: &T) -> Result<Self::Ok, Self::Error> {
-        Err(MockError)
-    }
-    fn serialize_unit(self) -> Result<Self::Ok, Self::Error> {
-        Err(MockError)
-    }
-    fn serialize_unit_struct(self, _name: &'static str) -> Result<Self::Ok, Self::Error> {
-        Err(MockError)
-    }
-    fn serialize_unit_variant(
-        self,
-        _name: &'static str,
-        _variant_index: u32,
-        _variant: &'static str,
-    ) -> Result<Self::Ok, Self::Error> {
-        Err(MockError)
-    }
-    fn serialize_newtype_struct<T: ?Sized + Serialize>(
-        self,
-        _name: &'static str,
-        _value: &T,
-    ) -> Result<Self::Ok, Self::Error> {
-        Err(MockError)
-    }
-    fn serialize_newtype_variant<T: ?Sized + Serialize>(
-        self,
-        _name: &'static str,
-        _variant_index: u32,
-        _variant: &'static str,
-        _value: &T,
-    ) -> Result<Self::Ok, Self::Error> {
-        Err(MockError)
-    }
-    fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
-        Ok(self)
-    }
-    fn serialize_tuple(self, _len: usize) -> Result<Self::SerializeTuple, Self::Error> {
-        Err(MockError)
-    }
-    fn serialize_tuple_struct(
-        self,
-        _name: &'static str,
-        _len: usize,
-    ) -> Result<Self::SerializeTupleStruct, Self::Error> {
-        Err(MockError)
-    }
-    fn serialize_tuple_variant(
-        self,
-        _name: &'static str,
-        _variant_index: u32,
-        _variant: &'static str,
-        _len: usize,
-    ) -> Result<Self::SerializeTupleVariant, Self::Error> {
-        Err(MockError)
-    }
-    fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
-        Err(MockError)
-    }
-    fn serialize_struct(
-        self,
-        _name: &'static str,
-        _len: usize,
-    ) -> Result<Self::SerializeStruct, Self::Error> {
-        Err(MockError)
-    }
-    fn serialize_struct_variant(
-        self,
-        _name: &'static str,
-        _variant_index: u32,
-        _variant: &'static str,
-        _len: usize,
-    ) -> Result<Self::SerializeStructVariant, Self::Error> {
-        Err(MockError)
-    }
-}
-
-impl SerializeSeq for MockFailSerializer {
-    type Ok = ();
-    type Error = MockError;
-
-    fn serialize_element<T: ?Sized + Serialize>(&mut self, _value: &T) -> Result<(), Self::Error> {
-        Err(MockError)
-    }
-
-    fn end(self) -> Result<Self::Ok, Self::Error> {
-        Err(MockError)
     }
 }
 
@@ -432,36 +264,6 @@ fn test_read_varint_valid_decoding(#[case] input: &[u8], #[case] expected: u64) 
 
     assert_eq!(result, Ok(expected));
     assert_eq!(cursor.remaining(), 0);
-}
-
-#[test]
-fn test_serialize_headers_failure() {
-    let headers = vec![(Bytes::from("key"), Bytes::from("val"))];
-
-    let res = serialize_headers(&headers, MockFailSerializer);
-
-    assert!(res.is_err());
-}
-
-#[test]
-fn test_serialize_headers_integration() {
-    struct Wrapper<'a>(&'a Vec<(Bytes, Bytes)>);
-
-    impl Serialize for Wrapper<'_> {
-        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: Serializer,
-        {
-            serialize_headers(self.0, serializer)
-        }
-    }
-
-    let headers = vec![(Bytes::from("key"), Bytes::from("val"))];
-    let wrapper = Wrapper(&headers);
-
-    let json_res = to_string(&wrapper).map_err(|e| e.to_string());
-
-    assert_eq!(json_res, Ok(r#"[["key","val"]]"#.to_owned()));
 }
 
 #[test]

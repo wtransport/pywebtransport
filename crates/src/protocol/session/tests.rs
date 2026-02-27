@@ -173,6 +173,28 @@ fn test_close_session_resets_streams(mut fixture_server_session: Session) {
 }
 
 #[rstest]
+fn test_close_session_resets_streams_by_direction(mut fixture_server_session: Session) {
+    fixture_server_session.state = SessionState::Connected;
+    fixture_server_session.bind_stream(1, 1, false, 1.0);
+    fixture_server_session.recv_stream_data(2, Bytes::from_static(b"data"), false, 1.0);
+
+    let effects = fixture_server_session.close(MOCK_REQUEST_ID, 0, None, 1.0);
+
+    let resets = effects
+        .iter()
+        .filter(|e| matches!(e, Effect::ResetQuicStream { .. }))
+        .count();
+    let stops = effects
+        .iter()
+        .filter(|e| matches!(e, Effect::StopQuicStream { .. }))
+        .count();
+
+    assert_eq!(resets, 1);
+    assert_eq!(stops, 2);
+    assert!(fixture_server_session.active_streams.is_empty());
+}
+
+#[rstest]
 fn test_close_session_success(mut fixture_server_session: Session) {
     fixture_server_session.state = SessionState::Connected;
     let error_code = 0;
@@ -293,28 +315,27 @@ fn test_diagnostics_snapshot(fixture_server_session: Session) {
     assert!(matches!(
         effects.as_slice(),
         [Effect::NotifyRequestDone {
-            result: RequestResult::Diagnostics(_),
+            result: RequestResult::SessionDiagnostics(_),
             ..
         }]
     ));
 
     if let [
         Effect::NotifyRequestDone {
-            result: RequestResult::Diagnostics(json),
+            result: RequestResult::SessionDiagnostics(diag),
             ..
         },
     ] = effects.as_slice()
     {
-        assert!(json.contains("\"session_id\":100"));
-        assert!(json.contains("\"state\":\"connecting\""));
+        assert_eq!(diag.session_id, 100);
+        assert_eq!(diag.state, SessionState::Connecting);
     }
 }
 
 #[rstest]
 fn test_fail_stream_decrements_counts(mut fixture_server_session: Session) {
     fixture_server_session.local_streams_bidi_opened = 1;
-    let _unused =
-        fixture_server_session.fail_stream(MOCK_REQUEST_ID, false, Some(1), "Fail".to_owned());
+    fixture_server_session.fail_stream(MOCK_REQUEST_ID, false, Some(1), "Fail".to_owned());
     assert_eq!(fixture_server_session.local_streams_bidi_opened, 0);
 }
 
@@ -988,6 +1009,19 @@ fn test_reject_session_server_success(mut fixture_server_session: Session) {
 }
 
 #[rstest]
+fn test_reset_stream_not_found(mut fixture_server_session: Session) {
+    let effects = fixture_server_session.reset_stream(99, MOCK_REQUEST_ID, 0, 1.0);
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Stream,
+            error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
+            ..
+        }]
+    ));
+}
+
+#[rstest]
 fn test_reset_stream_user_command(mut fixture_server_session: Session) {
     fixture_server_session.bind_stream(4, MOCK_REQUEST_ID, false, 1.0);
     let effects = fixture_server_session.reset_stream(4, MOCK_REQUEST_ID, 0, 1.0);
@@ -1114,6 +1148,19 @@ fn test_session_initialization_success(fixture_server_session: Session) {
 }
 
 #[rstest]
+fn test_stop_stream_not_found(mut fixture_server_session: Session) {
+    let effects = fixture_server_session.stop_stream(99, MOCK_REQUEST_ID, 0, 1.0);
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Stream,
+            error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
+            ..
+        }]
+    ));
+}
+
+#[rstest]
 fn test_stop_stream_user_command(mut fixture_server_session: Session) {
     fixture_server_session.bind_stream(4, MOCK_REQUEST_ID, false, 1.0);
     let effects = fixture_server_session.stop_stream(4, MOCK_REQUEST_ID, 0, 1.0);
@@ -1140,7 +1187,7 @@ fn test_stream_diagnostics_success(mut fixture_server_session: Session) {
     assert!(matches!(
         effects.as_slice(),
         [Effect::NotifyRequestDone {
-            result: RequestResult::Diagnostics(_),
+            result: RequestResult::StreamDiagnostics(_),
             ..
         }]
     ));
@@ -1152,7 +1199,7 @@ fn test_stream_read_fin_cleanup(mut fixture_server_session: Session) {
     if let Some(stream) = fixture_server_session.streams.get_mut(&4) {
         stream.state = StreamState::Closed;
     }
-    let _effects = fixture_server_session.stream_read(4, MOCK_REQUEST_ID, 1024);
+    fixture_server_session.stream_read(4, MOCK_REQUEST_ID, 1024);
 
     assert!(!fixture_server_session.active_streams.contains(&4));
 }
@@ -1173,42 +1220,12 @@ fn test_stream_read_not_found(mut fixture_server_session: Session) {
 fn test_stream_read_success(mut fixture_server_session: Session) {
     fixture_server_session.bind_stream(4, MOCK_REQUEST_ID, false, 1.0);
 
-    let _unused = fixture_server_session.unread_stream(4, Bytes::from_static(b"data"));
+    fixture_server_session.recv_stream_data(4, Bytes::from_static(b"data"), false, 1.0);
 
     let effects = fixture_server_session.stream_read(4, MOCK_REQUEST_ID, 1024);
     assert!(!effects.is_empty());
 
-    if let [Effect::NotifyRequestDone { result, .. }] = effects.as_slice() {
+    if let [Effect::NotifyRequestDone { result, .. }, ..] = effects.as_slice() {
         assert!(matches!(result, RequestResult::ReadData(_)));
     }
-}
-
-#[rstest]
-fn test_unread_stream(mut fixture_server_session: Session) {
-    fixture_server_session.bind_stream(4, MOCK_REQUEST_ID, false, 1.0);
-    let _unused = fixture_server_session.unread_stream(4, Bytes::from_static(b"returned"));
-
-    let effects = fixture_server_session.stream_read(4, MOCK_REQUEST_ID, 100);
-
-    assert!(matches!(
-        effects.as_slice(),
-        [Effect::NotifyRequestDone {
-            result: RequestResult::ReadData(_),
-            ..
-        }]
-    ));
-
-    if let [Effect::NotifyRequestDone { result, .. }] = effects.as_slice() {
-        if let RequestResult::ReadData(data) = result {
-            assert_eq!(data, &Bytes::from_static(b"returned"));
-        } else {
-            assert!(matches!(result, RequestResult::ReadData(_)));
-        }
-    }
-}
-
-#[rstest]
-fn test_unread_stream_not_found(mut fixture_server_session: Session) {
-    let effects = fixture_server_session.unread_stream(99, Bytes::from_static(b"data"));
-    assert!(effects.is_empty());
 }

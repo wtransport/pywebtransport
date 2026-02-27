@@ -4,16 +4,16 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Cursor;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use serde_json::{Value, json};
-use tracing::{debug, error, warn};
+use tracing::{debug, error, trace, warn};
 
 use crate::common::constants::{
     ERR_H3_CLOSED_CRITICAL_STREAM, ERR_H3_DATAGRAM_ERROR, ERR_H3_EXCESSIVE_LOAD,
     ERR_H3_FRAME_ERROR, ERR_H3_FRAME_UNEXPECTED, ERR_H3_ID_ERROR, ERR_H3_INTERNAL_ERROR,
     ERR_H3_MESSAGE_ERROR, ERR_H3_MISSING_SETTINGS, ERR_H3_SETTINGS_ERROR,
     ERR_H3_STREAM_CREATION_ERROR, ERR_LIB_INTERNAL_ERROR, ERR_QPACK_DECOMPRESSION_FAILED,
-    ERR_QPACK_ENCODER_STREAM_ERROR, H3_FRAME_TYPE_DATA, H3_FRAME_TYPE_GOAWAY,
-    H3_FRAME_TYPE_HEADERS, H3_FRAME_TYPE_SETTINGS, H3_FRAME_TYPE_WEBTRANSPORT_STREAM,
+    ERR_QPACK_ENCODER_STREAM_ERROR, H3_FRAME_TYPE_CANCEL_PUSH, H3_FRAME_TYPE_DATA,
+    H3_FRAME_TYPE_GOAWAY, H3_FRAME_TYPE_HEADERS, H3_FRAME_TYPE_MAX_PUSH_ID,
+    H3_FRAME_TYPE_PUSH_PROMISE, H3_FRAME_TYPE_SETTINGS, H3_FRAME_TYPE_WEBTRANSPORT_STREAM,
     H3_STREAM_TYPE_CONTROL, H3_STREAM_TYPE_PUSH, H3_STREAM_TYPE_QPACK_DECODER,
     H3_STREAM_TYPE_QPACK_ENCODER, H3_STREAM_TYPE_WEBTRANSPORT, QPACK_DECODER_MAX_BLOCKED_STREAMS,
     QPACK_DECODER_MAX_TABLE_CAPACITY, SETTINGS_ENABLE_CONNECT_PROTOCOL, SETTINGS_H3_DATAGRAM,
@@ -260,17 +260,7 @@ impl H3 {
             end_stream,
         });
 
-        effects.push(Effect::LogH3Frame {
-            category: "http".to_owned(),
-            event: "frame_created".to_owned(),
-            data: json!({
-                "frame_type": H3_FRAME_TYPE_HEADERS,
-                "length": frame_len,
-                "headers": headers_to_json(headers),
-                "stream_id": stream_id
-            })
-            .to_string(),
-        });
+        debug!("Created HEADERS frame (stream_id={stream_id}, len={frame_len})");
 
         Ok(effects)
     }
@@ -323,15 +313,7 @@ impl H3 {
             });
         }
 
-        effects.push(Effect::LogH3Frame {
-            category: "http".to_owned(),
-            event: "stream_type_set".to_owned(),
-            data: json!({
-                "new": "webtransport",
-                "stream_id": stream_id
-            })
-            .to_string(),
-        });
+        debug!("Set stream type to webtransport for stream_id={stream_id}");
 
         let partial = self.ensure_partial_frame(stream_id);
         partial.stream_type = Some(H3_STREAM_TYPE_WEBTRANSPORT);
@@ -377,10 +359,12 @@ impl H3 {
             }
             Err(e) => {
                 let (code, reason) = match e {
-                    WebTransportError::Protocol(c, msg) => {
+                    WebTransportError::Configuration(c, msg)
+                    | WebTransportError::Connection(c, msg)
+                    | WebTransportError::Protocol(c, msg)
+                    | WebTransportError::Unknown(c, msg) => {
                         (c.unwrap_or(ERR_H3_INTERNAL_ERROR), msg)
                     }
-                    WebTransportError::Unknown(c, msg) => (c.unwrap_or(ERR_H3_INTERNAL_ERROR), msg),
                 };
                 effects.push(Effect::CloseQuicConnection {
                     error_code: code,
@@ -561,6 +545,12 @@ impl H3 {
                     "Invalid frame type on control stream".to_owned(),
                 ));
             }
+            H3_FRAME_TYPE_CANCEL_PUSH | H3_FRAME_TYPE_MAX_PUSH_ID => {
+                return Err(WebTransportError::Protocol(
+                    Some(ERR_H3_FRAME_UNEXPECTED),
+                    "Server Push frames are not supported".to_owned(),
+                ));
+            }
             _ => {}
         }
 
@@ -673,17 +663,7 @@ impl H3 {
                             p.blocked_frame_size.take().unwrap_or(0)
                         };
 
-                        effects.push(Effect::LogH3Frame {
-                            category: "http".to_owned(),
-                            event: "frame_parsed".to_owned(),
-                            data: json!({
-                                "frame_type": H3_FRAME_TYPE_HEADERS,
-                                "length": length,
-                                "headers": headers_to_json(&raw_headers),
-                                "stream_id": stream_id
-                            })
-                            .to_string(),
-                        });
+                        trace!("Parsed HEADERS frame (stream_id={stream_id}, len={length})");
 
                         events.push(ProtocolEvent::HeadersReceived {
                             stream_id,
@@ -703,6 +683,12 @@ impl H3 {
                 return Err(WebTransportError::Protocol(
                     Some(ERR_H3_FRAME_ERROR),
                     "WT_STREAM frame (0x41) received in unexpected location".to_owned(),
+                ));
+            }
+            H3_FRAME_TYPE_PUSH_PROMISE => {
+                return Err(WebTransportError::Protocol(
+                    Some(ERR_H3_FRAME_UNEXPECTED),
+                    "PUSH_PROMISE frame not supported".to_owned(),
                 ));
             }
             _ => {}
@@ -878,15 +864,7 @@ impl H3 {
                         p.stream_type = Some(H3_STREAM_TYPE_WEBTRANSPORT);
                         p.control_stream_id = Some(control_id);
 
-                        effects.push(Effect::LogH3Frame {
-                            category: "http".to_owned(),
-                            event: "stream_type_set".to_owned(),
-                            data: json!({
-                                "new": "webtransport",
-                                "stream_id": stream_id
-                            })
-                            .to_string(),
-                        });
+                        debug!("Parsed webtransport stream (stream_id={stream_id})");
 
                         h3_events.push(ProtocolEvent::WebTransportStreamDataReceived {
                             session_id: control_id,
@@ -975,16 +953,7 @@ impl H3 {
                     }
 
                     if ft == H3_FRAME_TYPE_DATA {
-                        effects.push(Effect::LogH3Frame {
-                            category: "http".to_owned(),
-                            event: "frame_parsed".to_owned(),
-                            data: json!({
-                                "frame_type": ft,
-                                "length": fs,
-                                "stream_id": stream_id
-                            })
-                            .to_string(),
-                        });
+                        trace!("Parsed DATA frame (stream_id={stream_id}, len={fs})");
                     }
                     consumed = usize::try_from(buf.position()).unwrap_or(consumed);
                     (ft, frame_sz)
@@ -1211,21 +1180,15 @@ impl H3 {
                         _ => {
                             let type_name = Self::infrastructure_stream_type_name(stream_type);
                             warn!(
-                                "Received unknown unidirectional stream type {} ({type_name}) on stream {stream_id}, ignoring",
-                                stream_type
+                                "Received unknown unidirectional stream type {stream_type} ({type_name}) on stream {stream_id}, ignoring"
                             );
                         }
                     }
 
-                    effects.push(Effect::LogH3Frame {
-                        category: "http".to_owned(),
-                        event: "stream_type_set".to_owned(),
-                        data: json!({
-                            "new": Self::infrastructure_stream_type_name(stream_type),
-                            "stream_id": stream_id
-                        })
-                        .to_string(),
-                    });
+                    debug!(
+                        "Set infrastructure stream type {} for stream_id={stream_id}",
+                        Self::infrastructure_stream_type_name(stream_type)
+                    );
                 } else {
                     return Ok((events, effects));
                 }
@@ -1538,23 +1501,6 @@ fn encode_settings(settings: &HashMap<u64, u64>) -> Result<Bytes, WebTransportEr
         }
     }
     Ok(buf.freeze())
-}
-
-// Header diagnostics serialization.
-fn headers_to_json(headers: &Headers) -> Value {
-    let mut sorted_headers: Vec<_> = headers.iter().collect();
-    sorted_headers.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-
-    let converted: Vec<Vec<String>> = sorted_headers
-        .iter()
-        .map(|(k, v)| {
-            vec![
-                String::from_utf8_lossy(k).into_owned(),
-                String::from_utf8_lossy(v).into_owned(),
-            ]
-        })
-        .collect();
-    json!(converted)
 }
 
 // Control stream identification.

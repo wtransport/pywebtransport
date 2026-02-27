@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-from asyncio import BaseTransport, DatagramTransport
+from asyncio import DatagramTransport
 from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self, cast
 
-from aioquic.asyncio.server import QuicServer
-
-from pywebtransport._adapter.server import WebTransportServerProtocol, create_server
+from pywebtransport._driver.driver import EndpointDriver, create_server
 from pywebtransport.config import ServerConfig
 from pywebtransport.connection import WebTransportConnection
 from pywebtransport.events import Event, EventEmitter
@@ -117,16 +115,17 @@ class WebTransportServer(EventEmitter):
 
         self._config = effective_config
 
-        self._background_tasks: set[asyncio.Task[Any]] = set()
         self._closing = False
         self._serving = False
         self._shutdown_event = asyncio.Event()
-        self._stats = ServerStats()
-
+        self._background_tasks: set[asyncio.Task[Any]] = set()
         self._close_task: asyncio.Task[None] | None = None
         self._connection_manager = ConnectionManager(max_connections=effective_config.max_connections)
-        self._server: QuicServer | None = None
         self._session_manager = SessionManager(max_sessions=effective_config.max_sessions)
+
+        self._driver: EndpointDriver | None = None
+        self._stats = ServerStats()
+        self._transport: DatagramTransport | None = None
 
         _logger.info("WebTransport server initialized.")
 
@@ -160,11 +159,9 @@ class WebTransportServer(EventEmitter):
     @property
     def local_address(self) -> Address | None:
         """Return the local address the server is bound to."""
-        if self._server is not None:
+        if self._transport is not None:
             try:
-                transport = self._server._transport
-                if transport is not None:
-                    return cast(Address | None, transport.get_extra_info("sockname"))
+                return cast(Address | None, self._transport.get_extra_info("sockname"))
             except (OSError, AttributeError):
                 return None
         return None
@@ -231,9 +228,8 @@ class WebTransportServer(EventEmitter):
         _logger.info("Starting WebTransport server on %s:%s", bind_host, bind_port)
 
         try:
-            self._server = await create_server(
-                host=bind_host, port=bind_port, config=self._config, connection_creator=self._create_connection_callback
-            )
+            self._transport, self._driver = await create_server(host=bind_host, port=bind_port, config=self._config)
+            self._driver.set_spawn_callback(callback=self._spawn_connection_callback)
             self._serving = True
             self._stats.start_time = get_timestamp()
             _logger.info("WebTransport server listening on %s", self.local_address)
@@ -246,7 +242,7 @@ class WebTransportServer(EventEmitter):
 
     async def serve_forever(self) -> None:
         """Run the server indefinitely until interrupted."""
-        if not self._serving or self._server is None:
+        if not self._serving or self._transport is None:
             raise ServerError(message="Server is not listening")
 
         _logger.info("Server is running. Press Ctrl+C to stop.")
@@ -279,35 +275,31 @@ class WebTransportServer(EventEmitter):
         except* Exception as eg:
             _logger.error("Errors occurred during manager shutdown: %s", eg.exceptions, exc_info=eg)
 
-        if self._server is not None:
-            self._server.close()
+        if self._transport is not None and not self._transport.is_closing():
+            self._transport.close()
 
         self._shutdown_event.set()
 
         self._closing = False
         _logger.info("WebTransport server closed.")
 
-    def _create_connection_callback(self, protocol: WebTransportServerProtocol, transport: BaseTransport) -> None:
-        """Instantiate a new WebTransportConnection from the protocol."""
-        _logger.debug("Creating WebTransportConnection via callback.")
+    def _spawn_connection_callback(self, handle: int) -> None:
+        """Instantiate a new WebTransportConnection from the spawned endpoint handle."""
+        _logger.debug("Creating WebTransportConnection for handle %d.", handle)
 
-        if not hasattr(transport, "sendto"):
-            _logger.error("Received transport without 'sendto' method: %s", type(transport).__name__)
-            if not transport.is_closing():
-                transport.close()
+        if self._transport is None or self._driver is None:
+            _logger.error("Spawn callback triggered but server is not fully initialized.")
             return
 
         try:
             connection = WebTransportConnection.accept(
-                transport=cast(DatagramTransport, transport), protocol=protocol, config=self._config
+                driver=self._driver, handle=handle, transport=self._transport, config=self._config
             )
             task = asyncio.create_task(coro=self._initialize_and_register_connection(connection=connection))
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
         except Exception as e:
             _logger.error("Error creating WebTransportConnection in callback: %s", e, exc_info=True)
-            if not transport.is_closing():
-                transport.close()
 
     async def _initialize_and_register_connection(self, connection: WebTransportConnection) -> None:
         """Initialize the connection engine and register it with the manager."""

@@ -29,8 +29,6 @@ DEBUG_MODE: Final[bool] = "--debug" in sys.argv
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 if DEBUG_MODE:
     logging.getLogger().setLevel(logging.DEBUG)
-    logging.getLogger("aioquic").setLevel(logging.DEBUG)
-    logging.getLogger("pywebtransport").setLevel(logging.DEBUG)
 
 logger = logging.getLogger("test_structured_messaging")
 

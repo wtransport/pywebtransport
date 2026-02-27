@@ -10,10 +10,15 @@ from pywebtransport import ClientConfig, ConfigurationError, Headers, ServerConf
 from pywebtransport.constants import (
     DEFAULT_ALPN_PROTOCOLS,
     DEFAULT_CONNECT_TIMEOUT,
+    DEFAULT_ENABLE_STATELESS_RETRY,
     DEFAULT_FLOW_CONTROL_WINDOW_SIZE,
     DEFAULT_INITIAL_MAX_DATA,
+    DEFAULT_KEEP_ALIVE,
     DEFAULT_MAX_CAPSULE_SIZE,
     DEFAULT_SERVER_MAX_CONNECTIONS,
+    DEFAULT_TRANSPORT_STREAMS_CAP,
+    MAX_DATAGRAM_SIZE,
+    MAX_PROTOCOL_STREAMS_LIMIT,
 )
 
 
@@ -21,8 +26,8 @@ class TestClientConfig:
 
     def test_copy_method(self) -> None:
         config1 = ClientConfig(alpn_protocols=["h3"])
-        config2 = config1.copy()
 
+        config2 = config1.copy()
         config2.max_connection_retries = 99
         config2.alpn_protocols.append("h2")
 
@@ -41,8 +46,10 @@ class TestClientConfig:
         assert config.congestion_control_algorithm == "cubic"
         assert config.flow_control_window_size == DEFAULT_FLOW_CONTROL_WINDOW_SIZE
         assert config.initial_max_data == DEFAULT_INITIAL_MAX_DATA
+        assert config.keep_alive == DEFAULT_KEEP_ALIVE
         assert config.max_capsule_size == DEFAULT_MAX_CAPSULE_SIZE
         assert config.alpn_protocols == DEFAULT_ALPN_PROTOCOLS
+        assert config.transport_streams_cap == DEFAULT_TRANSPORT_STREAMS_CAP
 
     def test_from_dict_method(self) -> None:
         config_dict = {"max_connection_retries": 5, "unknown_field": "should_be_ignored"}
@@ -61,6 +68,7 @@ class TestClientConfig:
 
         with patch("pywebtransport.config.get_type_hints", side_effect=mock_get_type_hints):
             config = ClientConfig.from_dict(config_dict={"max_connection_retries": 5})
+
             assert config.max_connection_retries == 5
 
     def test_from_dict_multi_union_ignored(self) -> None:
@@ -71,10 +79,12 @@ class TestClientConfig:
 
         with patch("pywebtransport.config.get_type_hints", side_effect=mock_get_type_hints):
             config = ClientConfig.from_dict(config_dict={"max_connections": 5})
+
             assert config.max_connections == 5
 
     def test_headers_remain_as_provided(self) -> None:
         headers: Headers = {"X-Custom": "Value", "User-Agent": "Custom/1.0"}
+
         config = ClientConfig(headers=headers)
 
         assert config.headers == headers
@@ -83,9 +93,10 @@ class TestClientConfig:
         assert config.user_agent is None
 
     def test_initialization_with_none_timeout(self) -> None:
-        config = ClientConfig(read_timeout=None)
+        config = ClientConfig(read_timeout=None, keep_alive=None)
 
         assert config.read_timeout is None
+        assert config.keep_alive is None
 
         config.validate()
 
@@ -118,10 +129,12 @@ class TestClientConfig:
             ({"connect_timeout": "invalid"}, "Timeout must be a number"),
             ({"connection_idle_timeout": 0}, "Timeout must be positive"),
             ({"flow_control_window_size": 0}, "must be positive"),
+            ({"keep_alive": -1}, "Timeout must be positive"),
+            ({"keep_alive": "invalid"}, "Timeout must be a number"),
             ({"max_capsule_size": 0}, "must be positive"),
             ({"max_connections": 0}, "must be positive"),
-            ({"max_datagram_size": 0}, "must be between 1 and 65535"),
-            ({"max_datagram_size": 65536}, "must be between 1 and 65535"),
+            ({"max_datagram_size": 0}, "must be between 1 and"),
+            ({"max_datagram_size": MAX_DATAGRAM_SIZE + 1}, "must be between 1 and"),
             ({"max_event_history_size": -1}, "must be non-negative"),
             ({"max_event_listeners": 0}, "must be positive"),
             ({"max_event_queue_size": 0}, "must be positive"),
@@ -132,6 +145,8 @@ class TestClientConfig:
             ({"max_stream_write_buffer": 0}, "must be positive"),
             ({"max_total_pending_events": 0}, "must be positive"),
             ({"pending_event_ttl": 0}, "Timeout must be positive"),
+            ({"transport_streams_cap": 0}, "must be between 1 and"),
+            ({"transport_streams_cap": MAX_PROTOCOL_STREAMS_LIMIT + 1}, "must be between 1 and"),
             ({"verify_mode": "INVALID"}, "unknown SSL verify mode"),
         ],
     )
@@ -139,6 +154,7 @@ class TestClientConfig:
         base_config = ClientConfig().to_dict()
         base_config["verify_mode"] = ssl.CERT_REQUIRED
         test_config = {**base_config, **invalid_attrs}
+
         config = ClientConfig(**test_config)
 
         with pytest.raises(ConfigurationError, match=error_match):
@@ -157,6 +173,7 @@ class TestClientConfig:
         base_config = ClientConfig().to_dict()
         base_config["verify_mode"] = ssl.CERT_REQUIRED
         test_config = {**base_config, **invalid_attrs}
+
         config = ClientConfig(**test_config)
 
         with pytest.raises(ConfigurationError, match=error_match):
@@ -169,12 +186,15 @@ class TestServerConfig:
         config = ServerConfig(certfile="dummy.crt", keyfile="dummy.key")
 
         assert config.bind_host == "::"
+        assert config.enable_stateless_retry == DEFAULT_ENABLE_STATELESS_RETRY
         assert config.max_connections == DEFAULT_SERVER_MAX_CONNECTIONS
         assert config.congestion_control_algorithm == "cubic"
         assert config.flow_control_window_size == DEFAULT_FLOW_CONTROL_WINDOW_SIZE
         assert config.initial_max_data == DEFAULT_INITIAL_MAX_DATA
+        assert config.keep_alive == DEFAULT_KEEP_ALIVE
         assert config.max_capsule_size == DEFAULT_MAX_CAPSULE_SIZE
         assert config.alpn_protocols == DEFAULT_ALPN_PROTOCOLS
+        assert config.transport_streams_cap == DEFAULT_TRANSPORT_STREAMS_CAP
 
     def test_from_dict_coercion(self) -> None:
         config_dict = {"bind_port": "8080", "certfile": "dummy.crt", "keyfile": "dummy.key"}
@@ -185,6 +205,7 @@ class TestServerConfig:
 
     def test_from_dict_enum_conversion_failure_ignored(self) -> None:
         config_dict = {"bind_port": 8080, "certfile": "c", "keyfile": "k", "verify_mode": "INVALID_MODE"}
+
         config = ServerConfig.from_dict(config_dict=config_dict)
 
         assert config.verify_mode == "INVALID_MODE"  # type: ignore[comparison-overlap]
@@ -194,6 +215,7 @@ class TestServerConfig:
 
     def test_from_dict_enum_conversion_success(self) -> None:
         config_dict = {"bind_port": 8080, "certfile": "c", "keyfile": "k", "verify_mode": "CERT_NONE"}
+
         config = ServerConfig.from_dict(config_dict=config_dict)
 
         assert config.verify_mode == ssl.CERT_NONE
@@ -214,6 +236,7 @@ class TestServerConfig:
 
     def test_from_dict_invalid_port_raises_error(self) -> None:
         config_dict = {"bind_port": "invalid", "certfile": "dummy.crt", "keyfile": "dummy.key"}
+
         config = ServerConfig.from_dict(config_dict=config_dict)
 
         with pytest.raises(ConfigurationError, match="Port must be an integer"):
@@ -280,10 +303,11 @@ class TestServerConfig:
             ({"bind_port": "invalid"}, "must be an integer"),
             ({"congestion_control_algorithm": "invalid_algo"}, "must be one of"),
             ({"flow_control_window_size": 0}, "must be positive"),
+            ({"keep_alive": -1}, "Timeout must be positive"),
             ({"max_capsule_size": 0}, "must be positive"),
             ({"max_connections": 0}, "must be positive"),
-            ({"max_datagram_size": 0}, "must be between 1 and 65535"),
-            ({"max_datagram_size": 65536}, "must be between 1 and 65535"),
+            ({"max_datagram_size": 0}, "must be between 1 and"),
+            ({"max_datagram_size": MAX_DATAGRAM_SIZE + 1}, "must be between 1 and"),
             ({"max_event_history_size": -1}, "must be non-negative"),
             ({"max_event_listeners": 0}, "must be positive"),
             ({"max_event_queue_size": 0}, "must be positive"),
@@ -295,6 +319,8 @@ class TestServerConfig:
             ({"max_total_pending_events": 0}, "must be positive"),
             ({"pending_event_ttl": -1.0}, "Timeout must be positive"),
             ({"read_timeout": "invalid"}, "Timeout must be a number"),
+            ({"transport_streams_cap": 0}, "must be between 1 and"),
+            ({"transport_streams_cap": MAX_PROTOCOL_STREAMS_LIMIT + 1}, "must be between 1 and"),
             ({"verify_mode": "INVALID"}, "unknown SSL verify mode"),
         ],
     )
@@ -302,6 +328,7 @@ class TestServerConfig:
         base_config = ServerConfig(certfile="dummy.crt", keyfile="dummy.key").to_dict()
         base_config["verify_mode"] = ssl.CERT_NONE
         test_config = {**base_config, **invalid_attrs}
+
         config = ServerConfig(**test_config)
 
         with pytest.raises(ConfigurationError, match=error_match):

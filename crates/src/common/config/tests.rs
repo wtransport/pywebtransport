@@ -1,6 +1,7 @@
 //! Unit tests for the `crate::common::config` module.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use rstest::*;
 
@@ -18,6 +19,7 @@ fn test_config_clone_trait_behavior_success() {
         bind_host: "localhost".to_owned(),
         bind_port: 4433,
         certfile: cert_path.clone(),
+        enable_stateless_retry: false,
         keyfile: key_path.clone(),
         require_client_auth: false,
         transport: TransportConfig::default(),
@@ -78,6 +80,7 @@ fn test_rust_server_config_manual_instantiation_success(
         bind_host: bind_host.clone(),
         bind_port,
         certfile: certfile.clone(),
+        enable_stateless_retry: true,
         keyfile: keyfile.clone(),
         require_client_auth: true,
         transport,
@@ -86,6 +89,7 @@ fn test_rust_server_config_manual_instantiation_success(
     assert_eq!(server_config.bind_host, bind_host);
     assert_eq!(server_config.bind_port, bind_port);
     assert_eq!(server_config.certfile, certfile);
+    assert!(server_config.enable_stateless_retry);
     assert_eq!(server_config.keyfile, keyfile);
     assert!(server_config.require_client_auth);
     assert!(server_config.transport.max_connections > 0);
@@ -96,27 +100,33 @@ fn test_transport_config_default_values_sanity_check_success() {
     let config = TransportConfig::default();
 
     assert!(!config.alpn_protocols.is_empty());
+    assert!(!config.close_timeout.is_zero());
     assert!(!config.congestion_control_algorithm.is_empty());
+    assert!(config.keep_alive.is_some_and(|d| !d.is_zero()));
     assert!(config.max_connections > 0);
     assert!(config.max_stream_read_buffer > 0);
-    assert!(config.read_timeout.is_some());
-    assert!(config.write_timeout.is_some());
-    assert!(config.close_timeout.as_nanos() > 0);
+    assert!(config.read_timeout.is_some_and(|d| !d.is_zero()));
+    assert!(config.transport_streams_cap > 0);
+    assert!(config.write_timeout.is_some_and(|d| !d.is_zero()));
 }
 
 #[rstest]
-#[case(false, 2048)]
-#[case(true, 1024)]
+#[case(30.0, 2048, 65535)]
+#[case(60.0, 1024, 10000)]
 fn test_transport_config_initialization_override_success(
-    #[case] keep_alive: bool,
+    #[case] keep_alive_secs: f64,
     #[case] max_message_size: u64,
+    #[case] transport_streams_cap: u64,
 ) {
+    let keep_alive = Some(Duration::from_secs_f64(keep_alive_secs));
     let config = TransportConfig {
         keep_alive,
         max_message_size,
+        transport_streams_cap,
         ..Default::default()
     };
 
     assert_eq!(config.keep_alive, keep_alive);
     assert_eq!(config.max_message_size, max_message_size);
+    assert_eq!(config.transport_streams_cap, transport_streams_cap);
 }

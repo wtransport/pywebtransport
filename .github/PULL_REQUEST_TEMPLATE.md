@@ -1,26 +1,19 @@
 ## Description
 
-Technical summary of changes and architectural rationale.
-
-## Related Issue
-
-Resolves #
+Technical summary and rationale.
 
 ## Impact Type
 
-- [ ] Bug fix (Patch bump)
-- [ ] New feature (Minor bump)
-- [ ] Breaking change (Major bump)
+- [ ] Bug fix
+- [ ] New feature
+- [ ] Breaking change
 - [ ] Maintenance
 
 ## Verification
 
-- [ ] Automated tests pass locally via `tox`.
-- [ ] New test cases added covering positive, negative, and edge scenarios.
+- [ ] Tests updated.
+- [ ] Local checks passed.
 
-## Compliance Checklist
+## Compliance
 
-- [ ] I have signed off every commit via `git commit -s`.
-- [ ] I have added a user-facing entry to `CHANGELOG.md`.
-- [ ] Code follows the style guidelines enforced by `black` and `isort`.
-- [ ] Documentation updated for public API changes.
+- [ ] I have signed off every commit via git commit -s.

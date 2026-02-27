@@ -19,7 +19,7 @@ from pywebtransport import (
     WebTransportSession,
     WebTransportStream,
 )
-from pywebtransport._adapter.client import WebTransportClientProtocol
+from pywebtransport._driver.driver import EndpointDriver
 from pywebtransport._protocol.events import (
     UserGetStreamDiagnostics,
     UserResetStream,
@@ -35,25 +35,29 @@ from pywebtransport.types import StreamDirection, StreamState
 class TestBaseStream:
 
     @pytest.fixture
-    def mock_connection(self, mock_protocol: MagicMock, mocker: MockerFixture) -> MagicMock:
+    def mock_connection(self, mock_driver: MagicMock, mocker: MockerFixture) -> MagicMock:
         conn = mocker.Mock(spec=WebTransportConnection)
         conn.config = mocker.Mock(spec=ClientConfig)
         conn.config.read_timeout = 0.1
         conn.config.write_timeout = 0.1
         conn.config.max_stream_read_buffer = 1024
-        conn._protocol = mock_protocol
+        conn._driver = mock_driver
+        conn._handle = 42
+
         return cast(MagicMock, conn)
 
     @pytest.fixture
-    def mock_protocol(self, mocker: MockerFixture) -> MagicMock:
-        proto = mocker.Mock(spec=WebTransportClientProtocol)
-        proto.create_request.side_effect = lambda: (1, asyncio.Future())
-        return cast(MagicMock, proto)
+    def mock_driver(self, mocker: MockerFixture) -> MagicMock:
+        driver = mocker.Mock(spec=EndpointDriver)
+        driver.create_request.side_effect = lambda: (1, asyncio.Future())
+
+        return cast(MagicMock, driver)
 
     @pytest.fixture
     def mock_session(self, mock_connection: MagicMock, mocker: MockerFixture) -> MagicMock:
         session = mocker.Mock(spec=WebTransportSession)
         session._connection = mocker.Mock(return_value=mock_connection)
+
         return cast(MagicMock, session)
 
     @pytest.fixture
@@ -61,11 +65,11 @@ class TestBaseStream:
         return _BaseStream(session=mock_session, stream_id=1, is_remote=False)
 
     @pytest.mark.asyncio
-    async def test_diagnostics_connection_closed_error(self, stream: _BaseStream, mock_protocol: MagicMock) -> None:
+    async def test_diagnostics_connection_closed_error(self, stream: _BaseStream, mock_driver: MagicMock) -> None:
         fut: asyncio.Future[Any] = asyncio.Future()
         fut.set_exception(ConnectionError("Closed"))
-        mock_protocol.create_request.side_effect = None
-        mock_protocol.create_request.return_value = (1, fut)
+        mock_driver.create_request.side_effect = None
+        mock_driver.create_request.return_value = (1, fut)
 
         with pytest.raises(StreamError, match="Connection is closed"):
             await stream.diagnostics()
@@ -78,11 +82,10 @@ class TestBaseStream:
             await stream.diagnostics()
 
     @pytest.mark.asyncio
-    async def test_diagnostics_success_deque(self, stream: _BaseStream, mock_protocol: MagicMock) -> None:
+    async def test_diagnostics_success_deque(self, stream: _BaseStream, mock_driver: MagicMock) -> None:
         fut: asyncio.Future[dict[str, Any]] = asyncio.Future()
-        mock_protocol.create_request.side_effect = None
-        mock_protocol.create_request.return_value = (1, fut)
-
+        mock_driver.create_request.side_effect = None
+        mock_driver.create_request.return_value = (1, fut)
         data = {
             "stream_id": 1,
             "session_id": 100,
@@ -102,17 +105,16 @@ class TestBaseStream:
 
         diag = await stream.diagnostics()
 
-        assert isinstance(mock_protocol.send_event.call_args.kwargs["event"], UserGetStreamDiagnostics)
+        kwargs = mock_driver.send_user_event.call_args.kwargs
+        assert kwargs["handle"] == 42
+        assert isinstance(kwargs["event"], UserGetStreamDiagnostics)
         assert diag.is_peer_initiated is False
 
     @pytest.mark.asyncio
-    async def test_diagnostics_success_no_conversion_needed(
-        self, stream: _BaseStream, mock_protocol: MagicMock
-    ) -> None:
+    async def test_diagnostics_success_no_conversion_needed(self, stream: _BaseStream, mock_driver: MagicMock) -> None:
         fut: asyncio.Future[dict[str, Any]] = asyncio.Future()
-        mock_protocol.create_request.side_effect = None
-        mock_protocol.create_request.return_value = (1, fut)
-
+        mock_driver.create_request.side_effect = None
+        mock_driver.create_request.return_value = (1, fut)
         data = {
             "stream_id": 1,
             "session_id": 100,
@@ -131,6 +133,7 @@ class TestBaseStream:
         fut.set_result(data)
 
         diag = await stream.diagnostics()
+
         assert diag.is_peer_initiated is True
 
     def test_init(self, stream: _BaseStream, mock_session: MagicMock) -> None:
@@ -153,9 +156,11 @@ class TestBaseStream:
 
     def test_is_remote_property(self, mock_session: MagicMock) -> None:
         s1 = _BaseStream(session=mock_session, stream_id=1, is_remote=True)
+
         assert s1.is_remote is True
 
         s2 = _BaseStream(session=mock_session, stream_id=2, is_remote=False)
+
         assert s2.is_remote is False
 
     @pytest.mark.asyncio
@@ -265,6 +270,7 @@ class TestWebTransportReceiveStream(TestBaseStream):
         assert stream.can_read is True
 
         stream._cached_state = StreamState.RESET_RECEIVED
+
         assert stream.can_read is False
 
     @pytest.mark.asyncio
@@ -280,10 +286,10 @@ class TestWebTransportReceiveStream(TestBaseStream):
         assert await stream.read() == b""
 
     @pytest.mark.asyncio
-    async def test_read_eof(self, stream: WebTransportReceiveStream, mock_protocol: MagicMock) -> None:
+    async def test_read_eof(self, stream: WebTransportReceiveStream, mock_driver: MagicMock) -> None:
         fut: asyncio.Future[bytes] = asyncio.Future()
-        mock_protocol.create_request.side_effect = None
-        mock_protocol.create_request.return_value = (1, fut)
+        mock_driver.create_request.side_effect = None
+        mock_driver.create_request.return_value = (1, fut)
         fut.set_result(b"")
 
         data = await stream.read()
@@ -291,16 +297,16 @@ class TestWebTransportReceiveStream(TestBaseStream):
         assert data == b""
         assert stream._read_eof is True
 
-        mock_protocol.create_request.reset_mock()
+        mock_driver.create_request.reset_mock()
 
         assert await stream.read() == b""
-        mock_protocol.create_request.assert_not_called()
+        mock_driver.create_request.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_read_generic_error(self, stream: WebTransportReceiveStream, mock_protocol: MagicMock) -> None:
+    async def test_read_generic_error(self, stream: WebTransportReceiveStream, mock_driver: MagicMock) -> None:
         fut: asyncio.Future[bytes] = asyncio.Future()
-        mock_protocol.create_request.side_effect = None
-        mock_protocol.create_request.return_value = (1, fut)
+        mock_driver.create_request.side_effect = None
+        mock_driver.create_request.return_value = (1, fut)
         fut.set_exception(ValueError("Fail"))
 
         with pytest.raises(ValueError):
@@ -314,40 +320,43 @@ class TestWebTransportReceiveStream(TestBaseStream):
             await stream.read()
 
     @pytest.mark.asyncio
-    async def test_read_stream_error(self, stream: WebTransportReceiveStream, mock_protocol: MagicMock) -> None:
+    async def test_read_stream_error(self, stream: WebTransportReceiveStream, mock_driver: MagicMock) -> None:
         fut: asyncio.Future[bytes] = asyncio.Future()
-        mock_protocol.create_request.side_effect = None
-        mock_protocol.create_request.return_value = (1, fut)
+        mock_driver.create_request.side_effect = None
+        mock_driver.create_request.return_value = (1, fut)
         fut.set_exception(StreamError("State", error_code=ErrorCodes.STREAM_STATE_ERROR))
 
         assert await stream.read() == b""
 
-        mock_protocol.create_request.reset_mock()
+        mock_driver.create_request.reset_mock()
 
         assert await stream.read() == b""
-        mock_protocol.create_request.assert_not_called()
+        mock_driver.create_request.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_read_stream_error_reraise(self, stream: WebTransportReceiveStream, mock_protocol: MagicMock) -> None:
+    async def test_read_stream_error_reraise(self, stream: WebTransportReceiveStream, mock_driver: MagicMock) -> None:
         fut: asyncio.Future[bytes] = asyncio.Future()
-        mock_protocol.create_request.side_effect = None
-        mock_protocol.create_request.return_value = (1, fut)
+        mock_driver.create_request.side_effect = None
+        mock_driver.create_request.return_value = (1, fut)
         fut.set_exception(StreamError("Other", error_code=ErrorCodes.H3_FRAME_ERROR))
 
         with pytest.raises(StreamError, match="Other"):
             await stream.read()
 
     @pytest.mark.asyncio
-    async def test_read_success(self, stream: WebTransportReceiveStream, mock_protocol: MagicMock) -> None:
+    async def test_read_success(self, stream: WebTransportReceiveStream, mock_driver: MagicMock) -> None:
         fut: asyncio.Future[bytes] = asyncio.Future()
-        mock_protocol.create_request.side_effect = None
-        mock_protocol.create_request.return_value = (1, fut)
+        mock_driver.create_request.side_effect = None
+        mock_driver.create_request.return_value = (1, fut)
         fut.set_result(b"data")
 
         data = await stream.read(max_bytes=10)
 
         assert data == b"data"
-        event = mock_protocol.send_event.call_args.kwargs["event"]
+        kwargs = mock_driver.send_user_event.call_args.kwargs
+
+        assert kwargs["handle"] == 42
+        event = kwargs["event"]
         assert isinstance(event, UserStreamRead)
         assert event.max_bytes == 10
 
@@ -441,16 +450,19 @@ class TestWebTransportReceiveStream(TestBaseStream):
         assert "id=2" in repr(stream)
 
     @pytest.mark.asyncio
-    async def test_stop_receiving(self, stream: WebTransportReceiveStream, mock_protocol: MagicMock) -> None:
+    async def test_stop_receiving(self, stream: WebTransportReceiveStream, mock_driver: MagicMock) -> None:
         fut: asyncio.Future[None] = asyncio.Future()
-        mock_protocol.create_request.side_effect = None
-        mock_protocol.create_request.return_value = (1, fut)
+        mock_driver.create_request.side_effect = None
+        mock_driver.create_request.return_value = (1, fut)
         fut.set_result(None)
 
         await stream.stop_receiving(error_code=123)
 
         assert stream.state == StreamState.RESET_RECEIVED
-        event = mock_protocol.send_event.call_args.kwargs["event"]
+        kwargs = mock_driver.send_user_event.call_args.kwargs
+
+        assert kwargs["handle"] == 42
+        event = kwargs["event"]
         assert isinstance(event, UserStopSending)
         assert event.error_code == 123
 
@@ -564,6 +576,7 @@ class TestWebTransportSendStream(TestBaseStream):
         assert stream.can_write is True
 
         stream._cached_state = StreamState.RESET_SENT
+
         assert stream.can_write is False
 
     def test_repr(self, stream: _BaseStream) -> None:
@@ -571,16 +584,19 @@ class TestWebTransportSendStream(TestBaseStream):
         assert "WebTransportSendStream" in repr(stream)
 
     @pytest.mark.asyncio
-    async def test_reset(self, stream: WebTransportSendStream, mock_protocol: MagicMock) -> None:
+    async def test_reset(self, stream: WebTransportSendStream, mock_driver: MagicMock) -> None:
         fut: asyncio.Future[None] = asyncio.Future()
-        mock_protocol.create_request.side_effect = None
-        mock_protocol.create_request.return_value = (1, fut)
+        mock_driver.create_request.side_effect = None
+        mock_driver.create_request.return_value = (1, fut)
         fut.set_result(None)
 
         await stream.reset(error_code=99)
 
         assert stream.state == StreamState.RESET_SENT
-        event = mock_protocol.send_event.call_args.kwargs["event"]
+        kwargs = mock_driver.send_user_event.call_args.kwargs
+
+        assert kwargs["handle"] == 42
+        event = kwargs["event"]
         assert isinstance(event, UserResetStream)
         assert event.error_code == 99
 
@@ -592,15 +608,17 @@ class TestWebTransportSendStream(TestBaseStream):
             await stream.reset()
 
     @pytest.mark.asyncio
-    async def test_write(self, stream: WebTransportSendStream, mock_protocol: MagicMock) -> None:
+    async def test_write(self, stream: WebTransportSendStream, mock_driver: MagicMock) -> None:
         fut: asyncio.Future[None] = asyncio.Future()
-        mock_protocol.create_request.side_effect = None
-        mock_protocol.create_request.return_value = (1, fut)
+        mock_driver.create_request.side_effect = None
+        mock_driver.create_request.return_value = (1, fut)
         fut.set_result(None)
 
         await stream.write(data=b"test", end_stream=True)
 
-        event = mock_protocol.send_event.call_args.kwargs["event"]
+        kwargs = mock_driver.send_user_event.call_args.kwargs
+        assert kwargs["handle"] == 42
+        event = kwargs["event"]
         assert isinstance(event, UserSendStreamData)
         assert event.data == b"test"
         assert event.end_stream is True
@@ -630,10 +648,10 @@ class TestWebTransportSendStream(TestBaseStream):
             await stream.write_all(data=b"data")
 
     @pytest.mark.asyncio
-    async def test_write_early_return(self, stream: WebTransportSendStream, mock_protocol: MagicMock) -> None:
+    async def test_write_early_return(self, stream: WebTransportSendStream, mock_driver: MagicMock) -> None:
         await stream.write(data=b"", end_stream=False)
 
-        mock_protocol.create_request.assert_not_called()
+        mock_driver.create_request.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_write_no_connection(self, stream: WebTransportSendStream, mock_session: MagicMock) -> None:
@@ -643,10 +661,10 @@ class TestWebTransportSendStream(TestBaseStream):
             await stream.write(data=b"a")
 
     @pytest.mark.asyncio
-    async def test_write_timeout_propagation(self, stream: WebTransportSendStream, mock_protocol: MagicMock) -> None:
+    async def test_write_timeout_propagation(self, stream: WebTransportSendStream, mock_driver: MagicMock) -> None:
         fut: asyncio.Future[None] = asyncio.Future()
-        mock_protocol.create_request.side_effect = None
-        mock_protocol.create_request.return_value = (1, fut)
+        mock_driver.create_request.side_effect = None
+        mock_driver.create_request.return_value = (1, fut)
         fut.set_exception(TimeoutError("Timeout"))
 
         with pytest.raises(TimeoutError):
@@ -803,7 +821,6 @@ class TestWebTransportStream(TestBaseStream):
         assert stream._is_remote is False
         assert stream._cached_state == StreamState.OPEN
         assert stream.events is not None
-
         assert isinstance(stream._reader, WebTransportReceiveStream)
         assert isinstance(stream._writer, WebTransportSendStream)
 
