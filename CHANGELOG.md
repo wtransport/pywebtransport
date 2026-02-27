@@ -7,9 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned for future release
+### Fixed
 
-_(No planned changes for the next release yet.)_
+- **Windows Build Compatibility**: Resolved MSVC compilation failures by conditionally injecting a scoped POSIX compatibility layer (`sys/queue.h`) for the vendored `ls-qpack` dependency.
 
 ## [0.13.1] - 2026-02-16
 

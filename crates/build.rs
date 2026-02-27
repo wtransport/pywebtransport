@@ -9,31 +9,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let vendor_dir = manifest_dir.join("vendor");
     let lsqpack_dir = vendor_dir.join("ls-qpack");
     let xxhash_dir = vendor_dir.join("xxhash");
+    let wincompat_dir = lsqpack_dir.join("wincompat");
 
     let lsqpack_c = lsqpack_dir.join("lsqpack.c");
     let xxhash_c = xxhash_dir.join("xxhash.c");
     let lsqpack_h = lsqpack_dir.join("lsqpack.h");
     let lsxpack_header_h = lsqpack_dir.join("lsxpack_header.h");
 
-    cc::Build::new()
+    let is_windows = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows");
+
+    let mut build = cc::Build::new();
+    build
         .file(&lsqpack_c)
         .file(&xxhash_c)
         .include(&lsqpack_dir)
         .include(&xxhash_dir)
         .define("XXH_INLINE_ALL", None)
-        .warnings(false)
-        .compile("lsqpack");
+        .warnings(false);
+
+    if is_windows {
+        build.include(&wincompat_dir);
+    }
+
+    build.compile("lsqpack");
 
     println!("cargo:rerun-if-changed={}", lsqpack_c.display());
     println!("cargo:rerun-if-changed={}", xxhash_c.display());
     println!("cargo:rerun-if-changed={}", lsqpack_h.display());
     println!("cargo:rerun-if-changed={}", lsxpack_header_h.display());
 
-    let bindings = bindgen::Builder::default()
+    let mut builder = bindgen::Builder::default()
         .header(path_to_str(&lsqpack_h)?)
         .header(path_to_str(&lsxpack_header_h)?)
         .clang_arg(format!("-I{}", lsqpack_dir.display()))
-        .clang_arg(format!("-I{}", xxhash_dir.display()))
+        .clang_arg(format!("-I{}", xxhash_dir.display()));
+
+    if is_windows {
+        builder = builder.clang_arg(format!("-I{}", wincompat_dir.display()));
+    }
+
+    let bindings = builder
         .allowlist_function("lsqpack_.*")
         .allowlist_type("lsqpack_.*")
         .allowlist_function("lsxpack_.*")
