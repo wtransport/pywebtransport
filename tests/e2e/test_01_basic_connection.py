@@ -20,7 +20,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 if DEBUG_MODE:
     logging.getLogger().setLevel(logging.DEBUG)
 
-logger = logging.getLogger("test_basic_connection")
+logger = logging.getLogger(name="test_basic_connection")
 
 
 async def test_server_reachability() -> bool:
@@ -28,7 +28,7 @@ async def test_server_reachability() -> bool:
     logger.info("Pre-check: Testing server reachability...")
 
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
         sock.settimeout(2.0)
         try:
             sock.sendto(b"ping", (SERVER_HOST, SERVER_PORT))

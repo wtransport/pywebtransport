@@ -55,7 +55,7 @@ async def _is_server_ready() -> bool:
                 await session.close()
                 return True
         except (ClientError, asyncio.TimeoutError):
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(delay=0.5)
     return False
 
 
@@ -72,19 +72,14 @@ async def e2e_server() -> AsyncGenerator[None, None]:
         "tests.e2e.test_00_e2e_server",
     ]
 
-    server_proc = subprocess.Popen(
-        server_command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    server_proc = subprocess.Popen(args=server_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
     is_ready = await _is_server_ready()
 
     if not is_ready or server_proc.poll() is not None:
         stdout, stderr = server_proc.communicate()
         pytest.fail(
-            f"E2E server failed to start or become ready. Exit code: {server_proc.returncode}\n"
+            reason=f"E2E server failed to start or become ready. Exit code: {server_proc.returncode}\n"
             f"STDOUT:\n{stdout}\n"
             f"STDERR:\n{stderr}",
             pytrace=False,

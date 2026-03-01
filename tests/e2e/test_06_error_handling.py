@@ -27,7 +27,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 if DEBUG_MODE:
     logging.getLogger().setLevel(logging.DEBUG)
 
-logger = logging.getLogger("test_error_handling")
+logger = logging.getLogger(name="test_error_handling")
 
 
 async def test_connection_timeout() -> bool:
@@ -55,10 +55,7 @@ async def test_connection_timeout() -> bool:
 async def test_invalid_server_address() -> bool:
     """Test handling of various invalid server addresses."""
     logger.info("--- Test 06B: Invalid Server Address ---")
-    invalid_urls = [
-        "https://invalid-hostname-for-testing.local/",
-        "http://127.0.0.1:4433/",
-    ]
+    invalid_urls = ["https://invalid-hostname-for-testing.local/", "http://127.0.0.1:4433/"]
     config = ClientConfig(verify_mode=ssl.CERT_NONE, connect_timeout=2.0)
 
     try:

@@ -18,7 +18,7 @@ from pywebtransport.exceptions import ServerError
 from pywebtransport.manager.connection import ConnectionManager
 from pywebtransport.manager.session import SessionManager
 from pywebtransport.types import Address, ConnectionState, EventType, SessionState
-from pywebtransport.utils import get_logger, get_timestamp
+from pywebtransport.utils import get_logger, get_timestamp, resolve_host
 
 __all__: list[str] = ["ServerDiagnostics", "ServerStats", "WebTransportServer"]
 
@@ -228,11 +228,32 @@ class WebTransportServer(EventEmitter):
         _logger.info("Starting WebTransport server on %s:%s", bind_host, bind_port)
 
         try:
-            self._transport, self._driver = await create_server(host=bind_host, port=bind_port, config=self._config)
-            self._driver.set_spawn_callback(callback=self._spawn_connection_callback)
+            resolved_ips = await resolve_host(host=bind_host, port=bind_port)
+            last_error: Exception | None = None
+
+            transport: DatagramTransport | None = None
+            driver: EndpointDriver | None = None
+
+            for ip in resolved_ips:
+                try:
+                    transport, driver = await create_server(host=ip, port=bind_port, config=self._config)
+                    break
+                except FileNotFoundError:
+                    raise
+                except Exception as e:
+                    last_error = e
+
+            if transport is None or driver is None:
+                raise ServerError(message=f"Could not bind to any resolved IP for {bind_host}") from last_error
+
+            driver.set_spawn_callback(callback=self._spawn_connection_callback)
+
+            self._transport = transport
+            self._driver = driver
             self._serving = True
             self._stats.start_time = get_timestamp()
             _logger.info("WebTransport server listening on %s", self.local_address)
+
         except FileNotFoundError as e:
             _logger.critical("Certificate/Key file error: %s", e)
             raise ServerError(message=f"Certificate/Key file error: {e}") from e

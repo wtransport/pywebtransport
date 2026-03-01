@@ -116,8 +116,8 @@ class TestBaseDataclassSerializer:
         assert result.value_str == "hello"
 
     @pytest.mark.parametrize(
-        "data, target_type, expected",
-        [
+        argnames="data, target_type, expected",
+        argvalues=[
             (None, int, None),
             (123, Any, 123),
             ([1], Any, [1]),
@@ -160,7 +160,7 @@ class TestBaseDataclassSerializer:
         assert result == expected
 
     def test_enum_conversion_failure(self, serializer: BaseDataclassSerializer) -> None:
-        with pytest.raises(SerializationError, match="Invalid value 'invalid' for enum Status"):
+        with pytest.raises(expected_exception=SerializationError, match="Invalid value 'invalid' for enum Status"):
             serializer.convert_to_type(data="invalid", target_type=Status)
 
     def test_enum_conversion_success(self, serializer: BaseDataclassSerializer) -> None:
@@ -169,13 +169,13 @@ class TestBaseDataclassSerializer:
         assert result == Status.ACTIVE
 
     def test_from_dict_recursion_limit(self, serializer: BaseDataclassSerializer) -> None:
-        with pytest.raises(SerializationError, match="Maximum recursion depth exceeded"):
+        with pytest.raises(expected_exception=SerializationError, match="Maximum recursion depth exceeded"):
             serializer.from_dict_to_dataclass(data={}, cls=SimpleDataclass, depth=65)
 
     def test_from_dict_to_dataclass_raises_serialization_error(self, serializer: BaseDataclassSerializer) -> None:
         data = {"optional_with_default": 456}
 
-        with pytest.raises(SerializationError) as exc_info:
+        with pytest.raises(expected_exception=SerializationError) as exc_info:
             serializer.from_dict_to_dataclass(data=data, cls=DataclassWithMissingField, depth=0)
 
         assert "Failed to unpack dictionary" in str(exc_info.value)
@@ -194,7 +194,7 @@ class TestBaseDataclassSerializer:
     def test_recursion_limit_exceeded(self, serializer: BaseDataclassSerializer) -> None:
         data = {"value_int": 1, "value_str": "text"}
 
-        with pytest.raises(SerializationError, match="Maximum recursion depth exceeded"):
+        with pytest.raises(expected_exception=SerializationError, match="Maximum recursion depth exceeded"):
             serializer.convert_to_type(data=data, target_type=SimpleDataclass, depth=65)
 
     def test_regular_class_passthrough(self, serializer: BaseDataclassSerializer) -> None:

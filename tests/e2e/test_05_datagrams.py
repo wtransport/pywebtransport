@@ -1,3 +1,5 @@
+"""E2E test for WebTransport datagrams."""
+
 import asyncio
 import logging
 import ssl
@@ -16,9 +18,9 @@ DEBUG_MODE: Final[bool] = "--debug" in sys.argv
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 if DEBUG_MODE:
-    logging.getLogger().setLevel(logging.DEBUG)
+    logging.getLogger().setLevel(level=logging.DEBUG)
 
-logger = logging.getLogger("test_datagrams")
+logger = logging.getLogger(name="test_datagrams")
 
 
 async def test_basic_datagram() -> bool:
@@ -85,8 +87,8 @@ async def test_multiple_datagrams() -> bool:
                 except Exception:
                     pass
 
-            receiver_task = asyncio.create_task(receiver())
-            await asyncio.sleep(0.1)
+            receiver_task = asyncio.create_task(coro=receiver())
+            await asyncio.sleep(delay=0.1)
 
             for i in range(num_datagrams):
                 await session.send_datagram(data=f"Datagram message {i + 1}".encode())
@@ -209,7 +211,7 @@ async def main() -> int:
                 logger.error("%s: FAILED", test_name)
         except Exception as e:
             logger.error("%s: CRASHED - %s", test_name, e, exc_info=True)
-        await asyncio.sleep(1)
+        await asyncio.sleep(delay=1)
 
     logger.info("")
     logger.info("=" * 60)

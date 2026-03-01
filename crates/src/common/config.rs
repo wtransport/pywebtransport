@@ -147,6 +147,9 @@ pub struct RustClientConfig {
     /// Connection establishment timeout.
     pub connect_timeout: Duration,
 
+    /// Delay between concurrent connection attempts.
+    pub connection_attempt_delay: Duration,
+
     /// Session establishment custom headers.
     pub headers: Vec<(String, String)>,
 
@@ -181,6 +184,9 @@ impl Default for RustClientConfig {
             ca_certs: None,
             certfile: None,
             connect_timeout: Duration::from_secs_f64(constants::DEFAULT_CONNECT_TIMEOUT),
+            connection_attempt_delay: Duration::from_secs_f64(
+                constants::DEFAULT_CONNECTION_ATTEMPT_DELAY,
+            ),
             headers: Vec::new(),
             keyfile: None,
             max_connection_retries: constants::DEFAULT_MAX_CONNECTION_RETRIES,

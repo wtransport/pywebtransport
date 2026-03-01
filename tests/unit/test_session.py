@@ -76,7 +76,7 @@ class TestSessionDiagnostics:
         assert diag.local_data_consumed == 40
         assert diag.peer_streams_bidi_closed == 1
 
-        with pytest.raises(dataclasses.FrozenInstanceError):
+        with pytest.raises(expected_exception=dataclasses.FrozenInstanceError):
             cast(Any, diag).state = SessionState.CLOSED
 
         assert not hasattr(diag, "__dict__")
@@ -142,7 +142,7 @@ class TestWebTransportSession:
         mock_driver.create_request.side_effect = None
         mock_driver.create_request.return_value = (1, fut)
         fut.set_exception(ConnectionError("Gone"))
-        spy_logger = mocker.patch("pywebtransport.session._logger")
+        spy_logger = mocker.patch(target="pywebtransport.session._logger")
 
         await session.close()
 
@@ -170,7 +170,7 @@ class TestWebTransportSession:
 
     @pytest.mark.asyncio
     async def test_context_manager(self, session: WebTransportSession, mocker: MockerFixture) -> None:
-        spy_close = mocker.patch.object(WebTransportSession, "close", new_callable=mocker.AsyncMock)
+        spy_close = mocker.patch.object(target=WebTransportSession, attribute="close", new_callable=mocker.AsyncMock)
 
         async with session as s:
             assert s is session
@@ -181,7 +181,7 @@ class TestWebTransportSession:
     async def test_create_stream_connection_gone(self, session: WebTransportSession) -> None:
         session._connection = lambda: None  # type: ignore[assignment]
 
-        with pytest.raises(ConnectionError, match="Connection is gone"):
+        with pytest.raises(expected_exception=ConnectionError, match="Connection is gone"):
             await session.create_bidirectional_stream()
 
     @pytest.mark.asyncio
@@ -191,7 +191,7 @@ class TestWebTransportSession:
         mock_driver.create_request.return_value = (1, fut)
         fut.set_exception(ValueError("Fail"))
 
-        with pytest.raises(ValueError, match="Fail"):
+        with pytest.raises(expected_exception=ValueError, match="Fail"):
             await session.create_bidirectional_stream()
 
     @pytest.mark.asyncio
@@ -204,7 +204,7 @@ class TestWebTransportSession:
         mock_connection._stream_handles = {}
         fut.set_result(103)
 
-        with pytest.raises(StreamError, match="Internal error creating stream handle"):
+        with pytest.raises(expected_exception=StreamError, match="Internal error creating stream handle"):
             await session.create_bidirectional_stream()
 
     @pytest.mark.asyncio
@@ -218,12 +218,12 @@ class TestWebTransportSession:
         mock_connection._stream_handles = {104: mock_recv}
         fut.set_result(104)
 
-        with pytest.raises(StreamError, match="Invalid stream handle type"):
+        with pytest.raises(expected_exception=StreamError, match="Invalid stream handle type"):
             await session.create_bidirectional_stream()
 
     @pytest.mark.parametrize(
-        "method, wrong_type, error_msg",
-        [
+        argnames="method, wrong_type, error_msg",
+        argvalues=[
             ("create_bidirectional_stream", WebTransportSendStream, "Expected bidirectional stream"),
             ("create_unidirectional_stream", WebTransportStream, "Expected unidirectional send stream"),
         ],
@@ -247,12 +247,12 @@ class TestWebTransportSession:
         fut.set_result(105)
         create_method = getattr(session, method)
 
-        with pytest.raises(StreamError, match=error_msg):
+        with pytest.raises(expected_exception=StreamError, match=error_msg):
             await create_method()
 
     @pytest.mark.parametrize(
-        "method, stream_type, is_uni, req_id",
-        [
+        argnames="method, stream_type, is_uni, req_id",
+        argvalues=[
             ("create_bidirectional_stream", WebTransportStream, False, 101),
             ("create_unidirectional_stream", WebTransportSendStream, True, 102),
         ],
@@ -294,10 +294,10 @@ class TestWebTransportSession:
         fut: asyncio.Future[int] = asyncio.Future()
         mock_driver.create_request.side_effect = None
         mock_driver.create_request.return_value = (1, fut)
-        mocker.patch("asyncio.timeout", side_effect=asyncio.TimeoutError)
-        spy_logger = mocker.patch("pywebtransport.session._logger")
+        mocker.patch(target="asyncio.timeout", side_effect=asyncio.TimeoutError)
+        spy_logger = mocker.patch(target="pywebtransport.session._logger")
 
-        with pytest.raises(TimeoutError, match="timed out creating stream"):
+        with pytest.raises(expected_exception=TimeoutError, match="timed out creating stream"):
             await session.create_bidirectional_stream()
 
         spy_logger.warning.assert_called_with("Timeout creating stream on session %s", 1)
@@ -309,14 +309,14 @@ class TestWebTransportSession:
         mock_driver.create_request.return_value = (1, fut)
         fut.set_exception(ConnectionError("Closed"))
 
-        with pytest.raises(SessionError, match="Connection is closed"):
+        with pytest.raises(expected_exception=SessionError, match="Connection is closed"):
             await session.diagnostics()
 
     @pytest.mark.asyncio
     async def test_diagnostics_connection_gone(self, session: WebTransportSession) -> None:
         session._connection = lambda: None  # type: ignore[assignment]
 
-        with pytest.raises(ConnectionError, match="Connection is gone"):
+        with pytest.raises(expected_exception=ConnectionError, match="Connection is gone"):
             await session.diagnostics()
 
     @pytest.mark.asyncio
@@ -424,13 +424,13 @@ class TestWebTransportSession:
     async def test_methods_connection_gone(self, session: WebTransportSession) -> None:
         session._connection = lambda: None  # type: ignore[assignment]
 
-        with pytest.raises(ConnectionError):
+        with pytest.raises(expected_exception=ConnectionError):
             await session.grant_data_credit(max_data=1)
 
-        with pytest.raises(ConnectionError):
+        with pytest.raises(expected_exception=ConnectionError):
             await session.grant_streams_credit(is_unidirectional=True, max_streams=1)
 
-        with pytest.raises(ConnectionError):
+        with pytest.raises(expected_exception=ConnectionError):
             await session.send_datagram(data=b"")
 
     def test_on_session_closed(self, session: WebTransportSession) -> None:

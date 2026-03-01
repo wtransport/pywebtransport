@@ -8,8 +8,8 @@ from pywebtransport._driver import abi
 class TestAbi:
 
     @pytest.mark.parametrize(
-        "constant_name, expected_value",
-        [
+        argnames="constant_name, expected_value",
+        argvalues=[
             ("ABI_VERSION", 1),
             ("CONNECTION_EFFECTS", 0x00),
             ("CONNECTION_SPAWNED", 0x01),

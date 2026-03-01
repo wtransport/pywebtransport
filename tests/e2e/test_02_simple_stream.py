@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 if DEBUG_MODE:
     logging.getLogger().setLevel(logging.DEBUG)
 
-logger = logging.getLogger("test_simple_stream")
+logger = logging.getLogger(name="test_simple_stream")
 
 
 async def test_stream_creation() -> bool:
@@ -156,7 +156,7 @@ async def main() -> int:
                 logger.error("%s: FAILED", test_name)
         except Exception as e:
             logger.error("%s: CRASHED - %s", test_name, e, exc_info=True)
-        await asyncio.sleep(1)
+        await asyncio.sleep(delay=1)
 
     logger.info("")
     logger.info("=" * 50)

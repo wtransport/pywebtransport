@@ -14,12 +14,12 @@ from pywebtransport.types import EventType
 
 @pytest.fixture
 def mock_logger(mocker: MockerFixture) -> Any:
-    return mocker.patch("pywebtransport.events._logger")
+    return mocker.patch(target="pywebtransport.events._logger")
 
 
 @pytest.fixture(autouse=True)
 def mock_timestamp(mocker: MockerFixture) -> None:
-    mocker.patch("time.perf_counter", return_value=12345.6789)
+    mocker.patch(target="time.perf_counter", return_value=12345.6789)
 
 
 class TestEvent:
@@ -107,7 +107,7 @@ class TestEventEmitter:
     @pytest.mark.asyncio
     async def test_close(self, emitter: EventEmitter, mocker: MockerFixture) -> None:
         real_task = asyncio.create_task(coro=asyncio.sleep(delay=10))
-        cancel_spy = mocker.spy(real_task, "cancel")
+        cancel_spy = mocker.spy(obj=real_task, name="cancel")
         emitter._processing_task = real_task
         emitter.on(event_type=EventType.SESSION_READY, handler=mocker.Mock())
 
@@ -120,24 +120,24 @@ class TestEventEmitter:
     @pytest.mark.asyncio
     async def test_close_cancels_background_tasks(self, emitter: EventEmitter) -> None:
         async def hang() -> None:
-            await asyncio.sleep(10)
+            await asyncio.sleep(delay=10)
 
         async def quick() -> None:
             pass
 
-        task1 = asyncio.create_task(hang())
-        task2 = asyncio.create_task(quick())
+        task1 = asyncio.create_task(coro=hang())
+        task2 = asyncio.create_task(coro=quick())
 
         await task2
 
         emitter._background_tasks.add(task1)
         emitter._background_tasks.add(task2)
 
-        await asyncio.sleep(0)
+        await asyncio.sleep(delay=0)
 
         await emitter.close()
 
-        with pytest.raises(asyncio.CancelledError):
+        with pytest.raises(expected_exception=asyncio.CancelledError):
             await task1
 
         assert task1.cancelled()
@@ -155,8 +155,8 @@ class TestEventEmitter:
 
     @pytest.mark.asyncio
     async def test_emit_nowait_no_loop(self, emitter: EventEmitter, mocker: MockerFixture, mock_logger: Any) -> None:
-        mocker.patch("asyncio.create_task", side_effect=RuntimeError)
-        mocker.patch.object(EventEmitter, "_process_event", new_callable=mocker.Mock)
+        mocker.patch(target="asyncio.create_task", side_effect=RuntimeError)
+        mocker.patch.object(target=EventEmitter, attribute="_process_event", new_callable=mocker.Mock)
         handler = mocker.AsyncMock()
         emitter.on(event_type=EventType.SESSION_READY, handler=handler)
 
@@ -433,7 +433,7 @@ class TestEventEmitter:
     @pytest.mark.asyncio
     async def test_pause_and_resume(self, emitter: EventEmitter, mocker: MockerFixture) -> None:
         handler = mocker.AsyncMock()
-        spy_create_task = mocker.spy(asyncio, "create_task")
+        spy_create_task = mocker.spy(obj=asyncio, name="create_task")
 
         emitter.on(event_type=EventType.SESSION_READY, handler=handler)
 
@@ -486,7 +486,7 @@ class TestEventEmitter:
         assert emitter.listener_count(event_type=ev_b) == 1
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("queue_empty, task_running", [(True, False), (False, True)])
+    @pytest.mark.parametrize(argnames="queue_empty, task_running", argvalues=[(True, False), (False, True)])
     async def test_resume_returns_none(
         self, emitter: EventEmitter, mocker: MockerFixture, queue_empty: bool, task_running: bool
     ) -> None:
@@ -506,7 +506,7 @@ class TestEventEmitter:
         async def blocking_handler(event: Event) -> None:
             started.set()
             try:
-                await asyncio.sleep(2)
+                await asyncio.sleep(delay=2)
             except asyncio.CancelledError:
                 raise
 
@@ -522,7 +522,7 @@ class TestEventEmitter:
 
         task.cancel()
 
-        with pytest.raises(asyncio.CancelledError):
+        with pytest.raises(expected_exception=asyncio.CancelledError):
             await task
 
     @pytest.mark.asyncio
@@ -563,7 +563,7 @@ class TestEventEmitter:
 
         await emitter.emit(event_type=EventType.SESSION_READY)
 
-        with pytest.raises(ConditionError):
+        with pytest.raises(expected_exception=ConditionError):
             await wait_task
 
     @pytest.mark.asyncio
@@ -574,7 +574,7 @@ class TestEventEmitter:
 
         assert emitter.listener_count(event_type=event_type) == 1
         wait_task.cancel()
-        with pytest.raises(asyncio.CancelledError):
+        with pytest.raises(expected_exception=asyncio.CancelledError):
             await wait_task
 
         assert emitter.listener_count(event_type=event_type) == 0
@@ -584,12 +584,12 @@ class TestEventEmitter:
         wait_task = asyncio.create_task(
             coro=emitter.wait_for(event_type=[EventType.SESSION_READY, EventType.STREAM_OPENED])
         )
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(delay=0.01)
 
         await emitter.emit(event_type=EventType.STREAM_OPENED, data={"id": 1})
 
         try:
-            async with asyncio.timeout(1):
+            async with asyncio.timeout(delay=1):
                 result = await wait_task
         except TimeoutError:
             wait_task.cancel()
@@ -617,7 +617,7 @@ class TestEventEmitter:
         emitter.resume()
         try:
             async with asyncio.timeout(delay=1):
-                with pytest.raises(RaceError):
+                with pytest.raises(expected_exception=RaceError):
                     await wait_task
         except TimeoutError:
             wait_task.cancel()
@@ -658,5 +658,5 @@ class TestEventEmitter:
 
     @pytest.mark.asyncio
     async def test_wait_for_timeout(self, emitter: EventEmitter) -> None:
-        with pytest.raises(asyncio.TimeoutError):
+        with pytest.raises(expected_exception=asyncio.TimeoutError):
             await emitter.wait_for(event_type=EventType.SESSION_READY, timeout=0.01)

@@ -17,7 +17,7 @@ from pywebtransport.exceptions import ClientError, ConnectionError, TimeoutError
 from pywebtransport.manager.connection import ConnectionManager
 from pywebtransport.session import WebTransportSession
 from pywebtransport.types import URL, ConnectionState, EventType, Headers
-from pywebtransport.utils import format_duration, get_logger, get_timestamp, merge_headers
+from pywebtransport.utils import format_duration, get_logger, get_timestamp, merge_headers, resolve_host
 from pywebtransport.version import __version__
 
 __all__: list[str] = ["ClientDiagnostics", "ClientStats", "WebTransportClient"]
@@ -203,28 +203,11 @@ class WebTransportClient(EventEmitter):
                 assert self._driver is not None
                 assert self._transport is not None
 
-                handle = self._driver.connect(remote_host=host, remote_port=port, server_name=host)
+                resolved_ips = await resolve_host(host=host, port=port)
 
-                connection = WebTransportConnection(
-                    config=conn_config,
-                    driver=self._driver,
-                    handle=handle,
-                    transport=self._transport,
-                    is_client=True,
+                connection = await self._race_addresses(
+                    addresses=resolved_ips, port=port, host=host, conn_config=conn_config
                 )
-
-                if connection.state != ConnectionState.CONNECTED:
-                    _logger.debug("Waiting for connection establishment events...")
-                    await connection.events.wait_for(
-                        event_type=[
-                            EventType.CONNECTION_ESTABLISHED,
-                            EventType.CONNECTION_FAILED,
-                            EventType.CONNECTION_CLOSED,
-                        ]
-                    )
-
-                if connection.state != ConnectionState.CONNECTED:
-                    raise ConnectionError(message=f"Connection failed state={connection.state}")
 
                 await self._connection_manager.add_connection(connection=connection)
 
@@ -284,6 +267,89 @@ class WebTransportClient(EventEmitter):
             self._transport.close()
 
         _logger.info("WebTransport client closed.")
+
+    async def _race_addresses(
+        self, *, addresses: list[str], port: int, host: str, conn_config: ClientConfig
+    ) -> WebTransportConnection:
+        """Execute a concurrent connection race across multiple addresses."""
+        winner: WebTransportConnection | None = None
+        last_error: Exception | None = None
+        tasks: set[asyncio.Task[WebTransportConnection]] = set()
+
+        async def _attempt(*, ip: str) -> WebTransportConnection:
+            assert self._driver is not None
+            assert self._transport is not None
+            connection: WebTransportConnection | None = None
+            try:
+                handle = self._driver.connect(remote_host=ip, remote_port=port, server_name=host)
+                connection = WebTransportConnection(
+                    config=conn_config, driver=self._driver, handle=handle, transport=self._transport, is_client=True
+                )
+
+                if connection.state != ConnectionState.CONNECTED:
+                    _logger.debug("Waiting for connection establishment events for IP %s...", ip)
+                    await connection.events.wait_for(
+                        event_type=[
+                            EventType.CONNECTION_ESTABLISHED,
+                            EventType.CONNECTION_FAILED,
+                            EventType.CONNECTION_CLOSED,
+                        ]
+                    )
+
+                if connection.state != ConnectionState.CONNECTED:
+                    raise ConnectionError(message=f"Connection failed state={connection.state} for IP {ip}")
+
+                return connection
+            except BaseException:
+                if connection is not None and not connection.is_closed:
+                    asyncio.create_task(coro=connection.close())
+                raise
+
+        try:
+            for i, ip in enumerate(addresses):
+                task = asyncio.create_task(coro=_attempt(ip=ip))
+                tasks.add(task)
+
+                timeout = conn_config.connection_attempt_delay if i < len(addresses) - 1 else None
+
+                done, pending = await asyncio.wait(fs=tasks, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+                tasks = pending
+
+                for d in done:
+                    try:
+                        conn = d.result()
+                        if winner is None:
+                            winner = conn
+                        else:
+                            asyncio.create_task(coro=conn.close())
+                    except Exception as e:
+                        if winner is None:
+                            last_error = e
+
+                if winner is not None:
+                    break
+
+            while tasks and winner is None:
+                done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                tasks = pending
+                for d in done:
+                    try:
+                        conn = d.result()
+                        if winner is None:
+                            winner = conn
+                        else:
+                            asyncio.create_task(coro=conn.close())
+                    except Exception as e:
+                        if winner is None:
+                            last_error = e
+
+            if winner is None:
+                raise ConnectionError(message=f"Failed to connect to any resolved IP for {host}") from last_error
+
+            return winner
+        finally:
+            for task in tasks:
+                task.cancel()
 
     def _update_success_stats(self, *, connect_time: float) -> None:
         """Update internal statistics upon successful connection."""

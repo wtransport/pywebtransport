@@ -40,7 +40,7 @@ class TestMiddlewareFactories:
         auth_handler = mocker.AsyncMock(return_value=False)
         auth_middleware = create_auth_middleware(auth_handler=auth_handler)
 
-        with pytest.raises(MiddlewareRejected) as exc_info:
+        with pytest.raises(expected_exception=MiddlewareRejected) as exc_info:
             await auth_middleware(session=mock_session)
 
         assert exc_info.value.status_code == http.HTTPStatus.UNAUTHORIZED
@@ -52,7 +52,7 @@ class TestMiddlewareFactories:
         auth_handler = mocker.AsyncMock(side_effect=ValueError("Auth error"))
         auth_middleware = create_auth_middleware(auth_handler=auth_handler)
 
-        with pytest.raises(MiddlewareRejected) as exc_info:
+        with pytest.raises(expected_exception=MiddlewareRejected) as exc_info:
             await auth_middleware(session=mock_session)
 
         assert exc_info.value.status_code == http.HTTPStatus.INTERNAL_SERVER_ERROR
@@ -68,8 +68,8 @@ class TestMiddlewareFactories:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "origin, allowed_origins, should_pass",
-        [
+        argnames="origin, allowed_origins, should_pass",
+        argvalues=[
             ("https://example.com", ["https://example.com"], True),
             ("https://evil.com", ["https://example.com"], False),
             ("https://any.com", ["*"], True),
@@ -86,13 +86,13 @@ class TestMiddlewareFactories:
         if should_pass:
             await cors_middleware(session=mock_session)
         else:
-            with pytest.raises(MiddlewareRejected) as exc_info:
+            with pytest.raises(expected_exception=MiddlewareRejected) as exc_info:
                 await cors_middleware(session=mock_session)
             assert exc_info.value.status_code == http.HTTPStatus.FORBIDDEN
 
     @pytest.mark.asyncio
     async def test_create_logging_middleware(self, mock_session: Any, caplog: LogCaptureFixture) -> None:
-        caplog.set_level(logging.INFO)
+        caplog.set_level(level=logging.INFO)
         logging_middleware = create_logging_middleware()
 
         await logging_middleware(session=mock_session)
@@ -103,7 +103,7 @@ class TestMiddlewareFactories:
     async def test_create_logging_middleware_no_remote_address(
         self, mocker: MockerFixture, caplog: LogCaptureFixture
     ) -> None:
-        caplog.set_level(logging.INFO)
+        caplog.set_level(level=logging.INFO)
         session = mocker.Mock(spec=WebTransportSession)
         session.path = "/no-addr"
         session.remote_address = None
@@ -126,7 +126,7 @@ class TestMiddlewareFactories:
 
     @pytest.mark.asyncio
     async def test_middleware_with_generic_session(self, caplog: LogCaptureFixture) -> None:
-        caplog.set_level(logging.INFO)
+        caplog.set_level(level=logging.INFO)
         generic_session = MagicMock()
         generic_session.path = "/generic"
         generic_session.headers = {}
@@ -148,7 +148,7 @@ class TestMiddlewareManager:
 
     @pytest.fixture
     def mock_session(self, mocker: MockerFixture) -> Any:
-        return mocker.create_autospec(WebTransportSession, instance=True)
+        return mocker.create_autospec(spec=WebTransportSession, instance=True)
 
     async def test_add_remove_middleware(self) -> None:
         manager = MiddlewareManager()
@@ -185,7 +185,7 @@ class TestMiddlewareManager:
         middleware1 = mocker.AsyncMock(side_effect=ValueError("Middleware error"))
         manager.add_middleware(middleware=middleware1)
 
-        with pytest.raises(MiddlewareRejected) as exc_info:
+        with pytest.raises(expected_exception=MiddlewareRejected) as exc_info:
             await manager.process_request(session=mock_session)
 
         assert exc_info.value.status_code == http.HTTPStatus.INTERNAL_SERVER_ERROR
@@ -200,7 +200,7 @@ class TestMiddlewareManager:
         manager.add_middleware(middleware=middleware2)
         manager.add_middleware(middleware=middleware3)
 
-        with pytest.raises(MiddlewareRejected) as exc_info:
+        with pytest.raises(expected_exception=MiddlewareRejected) as exc_info:
             await manager.process_request(session=mock_session)
 
         assert exc_info.value.status_code == http.HTTPStatus.FORBIDDEN
@@ -249,8 +249,8 @@ class TestRateLimiter:
         await rate_limiter(session=session)
 
     async def test_ip_limit_flush(self, mocker: MockerFixture, caplog: LogCaptureFixture) -> None:
-        caplog.set_level(logging.WARNING)
-        mocker.patch("time.perf_counter", return_value=100.0)
+        caplog.set_level(level=logging.WARNING)
+        mocker.patch(target="time.perf_counter", return_value=100.0)
         rate_limiter = RateLimiter(max_tracked_ips=2)
 
         async with rate_limiter as rl:
@@ -267,17 +267,17 @@ class TestRateLimiter:
             assert "3.3.3.3" in rl._requests
 
     async def test_lifecycle_and_cleanup(self, mocker: MockerFixture, caplog: LogCaptureFixture) -> None:
-        caplog.set_level(logging.DEBUG)
+        caplog.set_level(level=logging.DEBUG)
         original_sleep = asyncio.sleep
         proceed_event = asyncio.Event()
 
         async def sleep_mock(delay: float) -> None:
             if delay > 0:
                 proceed_event.set()
-            await original_sleep(0)
+            await original_sleep(delay=0)
 
-        mocker.patch("asyncio.sleep", side_effect=sleep_mock)
-        mock_time = mocker.patch("time.perf_counter")
+        mocker.patch(target="asyncio.sleep", side_effect=sleep_mock)
+        mock_time = mocker.patch(target="time.perf_counter")
         rate_limiter = RateLimiter(window_seconds=10, cleanup_interval=30)
 
         async with rate_limiter as rl:
@@ -289,7 +289,7 @@ class TestRateLimiter:
 
             mock_time.return_value = 215.0
             await proceed_event.wait()
-            await asyncio.sleep(0)
+            await asyncio.sleep(delay=0)
 
             assert "Cleaned up 2 stale IP entries" in caplog.text
             assert rl._lock is not None
@@ -299,8 +299,8 @@ class TestRateLimiter:
                 assert "empty_ip" not in rl._requests
 
     async def test_periodic_cleanup_empty_timestamps(self, mocker: MockerFixture) -> None:
-        mocker.patch("asyncio.sleep", side_effect=[None, asyncio.CancelledError])
-        mocker.patch("time.perf_counter", return_value=100.0)
+        mocker.patch(target="asyncio.sleep", side_effect=[None, asyncio.CancelledError])
+        mocker.patch(target="time.perf_counter", return_value=100.0)
 
         async with RateLimiter() as rate_limiter:
             assert rate_limiter._lock is not None
@@ -312,7 +312,7 @@ class TestRateLimiter:
             assert "empty_ip" not in rate_limiter._requests
 
     async def test_periodic_cleanup_exit_on_closing(self, mocker: MockerFixture) -> None:
-        mocker.patch("asyncio.sleep", return_value=None)
+        mocker.patch(target="asyncio.sleep", return_value=None)
         rate_limiter = RateLimiter()
         rate_limiter._is_closing = True
         rate_limiter._lock = mocker.MagicMock()
@@ -322,8 +322,8 @@ class TestRateLimiter:
         cast(MagicMock, rate_limiter._lock).__aenter__.assert_not_called()
 
     async def test_periodic_cleanup_no_stale_ips(self, mocker: MockerFixture) -> None:
-        mocker.patch("asyncio.sleep", side_effect=[None, asyncio.CancelledError])
-        mock_time = mocker.patch("time.perf_counter")
+        mocker.patch(target="asyncio.sleep", side_effect=[None, asyncio.CancelledError])
+        mock_time = mocker.patch(target="time.perf_counter")
 
         async with RateLimiter() as rate_limiter:
             assert rate_limiter._lock is not None
@@ -336,7 +336,7 @@ class TestRateLimiter:
             assert "active_ip" in rate_limiter._requests
 
     async def test_periodic_cleanup_task_error(self, mocker: MockerFixture, caplog: LogCaptureFixture) -> None:
-        mocker.patch("asyncio.sleep", side_effect=[None, asyncio.CancelledError])
+        mocker.patch(target="asyncio.sleep", side_effect=[None, asyncio.CancelledError])
 
         async with RateLimiter() as rate_limiter:
             assert rate_limiter._lock is not None
@@ -345,7 +345,7 @@ class TestRateLimiter:
             mock_lock.__aenter__.side_effect = ValueError("Cleanup error")
             rate_limiter._lock = mock_lock
 
-            with pytest.raises(asyncio.CancelledError):
+            with pytest.raises(expected_exception=asyncio.CancelledError):
                 await rate_limiter._periodic_cleanup()
 
         assert "Error in RateLimiter cleanup task: Cleanup error" in caplog.text
@@ -353,13 +353,13 @@ class TestRateLimiter:
     async def test_rate_limiter_call_not_activated(self, mock_session: Any) -> None:
         limiter = RateLimiter()
 
-        with pytest.raises(ServerError, match="RateLimiter has not been activated"):
+        with pytest.raises(expected_exception=ServerError, match="RateLimiter has not been activated"):
             await limiter(session=mock_session)
 
     async def test_rate_limiting_logic(
         self, mock_session: Any, mocker: MockerFixture, caplog: LogCaptureFixture, rate_limiter: RateLimiter
     ) -> None:
-        mock_time = mocker.patch("time.perf_counter")
+        mock_time = mocker.patch(target="time.perf_counter")
 
         mock_time.return_value = 100.0
         await rate_limiter(session=mock_session)
@@ -368,7 +368,7 @@ class TestRateLimiter:
         await rate_limiter(session=mock_session)
 
         mock_time.return_value = 102.0
-        with pytest.raises(MiddlewareRejected) as exc_info:
+        with pytest.raises(expected_exception=MiddlewareRejected) as exc_info:
             await rate_limiter(session=mock_session)
 
         assert exc_info.value.status_code == http.HTTPStatus.TOO_MANY_REQUESTS
@@ -385,7 +385,7 @@ class TestRateLimiter:
         assert rate_limiter._cleanup_task is None
 
         mock_cleanup = mocker.Mock(return_value="dummy_coro")
-        mocker.patch.object(rate_limiter, "_periodic_cleanup", new=mock_cleanup)
+        mocker.patch.object(target=rate_limiter, attribute="_periodic_cleanup", new=mock_cleanup)
 
         mock_tg = mocker.Mock()
         mock_task = mocker.Mock()

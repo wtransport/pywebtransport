@@ -93,7 +93,7 @@ class TestConnectionManager:
             await manager._handle_resource_closed(resource_id="conn-1")
 
             assert len(manager) == 0
-            await asyncio.sleep(0)
+            await asyncio.sleep(delay=0)
             mock_connection.close.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -119,7 +119,7 @@ class TestConnectionManager:
             for _ in range(5):
                 if len(manager._closing_tasks) == 0:
                     break
-                await asyncio.sleep(0)
+                await asyncio.sleep(delay=0)
 
             assert len(manager._closing_tasks) == 0
 
@@ -141,7 +141,7 @@ class TestConnectionManager:
 
             assert removed is mock_connection
             assert len(manager) == 0
-            await asyncio.sleep(0)
+            await asyncio.sleep(delay=0)
             mock_connection.close.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -179,8 +179,8 @@ class TestConnectionManager:
 
             assert len(manager._closing_tasks) == 1
 
-            shutdown_task = asyncio.create_task(manager.shutdown())
-            await asyncio.sleep(0.01)
+            shutdown_task = asyncio.create_task(coro=manager.shutdown())
+            await asyncio.sleep(delay=0.01)
 
             assert not shutdown_task.done()
 

@@ -19,7 +19,7 @@ class TestRequestRouter:
 
     @pytest.fixture
     def mock_session(self, mocker: MockerFixture) -> Any:
-        return mocker.create_autospec(WebTransportSession, instance=True)
+        return mocker.create_autospec(spec=WebTransportSession, instance=True)
 
     @pytest.fixture
     def router(self) -> RequestRouter:
@@ -38,7 +38,7 @@ class TestRequestRouter:
     ) -> None:
         invalid_pattern = r"/users/(\d+"
 
-        with pytest.raises(re.error):
+        with pytest.raises(expected_exception=re.error):
             router.add_pattern_route(pattern=invalid_pattern, handler=mock_handler)
 
         assert router.get_route_stats()["pattern_routes"] == 0
@@ -54,7 +54,7 @@ class TestRequestRouter:
     def test_add_route_duplicate_raises_error(self, router: RequestRouter, mock_handler: Any) -> None:
         router.add_route(path="/home", handler=mock_handler)
 
-        with pytest.raises(ValueError, match="Route for path '/home' already exists"):
+        with pytest.raises(expected_exception=ValueError, match="Route for path '/home' already exists"):
             router.add_route(path="/home", handler=mock_handler)
 
     def test_add_route_override(self, router: RequestRouter, mock_handler: Any, mocker: MockerFixture) -> None:
@@ -116,8 +116,8 @@ class TestRequestRouter:
         assert params == {}
 
     @pytest.mark.parametrize(
-        "path, should_find",
-        [
+        argnames="path, should_find",
+        argvalues=[
             ("/exact", "exact_handler"),
             ("/users/123", "pattern_handler"),
             ("/items/abc/456", "multi_capture_handler"),

@@ -9,6 +9,7 @@ import pytest
 from pywebtransport import ClientConfig, ConfigurationError, Headers, ServerConfig
 from pywebtransport.constants import (
     DEFAULT_ALPN_PROTOCOLS,
+    DEFAULT_CONNECTION_ATTEMPT_DELAY,
     DEFAULT_CONNECT_TIMEOUT,
     DEFAULT_ENABLE_STATELESS_RETRY,
     DEFAULT_FLOW_CONTROL_WINDOW_SIZE,
@@ -40,6 +41,7 @@ class TestClientConfig:
         config = ClientConfig()
 
         assert config.connect_timeout == DEFAULT_CONNECT_TIMEOUT
+        assert config.connection_attempt_delay == DEFAULT_CONNECTION_ATTEMPT_DELAY
         assert config.verify_mode == ssl.CERT_REQUIRED
         assert config.user_agent is None
         assert config.headers == {}
@@ -66,7 +68,7 @@ class TestClientConfig:
                 del hints["max_connection_retries"]
             return hints
 
-        with patch("pywebtransport.config.get_type_hints", side_effect=mock_get_type_hints):
+        with patch(target="pywebtransport.config.get_type_hints", side_effect=mock_get_type_hints):
             config = ClientConfig.from_dict(config_dict={"max_connection_retries": 5})
 
             assert config.max_connection_retries == 5
@@ -77,7 +79,7 @@ class TestClientConfig:
             hints["max_connections"] = Union[int, str]
             return hints
 
-        with patch("pywebtransport.config.get_type_hints", side_effect=mock_get_type_hints):
+        with patch(target="pywebtransport.config.get_type_hints", side_effect=mock_get_type_hints):
             config = ClientConfig.from_dict(config_dict={"max_connections": 5})
 
             assert config.max_connections == 5
@@ -116,17 +118,19 @@ class TestClientConfig:
         assert config.connect_timeout == DEFAULT_CONNECT_TIMEOUT
         assert new_config is not config
 
-        with pytest.raises(ConfigurationError, match="Unknown configuration key"):
+        with pytest.raises(expected_exception=ConfigurationError, match="Unknown configuration key"):
             config.update(unknown_key="value")
 
     @pytest.mark.parametrize(
-        "invalid_attrs, error_match",
-        [
+        argnames="invalid_attrs, error_match",
+        argvalues=[
             ({"alpn_protocols": []}, "cannot be empty"),
             ({"certfile": "a.pem", "keyfile": None}, "must be provided together"),
             ({"congestion_control_algorithm": "invalid_algo"}, "must be one of"),
             ({"connect_timeout": -1}, "Timeout must be positive"),
             ({"connect_timeout": "invalid"}, "Timeout must be a number"),
+            ({"connection_attempt_delay": -0.5}, "Timeout must be positive"),
+            ({"connection_attempt_delay": "invalid"}, "Timeout must be a number"),
             ({"connection_idle_timeout": 0}, "Timeout must be positive"),
             ({"flow_control_window_size": 0}, "must be positive"),
             ({"keep_alive": -1}, "Timeout must be positive"),
@@ -157,12 +161,12 @@ class TestClientConfig:
 
         config = ClientConfig(**test_config)
 
-        with pytest.raises(ConfigurationError, match=error_match):
+        with pytest.raises(expected_exception=ConfigurationError, match=error_match):
             config.validate()
 
     @pytest.mark.parametrize(
-        "invalid_attrs, error_match",
-        [
+        argnames="invalid_attrs, error_match",
+        argvalues=[
             ({"max_connection_retries": -1}, "must be non-negative"),
             ({"max_retry_delay": -10.0}, "must be positive"),
             ({"retry_backoff": 0.9}, "must be >= 1.0"),
@@ -176,7 +180,7 @@ class TestClientConfig:
 
         config = ClientConfig(**test_config)
 
-        with pytest.raises(ConfigurationError, match=error_match):
+        with pytest.raises(expected_exception=ConfigurationError, match=error_match):
             config.validate()
 
 
@@ -210,7 +214,7 @@ class TestServerConfig:
 
         assert config.verify_mode == "INVALID_MODE"  # type: ignore[comparison-overlap]
 
-        with pytest.raises(ConfigurationError, match="unknown SSL verify mode"):
+        with pytest.raises(expected_exception=ConfigurationError, match="unknown SSL verify mode"):
             config.validate()
 
     def test_from_dict_enum_conversion_success(self) -> None:
@@ -239,7 +243,7 @@ class TestServerConfig:
 
         config = ServerConfig.from_dict(config_dict=config_dict)
 
-        with pytest.raises(ConfigurationError, match="Port must be an integer"):
+        with pytest.raises(expected_exception=ConfigurationError, match="Port must be an integer"):
             config.validate()
 
     def test_from_dict_union_enum_resolution(self) -> None:
@@ -250,7 +254,7 @@ class TestServerConfig:
             hints["keyfile"] = Union[int, ssl.VerifyMode]
             return hints
 
-        with patch("pywebtransport.config.get_type_hints", side_effect=mock_get_type_hints):
+        with patch(target="pywebtransport.config.get_type_hints", side_effect=mock_get_type_hints):
             config1 = ServerConfig.from_dict(config_dict={"verify_mode": "CERT_NONE", "certfile": "c", "keyfile": "k"})
             assert config1.verify_mode == ssl.CERT_NONE
 
@@ -263,13 +267,15 @@ class TestServerConfig:
     def test_initialization_fails_without_bind_host(self) -> None:
         config = ServerConfig(bind_host="", certfile="c", keyfile="k")
 
-        with pytest.raises(ConfigurationError, match="cannot be empty"):
+        with pytest.raises(expected_exception=ConfigurationError, match="cannot be empty"):
             config.validate()
 
     def test_initialization_fails_without_certs(self) -> None:
         config = ServerConfig(certfile=None, keyfile=None)
 
-        with pytest.raises(ConfigurationError, match="Server requires both certificate and key files"):
+        with pytest.raises(
+            expected_exception=ConfigurationError, match="Server requires both certificate and key files"
+        ):
             config.validate()
 
     def test_to_dict_method(self) -> None:
@@ -282,7 +288,7 @@ class TestServerConfig:
     def test_update_method_failure(self) -> None:
         config = ServerConfig(certfile="d.crt", keyfile="d.key")
 
-        with pytest.raises(ConfigurationError, match="Unknown configuration key"):
+        with pytest.raises(expected_exception=ConfigurationError, match="Unknown configuration key"):
             config.update(unknown_key="value")
 
     def test_update_method_success(self) -> None:
@@ -295,8 +301,8 @@ class TestServerConfig:
         assert new_config is not config
 
     @pytest.mark.parametrize(
-        "invalid_attrs, error_match",
-        [
+        argnames="invalid_attrs, error_match",
+        argvalues=[
             ({"alpn_protocols": []}, "cannot be empty"),
             ({"bind_host": ""}, "cannot be empty"),
             ({"bind_port": 0}, "must be an integer"),
@@ -331,5 +337,5 @@ class TestServerConfig:
 
         config = ServerConfig(**test_config)
 
-        with pytest.raises(ConfigurationError, match=error_match):
+        with pytest.raises(expected_exception=ConfigurationError, match=error_match):
             config.validate()

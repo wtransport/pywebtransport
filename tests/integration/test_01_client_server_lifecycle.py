@@ -29,13 +29,13 @@ async def test_client_initiated_close(
     session = await client.connect(url=url)
     assert session.state == SessionState.CONNECTED
 
-    async with asyncio.timeout(2.0):
+    async with asyncio.timeout(delay=2.0):
         await server_entered.wait()
 
     await session.close(reason="Client-initiated close")
 
     try:
-        async with asyncio.timeout(2.0):
+        async with asyncio.timeout(delay=2.0):
             await session.events.wait_for(event_type=EventType.SESSION_CLOSED)
     except TimeoutError:
         pass
@@ -49,7 +49,7 @@ async def test_connection_to_non_existent_route_fails(
     host, port = server
     url = f"https://{host}:{port}/nonexistent"
 
-    with pytest.raises(ClientError) as exc_info:
+    with pytest.raises(expected_exception=ClientError) as exc_info:
         await client.connect(url=url)
 
     error_message = str(exc_info.value).lower()
@@ -64,17 +64,17 @@ async def test_server_initiated_close(
 
     @server_app.route(path="/close-me")
     async def immediate_close_handler(session: WebTransportSession, **kwargs: Any) -> None:
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(delay=0.2)
         await session.close(reason="Server closed immediately.")
 
     session = await client.connect(url=url)
 
     try:
-        async with asyncio.timeout(5.0):
+        async with asyncio.timeout(delay=5.0):
             await session.events.wait_for(event_type=EventType.SESSION_CLOSED)
     except TimeoutError:
         if not session.is_closed:
-            pytest.fail("Timed out waiting for server-initiated close.")
+            pytest.fail(reason="Timed out waiting for server-initiated close.")
 
     assert session.is_closed is True
 
@@ -99,7 +99,7 @@ async def test_successful_connection_and_session(
         session = await client.connect(url=url)
         assert session.state == SessionState.CONNECTED
 
-        async with asyncio.timeout(2.0):
+        async with asyncio.timeout(delay=2.0):
             await handler_called.wait()
     finally:
         if session and not session.is_closed:

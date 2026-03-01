@@ -6,11 +6,10 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from pywebtransport import ClientConfig, ConnectionError, ServerConfig
 from pywebtransport._driver import abi
 from pywebtransport._driver.driver import EndpointDriver, create_client, create_server
 from pywebtransport._protocol.events import ConnectionClose
-from pywebtransport.config import ClientConfig, ServerConfig
-from pywebtransport.exceptions import ConnectionError
 
 
 class TestEndpointDriver:

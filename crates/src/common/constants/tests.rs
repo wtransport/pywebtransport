@@ -252,8 +252,9 @@ fn test_stream_direction_masks(#[case] mask: u64, #[case] expected: u64) {
 
 #[rstest]
 #[case(DEFAULT_CLOSE_TIMEOUT)]
-#[case(DEFAULT_CONNECT_TIMEOUT)]
+#[case(DEFAULT_CONNECTION_ATTEMPT_DELAY)]
 #[case(DEFAULT_CONNECTION_IDLE_TIMEOUT)]
+#[case(DEFAULT_CONNECT_TIMEOUT)]
 #[case(DEFAULT_KEEP_ALIVE)]
 #[case(DEFAULT_MAX_RETRY_DELAY)]
 #[case(DEFAULT_PENDING_EVENT_TTL)]

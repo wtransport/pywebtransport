@@ -28,20 +28,20 @@ class TestNormalizeHeaders:
 class TestUrlUtils:
 
     @pytest.mark.parametrize(
-        "url, error_msg",
-        [
+        argnames="url, error_msg",
+        argvalues=[
             ("ftp://example.com", "Unsupported scheme 'ftp'"),
             ("http://example.com", "Unsupported scheme 'http'"),
             ("https://", "Missing hostname in URL"),
         ],
     )
     def test_parse_webtransport_url_raises_error(self, url: str, error_msg: str) -> None:
-        with pytest.raises(ValueError, match=error_msg):
+        with pytest.raises(expected_exception=ValueError, match=error_msg):
             parse_webtransport_url(url=url)
 
     @pytest.mark.parametrize(
-        "url, expected",
-        [
+        argnames="url, expected",
+        argvalues=[
             ("https://example.com", ("example.com", 443, "/")),
             ("https://example.com:0", ("example.com", 0, "/")),
             ("https://localhost:8080/path", ("localhost", 8080, "/path")),

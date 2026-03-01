@@ -17,7 +17,6 @@ CERT_HOSTNAME: Final[str] = "localhost"
 
 
 def find_free_port() -> int:
-    """Find and return an available TCP port."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("", 0))
         return cast(int, s.getsockname()[1])
@@ -25,43 +24,37 @@ def find_free_port() -> int:
 
 @pytest.fixture(scope="session")
 def certificates_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Generate self-signed certificates in a temporary directory for the session."""
-    cert_dir = tmp_path_factory.mktemp("certs")
+    cert_dir = tmp_path_factory.mktemp(basename="certs")
     generate_self_signed_cert(hostname=CERT_HOSTNAME, output_dir=str(cert_dir))
     return cert_dir
 
 
 @pytest.fixture(scope="module")
 def client_config(certificates_dir: Path) -> ClientConfig:
-    """Provide a ClientConfig that trusts the self-signed server certificate."""
     return ClientConfig(verify_mode=ssl.CERT_NONE)
 
 
 @pytest.fixture(scope="module")
 def server_config(certificates_dir: Path) -> ServerConfig:
-    """Provide a base ServerConfig configured with the test certificates."""
     return ServerConfig(
-        certfile=str(certificates_dir / f"{CERT_HOSTNAME}.crt"),
-        keyfile=str(certificates_dir / f"{CERT_HOSTNAME}.key"),
+        certfile=str(certificates_dir / f"{CERT_HOSTNAME}.crt"), keyfile=str(certificates_dir / f"{CERT_HOSTNAME}.key")
     )
 
 
 @asyncio_fixture
 async def client(client_config: ClientConfig) -> AsyncGenerator[WebTransportClient, None]:
-    """Provide a WebTransportClient instance for the duration of a test."""
     async with WebTransportClient(config=client_config) as wt_client:
         yield wt_client
 
 
 @asyncio_fixture
 async def server(server_app: ServerApp) -> AsyncGenerator[tuple[str, int], None]:
-    """Start a WebTransport server in a background task for a test."""
     host = "127.0.0.1"
     port = find_free_port()
 
     async with server_app:
-        server_task = asyncio.create_task(server_app.serve(host=host, port=port))
-        await asyncio.sleep(0.1)
+        server_task = asyncio.create_task(coro=server_app.serve(host=host, port=port))
+        await asyncio.sleep(delay=0.1)
 
         try:
             yield host, port
@@ -76,7 +69,6 @@ async def server(server_app: ServerApp) -> AsyncGenerator[tuple[str, int], None]
 
 @pytest.fixture
 def server_app(request: pytest.FixtureRequest, server_config: ServerConfig) -> ServerApp:
-    """Provide a ServerApp instance configured with basic echo handlers."""
     config_overrides = getattr(request, "param", {})
     if config_overrides and isinstance(config_overrides, dict):
         custom_config = server_config.update(**config_overrides)

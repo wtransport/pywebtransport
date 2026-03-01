@@ -66,9 +66,11 @@ class TestJSONSerializer:
 
         assert result == "invalid-base64!"
 
-    @pytest.mark.parametrize("invalid_data", [b"{'id': 1, 'name': 'test'}", b'{"id": 1, "name": "test"', b"not json"])
+    @pytest.mark.parametrize(
+        argnames="invalid_data", argvalues=[b"{'id': 1, 'name': 'test'}", b'{"id": 1, "name": "test"', b"not json"]
+    )
     def test_deserialize_invalid_json_raises_error(self, serializer: JSONSerializer, invalid_data: bytes) -> None:
-        with pytest.raises(SerializationError, match="Data is not valid JSON"):
+        with pytest.raises(expected_exception=SerializationError, match="Data is not valid JSON"):
             serializer.deserialize(data=invalid_data)
 
     def test_deserialize_memoryview_input(self, serializer: JSONSerializer) -> None:
@@ -103,7 +105,7 @@ class TestJSONSerializer:
     def test_deserialize_type_mismatch_raises_error(self, serializer: JSONSerializer) -> None:
         data = b'{"name": "test"}'
 
-        with pytest.raises(SerializationError, match="Failed to unpack"):
+        with pytest.raises(expected_exception=SerializationError, match="Failed to unpack"):
             serializer.deserialize(data=data, obj_type=SimpleData)
 
     def test_init(self, serializer: JSONSerializer) -> None:
@@ -175,7 +177,7 @@ class TestJSONSerializer:
         assert result["datetime"] == test_time.isoformat()
 
     def test_serialize_unsupported_type_raises_error(self, serializer: JSONSerializer) -> None:
-        with pytest.raises(SerializationError) as exc_info:
+        with pytest.raises(expected_exception=SerializationError) as exc_info:
             serializer.serialize(obj=NonSerializable())
 
         assert "is not JSON serializable" in str(exc_info.value)

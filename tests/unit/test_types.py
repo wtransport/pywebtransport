@@ -22,8 +22,8 @@ from pywebtransport.types import (
 class TestEnumerations:
 
     @pytest.mark.parametrize(
-        "member, expected_value",
-        [
+        argnames="member, expected_value",
+        argvalues=[
             (ConnectionState.IDLE, "idle"),
             (ConnectionState.CONNECTING, "connecting"),
             (ConnectionState.CONNECTED, "connected"),
@@ -37,8 +37,8 @@ class TestEnumerations:
         assert member.value == expected_value
 
     @pytest.mark.parametrize(
-        "member, expected_value",
-        [
+        argnames="member, expected_value",
+        argvalues=[
             (EventType.CAPSULE_RECEIVED, "capsule_received"),
             (EventType.CONNECTION_CLOSED, "connection_closed"),
             (EventType.CONNECTION_ESTABLISHED, "connection_established"),
@@ -71,8 +71,8 @@ class TestEnumerations:
         assert member.value == expected_value
 
     @pytest.mark.parametrize(
-        "member, expected_value",
-        [
+        argnames="member, expected_value",
+        argvalues=[
             (SessionState.CONNECTING, "connecting"),
             (SessionState.CONNECTED, "connected"),
             (SessionState.CLOSING, "closing"),
@@ -84,8 +84,8 @@ class TestEnumerations:
         assert member.value == expected_value
 
     @pytest.mark.parametrize(
-        "member, expected_value",
-        [
+        argnames="member, expected_value",
+        argvalues=[
             (StreamDirection.BIDIRECTIONAL, "bidirectional"),
             (StreamDirection.SEND_ONLY, "send_only"),
             (StreamDirection.RECEIVE_ONLY, "receive_only"),
@@ -95,8 +95,8 @@ class TestEnumerations:
         assert member.value == expected_value
 
     @pytest.mark.parametrize(
-        "member, expected_value",
-        [
+        argnames="member, expected_value",
+        argvalues=[
             (StreamState.OPEN, "open"),
             (StreamState.HALF_CLOSED_LOCAL, "half_closed_local"),
             (StreamState.HALF_CLOSED_REMOTE, "half_closed_remote"),

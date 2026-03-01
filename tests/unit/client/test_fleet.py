@@ -29,10 +29,10 @@ class TestClientFleet:
     def mock_clients(self, mocker: MockerFixture) -> list[Any]:
         clients = []
         for i in range(3):
-            client = mocker.create_autospec(WebTransportClient, instance=True, name=f"Client-{i}")
+            client = mocker.create_autospec(spec=WebTransportClient, instance=True, name=f"Client-{i}")
             client.__aenter__ = mocker.AsyncMock(return_value=client)
             client.__aexit__ = mocker.AsyncMock(return_value=None)
-            client.connect = mocker.AsyncMock(return_value=mocker.create_autospec(WebTransportSession))
+            client.connect = mocker.AsyncMock(return_value=mocker.create_autospec(spec=WebTransportSession))
             clients.append(client)
         return clients
 
@@ -58,7 +58,7 @@ class TestClientFleet:
 
         fleet = ClientFleet(clients=mock_clients)
 
-        with pytest.raises(ExceptionGroup):
+        with pytest.raises(expected_exception=ExceptionGroup):
             async with fleet:
                 pass
 
@@ -83,7 +83,7 @@ class TestClientFleet:
 
         fleet = ClientFleet(clients=mock_clients)
 
-        with pytest.raises(ExceptionGroup):
+        with pytest.raises(expected_exception=ExceptionGroup):
             async with fleet:
                 pass
 
@@ -129,7 +129,7 @@ class TestClientFleet:
         assert f"Client failed to connect: {error}" in caplog.text
 
     def test_get_client_after_close(self, fleet_unactivated: ClientFleet) -> None:
-        with pytest.raises(ClientError, match="ClientFleet has not been activated"):
+        with pytest.raises(expected_exception=ClientError, match="ClientFleet has not been activated"):
             fleet_unactivated.get_client()
 
     def test_get_client_count(self, fleet_unactivated: ClientFleet, mock_clients: list[Any]) -> None:
@@ -153,14 +153,14 @@ class TestClientFleet:
         assert fleet._current_index == 0
 
     def test_init_with_no_clients(self) -> None:
-        with pytest.raises(ValueError, match="ClientFleet requires at least one client instance"):
+        with pytest.raises(expected_exception=ValueError, match="ClientFleet requires at least one client instance"):
             ClientFleet(clients=[])
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("method_name", ["connect_all"])
+    @pytest.mark.parametrize(argnames="method_name", argvalues=["connect_all"])
     async def test_methods_raise_if_not_activated_async(self, fleet_unactivated: ClientFleet, method_name: str) -> None:
         method_to_test = getattr(fleet_unactivated, method_name)
         kwargs = {"url": "https://url"} if method_name == "connect_all" else {}
 
-        with pytest.raises(ClientError, match="ClientFleet has not been activated"):
+        with pytest.raises(expected_exception=ClientError, match="ClientFleet has not been activated"):
             await method_to_test(**kwargs)

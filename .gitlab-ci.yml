@@ -143,7 +143,9 @@ deploy-image:
   dependencies:
     - build
   before_script:
-    - apk add --no-cache git
+    - apk add --no-cache ca-certificates git
+    - cp "$INTERNAL_CA_CERT" /usr/local/share/ca-certificates/internal_ca.crt
+    - update-ca-certificates
     - echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
   script:
     - ls -la dist/

@@ -1,7 +1,7 @@
-//! X.509 certificate generation logic.
+//! X509 certificate generation loading and validation subsystem
 
-use std::fs;
-use std::io;
+use std::fs::{self, File};
+use std::io::{self, BufReader};
 use std::net::IpAddr;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -13,6 +13,9 @@ use rcgen::{
     BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
     Issuer, KeyPair, KeyUsagePurpose, SanType,
 };
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
+use rustls::{DigitallySignedStruct, Error as RustlsError, SignatureScheme};
 use time::{Duration, OffsetDateTime};
 
 /// Self-signed certificate generation and persistence.
@@ -66,6 +69,76 @@ pub fn generate_self_signed_cert(
         cert_path.to_string_lossy().into_owned(),
         key_path.to_string_lossy().into_owned(),
     ))
+}
+
+// Bypasses server certificate verification for insecure client connections.
+#[derive(Debug)]
+pub(crate) struct NoCertificateVerification;
+
+impl ServerCertVerifier for NoCertificateVerification {
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        vec![
+            SignatureScheme::RSA_PKCS1_SHA1,
+            SignatureScheme::ECDSA_SHA1_Legacy,
+            SignatureScheme::RSA_PKCS1_SHA256,
+            SignatureScheme::ECDSA_NISTP256_SHA256,
+            SignatureScheme::RSA_PKCS1_SHA384,
+            SignatureScheme::ECDSA_NISTP384_SHA384,
+            SignatureScheme::RSA_PKCS1_SHA512,
+            SignatureScheme::ECDSA_NISTP521_SHA512,
+            SignatureScheme::RSA_PSS_SHA256,
+            SignatureScheme::RSA_PSS_SHA384,
+            SignatureScheme::RSA_PSS_SHA512,
+            SignatureScheme::ED25519,
+            SignatureScheme::ED448,
+        ]
+    }
+
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, RustlsError> {
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, RustlsError> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, RustlsError> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+}
+
+// Extracts PEM certificate chains from the filesystem.
+pub(crate) fn load_certs(path: &Path) -> io::Result<Vec<CertificateDer<'static>>> {
+    let file = File::open(path)?;
+    let mut reader = BufReader::new(file);
+
+    rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()
+}
+
+// Extracts a PEM private key from the filesystem.
+pub(crate) fn load_private_key(path: &Path) -> io::Result<PrivateKeyDer<'static>> {
+    let file = File::open(path)?;
+    let mut reader = BufReader::new(file);
+
+    rustls_pemfile::private_key(&mut reader)?
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "private key not found"))
 }
 
 // Root CA parameter construction.

@@ -88,6 +88,7 @@ impl<'a> TryFrom<&Bound<'a, PyAny>> for RustClientConfig {
         let transport = TransportConfig::try_from(conf)?;
 
         let connect_timeout: f64 = conf.getattr("connect_timeout")?.extract()?;
+        let connection_attempt_delay: f64 = conf.getattr("connection_attempt_delay")?.extract()?;
         let max_connection_retries: u64 = conf.getattr("max_connection_retries")?.extract()?;
         let max_retry_delay: f64 = conf.getattr("max_retry_delay")?.extract()?;
         let retry_backoff: f64 = conf.getattr("retry_backoff")?.extract()?;
@@ -113,6 +114,7 @@ impl<'a> TryFrom<&Bound<'a, PyAny>> for RustClientConfig {
             ca_certs: ca_certs.map(PathBuf::from),
             certfile: certfile.map(PathBuf::from),
             connect_timeout: Duration::from_secs_f64(connect_timeout),
+            connection_attempt_delay: Duration::from_secs_f64(connection_attempt_delay),
             headers,
             keyfile: keyfile.map(PathBuf::from),
             max_connection_retries,

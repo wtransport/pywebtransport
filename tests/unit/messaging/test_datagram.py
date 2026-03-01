@@ -65,7 +65,9 @@ class TestStructuredDatagramTransport:
         mock_session.events.off.assert_called_once()
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("error", [KeyError("Handler key error"), ValueError("Handler not found")])
+    @pytest.mark.parametrize(
+        argnames="error", argvalues=[KeyError("Handler key error"), ValueError("Handler not found")]
+    )
     async def test_close_handles_events_off_errors(
         self, mock_session: Mock, transport: StructuredDatagramTransport, error: Exception
     ) -> None:
@@ -80,7 +82,7 @@ class TestStructuredDatagramTransport:
     async def test_close_handles_garbage_collected_session(
         self, mock_session: Mock, transport: StructuredDatagramTransport
     ) -> None:
-        with patch.object(transport, "_session", return_value=None):
+        with patch.object(target=transport, attribute="_session", return_value=None):
             await transport.close()
 
         assert transport.is_closed
@@ -129,7 +131,7 @@ class TestStructuredDatagramTransport:
         transport = StructuredDatagramTransport(session=mock_session, registry=registry, serializer=mock_serializer)
         mock_weakref = Mock(return_value=None)
 
-        with patch("weakref.ref", return_value=mock_weakref):
+        with patch(target="weakref.ref", return_value=mock_weakref):
             transport.initialize()
 
         handler = mock_session.events.on.call_args.kwargs["handler"]
@@ -157,7 +159,7 @@ class TestStructuredDatagramTransport:
     def test_init_duplicate_registry_types_raises_error(self, mock_session: Mock, mock_serializer: Mock) -> None:
         registry: dict[int, type[Any]] = {1: int, 2: int}
 
-        with pytest.raises(ConfigurationError):
+        with pytest.raises(expected_exception=ConfigurationError):
             StructuredDatagramTransport(session=mock_session, registry=registry, serializer=mock_serializer)
 
     def test_initialize_garbage_collected_session_raises_error(
@@ -165,8 +167,8 @@ class TestStructuredDatagramTransport:
     ) -> None:
         transport = StructuredDatagramTransport(session=mock_session, registry=registry, serializer=mock_serializer)
 
-        with patch.object(transport, "_session", return_value=None):
-            with pytest.raises(SessionError, match="parent session is already gone"):
+        with patch.object(target=transport, attribute="_session", return_value=None):
+            with pytest.raises(expected_exception=SessionError, match="parent session is already gone"):
                 transport.initialize()
 
     def test_initialize_session_closed_raises_error(
@@ -175,7 +177,7 @@ class TestStructuredDatagramTransport:
         mock_session.is_closed = True
         transport = StructuredDatagramTransport(session=mock_session, registry=registry, serializer=mock_serializer)
 
-        with pytest.raises(SessionError, match="parent session is closed"):
+        with pytest.raises(expected_exception=SessionError, match="parent session is closed"):
             transport.initialize()
 
     def test_initialize_success_and_idempotency(
@@ -190,8 +192,13 @@ class TestStructuredDatagramTransport:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "session_state, transport_state, expected_closed",
-        [("active", "open", False), ("active", "closed", True), ("closed", "open", True), ("collected", "open", True)],
+        argnames="session_state, transport_state, expected_closed",
+        argvalues=[
+            ("active", "open", False),
+            ("active", "closed", True),
+            ("closed", "open", True),
+            ("collected", "open", True),
+        ],
     )
     async def test_is_closed_property(
         self,
@@ -207,7 +214,7 @@ class TestStructuredDatagramTransport:
         if session_state == "closed":
             mock_session.is_closed = True
         elif session_state == "collected":
-            with patch.object(transport, "_session", return_value=None):
+            with patch.object(target=transport, attribute="_session", return_value=None):
                 assert transport.is_closed is expected_closed
                 return
 
@@ -222,14 +229,14 @@ class TestStructuredDatagramTransport:
         event = Event(type=EventType.DATAGRAM_RECEIVED, data={"data": header + payload})
         mock_serializer.deserialize.side_effect = RuntimeError("Generic failure")
 
-        with patch("pywebtransport.messaging.datagram._logger") as mock_logger:
+        with patch(target="pywebtransport.messaging.datagram._logger") as mock_logger:
             await transport._on_datagram_received(event=event)
             mock_logger.error.assert_called_once()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "event_data, closed_state, expect_process",
-        [
+        argnames="event_data, closed_state, expect_process",
+        argvalues=[
             ({"data": struct.pack("!H", 1) + b"valid"}, False, True),
             ({"data": struct.pack("!H", 1) + b"valid"}, True, False),
             ("not a dict", False, False),
@@ -267,7 +274,7 @@ class TestStructuredDatagramTransport:
         payload = b"123"
         event = Event(type=EventType.DATAGRAM_RECEIVED, data={"data": header + payload})
 
-        with patch("pywebtransport.messaging.datagram._logger") as mock_logger:
+        with patch(target="pywebtransport.messaging.datagram._logger") as mock_logger:
             await transport._on_datagram_received(event=event)
             await transport._on_datagram_received(event=event)
             mock_logger.warning.assert_called()
@@ -282,9 +289,9 @@ class TestStructuredDatagramTransport:
         payload = b"123"
         event = Event(type=EventType.DATAGRAM_RECEIVED, data={"data": header + payload})
 
-        with patch("pywebtransport.messaging.datagram._logger") as mock_logger:
+        with patch(target="pywebtransport.messaging.datagram._logger") as mock_logger:
             await transport._on_datagram_received(event=event)
-            with patch.object(transport, "_session", return_value=None):
+            with patch.object(target=transport, attribute="_session", return_value=None):
                 await transport._on_datagram_received(event=event)
 
             assert mock_logger.warning.call_count == 1
@@ -293,7 +300,8 @@ class TestStructuredDatagramTransport:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "header_val, payload, error_type", [(1, b"invalid", SerializationError), (999, b"123", SerializationError)]
+        argnames="header_val, payload, error_type",
+        argvalues=[(1, b"invalid", SerializationError), (999, b"123", SerializationError)],
     )
     async def test_receive_obj_drops_bad_datagrams(
         self,
@@ -311,17 +319,17 @@ class TestStructuredDatagramTransport:
         header = struct.pack("!H", header_val)
         event = Event(type=EventType.DATAGRAM_RECEIVED, data={"data": header + payload})
 
-        with patch("pywebtransport.messaging.datagram._logger") as mock_logger:
+        with patch(target="pywebtransport.messaging.datagram._logger") as mock_logger:
             await transport._on_datagram_received(event=event)
             mock_logger.warning.assert_called()
 
-        with pytest.raises(TimeoutError):
+        with pytest.raises(expected_exception=TimeoutError):
             await transport.receive_obj(timeout=0.01)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "scenario, expected_error, match",
-        [
+        argnames="scenario, expected_error, match",
+        argvalues=[
             ("uninitialized", SessionError, "not been initialized"),
             ("closed_transport", SessionError, "is closed"),
             ("poison_pill", SessionError, "closed while receiving"),
@@ -354,7 +362,7 @@ class TestStructuredDatagramTransport:
         else:
             kwargs = {}
 
-        with pytest.raises(expected_error, match=match):
+        with pytest.raises(expected_exception=expected_error, match=match):
             await transport.receive_obj(**kwargs)
 
     @pytest.mark.asyncio
@@ -370,8 +378,8 @@ class TestStructuredDatagramTransport:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "scenario, expected_error, match",
-        [
+        argnames="scenario, expected_error, match",
+        argvalues=[
             ("uninitialized", SessionError, "not been initialized"),
             ("session_closed", SessionError, "Session is closed"),
             ("session_collected", SessionError, "Session is closed"),
@@ -398,13 +406,13 @@ class TestStructuredDatagramTransport:
         if scenario == "session_closed":
             mock_session.is_closed = True
         elif scenario == "session_collected":
-            patcher = patch.object(transport, "_session", return_value=None)
+            patcher = patch.object(target=transport, attribute="_session", return_value=None)
             patcher.start()
         elif scenario == "unregistered_type":
             obj = 1.23
 
         try:
-            with pytest.raises(expected_error, match=match):
+            with pytest.raises(expected_exception=expected_error, match=match):
                 await transport.send_obj(obj=obj)
         finally:
             if patcher:

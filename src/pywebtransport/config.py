@@ -17,8 +17,9 @@ from pywebtransport.constants import (
     DEFAULT_CLIENT_MAX_SESSIONS,
     DEFAULT_CLOSE_TIMEOUT,
     DEFAULT_CONGESTION_CONTROL_ALGORITHM,
-    DEFAULT_CONNECT_TIMEOUT,
+    DEFAULT_CONNECTION_ATTEMPT_DELAY,
     DEFAULT_CONNECTION_IDLE_TIMEOUT,
+    DEFAULT_CONNECT_TIMEOUT,
     DEFAULT_DEV_PORT,
     DEFAULT_ENABLE_STATELESS_RETRY,
     DEFAULT_FLOW_CONTROL_WINDOW_AUTO_SCALE,
@@ -305,6 +306,7 @@ class ClientConfig(BaseConfig):
     """Encapsulate WebTransport client configuration."""
 
     connect_timeout: float = DEFAULT_CONNECT_TIMEOUT
+    connection_attempt_delay: float = DEFAULT_CONNECTION_ATTEMPT_DELAY
     headers: Headers = field(default_factory=dict)
     max_connection_retries: int = DEFAULT_MAX_CONNECTION_RETRIES
     max_connections: int = DEFAULT_CLIENT_MAX_CONNECTIONS
@@ -326,6 +328,15 @@ class ClientConfig(BaseConfig):
                 message=f"Invalid value for 'connect_timeout': {e}",
                 config_key="connect_timeout",
                 config_value=self.connect_timeout,
+            ) from e
+
+        try:
+            _validate_timeout(timeout=self.connection_attempt_delay)
+        except (ValueError, TypeError) as e:
+            raise ConfigurationError(
+                message=f"Invalid value for 'connection_attempt_delay': {e}",
+                config_key="connection_attempt_delay",
+                config_value=self.connection_attempt_delay,
             ) from e
 
         if self.max_connection_retries < 0:

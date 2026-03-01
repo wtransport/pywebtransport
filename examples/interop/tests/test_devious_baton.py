@@ -11,13 +11,7 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, Callable, Coroutine, Final
 from urllib.parse import urlencode
 
-from pywebtransport import (
-    ClientConfig,
-    ConnectionError,
-    WebTransportClient,
-    WebTransportSession,
-)
-from pywebtransport.exceptions import ClientError
+from pywebtransport import ClientConfig, ClientError, ConnectionError, WebTransportClient, WebTransportSession
 from pywebtransport.types import EventType, StreamDirection
 
 BASE_PATH: Final[str] = "/webtransport/devious-baton"
@@ -33,11 +27,9 @@ ERR_SUS: Final[int] = 0x03
 ERR_WHATEVER: Final[int] = 0x02
 
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    datefmt="%H:%M:%S",
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", datefmt="%H:%M:%S"
 )
-logger = logging.getLogger("test_devious_baton")
+logger = logging.getLogger(name="test_devious_baton")
 
 
 class TestFailure(Exception):
@@ -119,7 +111,7 @@ class DeviousBatonTest:
         ]
 
         for test in tests:
-            await self._run_test(test)
+            await self._run_test(test_func=test)
 
         self._print_results()
 
@@ -127,7 +119,7 @@ class DeviousBatonTest:
         """Verify server rejects invalid protocol version."""
         url = self._build_url(version=99)
         try:
-            async with self._connect(url):
+            async with self._connect(url=url):
                 pass
         except (ConnectionError, ClientError) as e:
             err_str = str(e)
@@ -139,7 +131,7 @@ class DeviousBatonTest:
         """Verify server rejects excessive baton count."""
         url = self._build_url(count=999999)
         try:
-            async with self._connect(url):
+            async with self._connect(url=url):
                 pass
         except (ConnectionError, ClientError) as e:
             err_str = str(e)
@@ -151,7 +143,7 @@ class DeviousBatonTest:
         """Verify server rejects invalid baton value."""
         url = self._build_url(baton=0)
         try:
-            async with self._connect(url):
+            async with self._connect(url=url):
                 pass
         except (ConnectionError, ClientError) as e:
             err_str = str(e)
@@ -164,7 +156,7 @@ class DeviousBatonTest:
         count = 3
         url = self._build_url(count=count, baton=10)
 
-        async with self._connect(url) as session:
+        async with self._connect(url=url) as session:
             streams_received = 0
             event = asyncio.Event()
 
@@ -179,7 +171,7 @@ class DeviousBatonTest:
             session.events.on(event_type=EventType.STREAM_OPENED, handler=on_stream)
 
             try:
-                async with asyncio.timeout(5.0):
+                async with asyncio.timeout(delay=5.0):
                     await event.wait()
             except asyncio.TimeoutError:
                 raise TestFailure("Server did not initiate unidirectional stream") from None
@@ -188,7 +180,7 @@ class DeviousBatonTest:
         """Verify Unidirectional -> Bidirectional stream switching logic."""
         url = self._build_url(baton=10)
 
-        async with self._connect(url) as session:
+        async with self._connect(url=url) as session:
             reply_received = asyncio.Event()
 
             async def on_stream(evt: Any) -> None:
@@ -205,7 +197,7 @@ class DeviousBatonTest:
                         if data:
                             reply_received.set()
 
-                    asyncio.create_task(read_reply())
+                    asyncio.create_task(coro=read_reply())
 
                     next_val = (payload[-1] + 1) % 256
                     await bidi.write(data=create_payload(next_val), end_stream=True)
@@ -213,7 +205,7 @@ class DeviousBatonTest:
             session.events.on(event_type=EventType.STREAM_OPENED, handler=on_stream)
 
             try:
-                async with asyncio.timeout(5.0):
+                async with asyncio.timeout(delay=5.0):
                     await reply_received.wait()
             except asyncio.TimeoutError:
                 raise TestFailure("Server did not reply on the same bidirectional stream") from None
@@ -222,18 +214,19 @@ class DeviousBatonTest:
         """Verify Bidirectional (Self) -> Unidirectional stream switching logic."""
         url = self._build_url(count=1, baton=10)
 
-        async with self._connect(url) as session:
+        async with self._connect(url=url) as session:
             server_bidi_opened = asyncio.Event()
             server_uni_opened = asyncio.Event()
 
             async def on_stream(evt: Any) -> None:
                 stream = evt.data["stream"]
                 if stream.is_remote:
-                    if stream.direction == StreamDirection.BIDIRECTIONAL:
-                        server_bidi_opened.set()
-                        asyncio.create_task(handle_server_bidi(stream))
-                    elif stream.direction == StreamDirection.RECEIVE_ONLY:
-                        server_uni_opened.set()
+                    match stream.direction:
+                        case StreamDirection.BIDIRECTIONAL:
+                            server_bidi_opened.set()
+                            asyncio.create_task(coro=handle_server_bidi(stream))
+                        case StreamDirection.RECEIVE_ONLY:
+                            server_uni_opened.set()
 
             async def handle_server_bidi(stream: Any) -> None:
                 payload = await stream.read_all()
@@ -247,7 +240,7 @@ class DeviousBatonTest:
             await uni.write(data=create_payload(50), end_stream=True)
 
             try:
-                async with asyncio.timeout(5.0):
+                async with asyncio.timeout(delay=5.0):
                     await server_bidi_opened.wait()
                     await server_uni_opened.wait()
             except asyncio.TimeoutError:
@@ -259,7 +252,7 @@ class DeviousBatonTest:
         """Verify server sends datagram when baton value modulo 7 is 0."""
         url = self._build_url(count=1, baton=10)
 
-        async with self._connect(url) as session:
+        async with self._connect(url=url) as session:
             dgram_received = asyncio.Event()
 
             def on_dgram(evt: Any) -> None:
@@ -271,7 +264,7 @@ class DeviousBatonTest:
             await stream.write(data=create_payload(7), end_stream=True)
 
             try:
-                async with asyncio.timeout(5.0):
+                async with asyncio.timeout(delay=5.0):
                     await dgram_received.wait()
             except asyncio.TimeoutError:
                 raise TestFailure("Server did not send datagram for baton % 7 == 0") from None
@@ -280,7 +273,7 @@ class DeviousBatonTest:
         """Verify server adds padding when baton value modulo 5 is 0."""
         url = self._build_url(count=1, baton=20)
 
-        async with self._connect(url) as session:
+        async with self._connect(url=url) as session:
             padding_verified = asyncio.Event()
 
             async def on_stream(evt: Any) -> None:
@@ -301,7 +294,7 @@ class DeviousBatonTest:
             session.events.on(event_type=EventType.STREAM_OPENED, handler=on_stream)
 
             try:
-                async with asyncio.timeout(5.0):
+                async with asyncio.timeout(delay=5.0):
                     await padding_verified.wait()
             except asyncio.TimeoutError:
                 raise TestFailure("Server did not send valid padding for baton % 5 == 0") from None
@@ -310,7 +303,7 @@ class DeviousBatonTest:
         """Verify server closes session with ERR_BRUH on malformed message."""
         url = self._build_url(count=1, baton=10)
 
-        async with self._connect(url) as session:
+        async with self._connect(url=url) as session:
             close_event = asyncio.Event()
             received_error = None
 
@@ -325,7 +318,7 @@ class DeviousBatonTest:
             await stream.write(data=VarInt.encode(100) + b"\x00", end_stream=True)
 
             try:
-                async with asyncio.timeout(5.0):
+                async with asyncio.timeout(delay=5.0):
                     await close_event.wait()
             except asyncio.TimeoutError:
                 raise TestFailure("Server did not close session on malformed baton") from None
@@ -337,7 +330,7 @@ class DeviousBatonTest:
         """Verify server closes session with ERR_SUS on unexpected baton value."""
         url = self._build_url(count=1, baton=10)
 
-        async with self._connect(url) as session:
+        async with self._connect(url=url) as session:
             close_event = asyncio.Event()
             received_error = None
 
@@ -357,7 +350,7 @@ class DeviousBatonTest:
             session.events.on(event_type=EventType.STREAM_OPENED, handler=on_stream)
 
             try:
-                async with asyncio.timeout(5.0):
+                async with asyncio.timeout(delay=5.0):
                     await close_event.wait()
             except asyncio.TimeoutError:
                 raise TestFailure("Server did not close session on unexpected baton value") from None
@@ -369,7 +362,7 @@ class DeviousBatonTest:
         """Verify server resets stream with ERR_WHATEVER upon receiving STOP_SENDING."""
         url = self._build_url(count=1, baton=10)
 
-        async with self._connect(url) as session:
+        async with self._connect(url=url) as session:
             reset_received = asyncio.Event()
 
             async def on_stream(evt: Any) -> None:
@@ -386,7 +379,7 @@ class DeviousBatonTest:
             session.events.on(event_type=EventType.STREAM_OPENED, handler=on_stream)
 
             try:
-                async with asyncio.timeout(5.0):
+                async with asyncio.timeout(delay=5.0):
                     await reset_received.wait()
             except asyncio.TimeoutError:
                 return
@@ -395,7 +388,7 @@ class DeviousBatonTest:
         """Verify server ignores spontaneous RESET_STREAM (ERR_I_LIED)."""
         url = self._build_url(count=1, baton=10)
 
-        async with self._connect(url) as session:
+        async with self._connect(url=url) as session:
             session_closed = asyncio.Event()
             session.events.on(event_type=EventType.SESSION_CLOSED, handler=lambda e: session_closed.set())
 
@@ -404,7 +397,7 @@ class DeviousBatonTest:
             await stream.reset(error_code=ERR_I_LIED)
 
             try:
-                async with asyncio.timeout(2.0):
+                async with asyncio.timeout(delay=2.0):
                     await session_closed.wait()
                 raise TestFailure("Server closed session on I_LIED reset (Should ignore)")
             except asyncio.TimeoutError:
@@ -414,7 +407,7 @@ class DeviousBatonTest:
         """Verify server closes session gracefully when batons finish."""
         url = self._build_url(count=1, baton=255)
 
-        async with self._connect(url) as session:
+        async with self._connect(url=url) as session:
             close_event = asyncio.Event()
             close_code = None
 
@@ -435,7 +428,7 @@ class DeviousBatonTest:
             session.events.on(event_type=EventType.STREAM_OPENED, handler=on_stream)
 
             try:
-                async with asyncio.timeout(5.0):
+                async with asyncio.timeout(delay=5.0):
                     await close_event.wait()
             except asyncio.TimeoutError:
                 raise TestFailure("Server did not close session gracefully") from None
@@ -445,7 +438,7 @@ class DeviousBatonTest:
 
     def _build_url(self, **kwargs: Any) -> str:
         """Construct the connection URL with query parameters."""
-        query = urlencode(kwargs)
+        query = urlencode(query=kwargs)
         return f"https://{SERVER_HOST}:{SERVER_PORT}{BASE_PATH}?{query}"
 
     @asynccontextmanager
@@ -460,11 +453,7 @@ class DeviousBatonTest:
             except Exception:
                 raise
 
-    async def _execute_test_with_retry(
-        self,
-        name: str,
-        test_func: Callable[[], Coroutine[Any, Any, None]],
-    ) -> None:
+    async def _execute_test_with_retry(self, name: str, test_func: Callable[[], Coroutine[Any, Any, None]]) -> None:
         """Execute a test case with retries."""
         for attempt in range(1, self.TEST_MAX_RETRIES + 1):
             try:
@@ -476,28 +465,16 @@ class DeviousBatonTest:
                     logger.error("FAILURE: %s - %s", name, e)
                     self._results.append((name, False, str(e)))
                 else:
-                    logger.warning(
-                        "RETRY: %s failed (%s) - attempt %d/%d",
-                        name,
-                        e,
-                        attempt,
-                        self.TEST_MAX_RETRIES,
-                    )
-                    await asyncio.sleep(self.TEST_RETRY_DELAY)
+                    logger.warning("RETRY: %s failed (%s) - attempt %d/%d", name, e, attempt, self.TEST_MAX_RETRIES)
+                    await asyncio.sleep(delay=self.TEST_RETRY_DELAY)
             except Exception as e:
                 if attempt == self.TEST_MAX_RETRIES:
                     logger.error("ERROR:   %s - %s", name, e)
                     traceback.print_exc()
                     self._results.append((name, False, f"Exception: {e}"))
                 else:
-                    logger.warning(
-                        "RETRY: %s error (%s) - attempt %d/%d",
-                        name,
-                        e,
-                        attempt,
-                        self.TEST_MAX_RETRIES,
-                    )
-                    await asyncio.sleep(self.TEST_RETRY_DELAY)
+                    logger.warning("RETRY: %s error (%s) - attempt %d/%d", name, e, attempt, self.TEST_MAX_RETRIES)
+                    await asyncio.sleep(delay=self.TEST_RETRY_DELAY)
 
     def _print_results(self) -> None:
         """Output the final test report."""
@@ -513,7 +490,7 @@ class DeviousBatonTest:
         name = test_func.__name__
         logger.info("RUNNING: %s", name)
         start_time = time.time()
-        await self._execute_test_with_retry(name, test_func)
+        await self._execute_test_with_retry(name=name, test_func=test_func)
         duration = time.time() - start_time
         if self._results[-1][1]:
             logger.info("SUCCESS: %s (%.3fs)", name, duration)

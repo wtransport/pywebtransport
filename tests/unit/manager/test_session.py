@@ -6,10 +6,9 @@ from unittest.mock import MagicMock, Mock
 import pytest
 from pytest_mock import MockerFixture
 
-from pywebtransport.constants import ErrorCodes
+from pywebtransport import ErrorCodes, WebTransportSession
 from pywebtransport.events import EventEmitter
-from pywebtransport.manager.session import SessionManager
-from pywebtransport.session import WebTransportSession
+from pywebtransport.manager import SessionManager
 from pywebtransport.types import SessionState
 
 
@@ -125,7 +124,7 @@ class TestSessionManager:
     async def test_remove_session(
         self, manager: SessionManager, mock_session: MagicMock, mocker: MockerFixture
     ) -> None:
-        spy_off = mocker.spy(mock_session.events, "off")
+        spy_off = mocker.spy(obj=mock_session.events, name="off")
 
         async with manager:
             await manager.add_session(session=mock_session)

@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(No planned changes for the next release yet.)_
 
+## [0.14.1] - 2026-03-01
+
+This release implements asynchronous DNS resolution to support hostname-based connections, establishing Happy Eyeballs connection racing for clients and sequential bind fallbacks for servers, alongside stricter cryptographic boundaries within the Rust core.
+
+### Added
+
+- **Asynchronous DNS Resolution**: Implemented the `resolve_host` utility to provide non-blocking, dual-stack hostname resolution within the `asyncio` event loop.
+- **Happy Eyeballs Concurrency**: Implemented a staggered connection racing mechanism within `WebTransportClient` to concurrently evaluate multiple resolved IP addresses.
+- **Racing Configuration**: Exposed the `connection_attempt_delay` parameter in `ClientConfig` via the FFI boundary to provide deterministic control over the connection stagger interval.
+
+### Changed
+
+- **Server Bind Fallback**: Refactored `WebTransportServer.listen` to sequentially attempt socket binding across all resolved IP addresses, establishing resilience in dual-stack configurations.
+- **Cryptographic Isolation**: Extracted X.509 certificate loading and verification logic from the QUIC transport configuration into a dedicated `tls/certificate.rs` module to enforce structural separation of concerns.
+
 ## [0.14.0] - 2026-02-27
 
 This release executes a fundamental architectural transition by migrating the core QUIC and network multiplexing layers from the Python-based `aioquic` library to a pure Rust Sans-I/O implementation utilizing `quinn-proto`. This design deeply integrates the Rust protocol state machine with Python's `asyncio` single-threaded reactor model, eliminating cross-language serialization overhead and establishing a lock-free I/O pipeline for maximized concurrency.
@@ -791,7 +806,8 @@ This is a major release focused on enhancing runtime safety and modernizing the 
 - cryptography (>=45.0.4,<46.0.0) for SSL/TLS operations
 - typing-extensions (>=4.14.0,<5.0.0) for Python <3.10 support
 
-[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.14.1...HEAD
+[0.14.1]: https://github.com/wtransport/pywebtransport/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/wtransport/pywebtransport/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/wtransport/pywebtransport/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/wtransport/pywebtransport/compare/v0.12.1...v0.13.0

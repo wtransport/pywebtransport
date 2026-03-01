@@ -29,8 +29,8 @@ from pywebtransport._protocol.events import (
 class TestUserEvents:
 
     @pytest.mark.parametrize(
-        "event_class, kwargs, expected_attrs",
-        [
+        argnames="event_class, kwargs, expected_attrs",
+        argvalues=[
             (
                 ConnectionClose,
                 {"request_id": 1, "error_code": 100, "reason": "closing"},

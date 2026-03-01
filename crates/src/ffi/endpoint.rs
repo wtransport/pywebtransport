@@ -254,6 +254,8 @@ fn extract_client_config(config: &Bound<'_, PyAny>) -> PyResult<RustClientConfig
         .and_then(|v| v.extract::<String>().ok())
         .map(PathBuf::from);
     let connect_timeout_f64: f64 = config.getattr("connect_timeout")?.extract()?;
+    let connection_attempt_delay_f64: f64 =
+        config.getattr("connection_attempt_delay")?.extract()?;
     let headers_attr = config.getattr("headers")?;
     let keyfile = config
         .getattr("keyfile")
@@ -285,6 +287,7 @@ fn extract_client_config(config: &Bound<'_, PyAny>) -> PyResult<RustClientConfig
         ca_certs,
         certfile,
         connect_timeout: Duration::from_secs_f64(connect_timeout_f64.max(0.0)),
+        connection_attempt_delay: Duration::from_secs_f64(connection_attempt_delay_f64.max(0.0)),
         headers,
         keyfile,
         max_connection_retries,

@@ -6,7 +6,9 @@ from typing import Any
 
 import pytest
 
-from pywebtransport.exceptions import ConfigurationError, SerializationError
+import pywebtransport.serializer.protobuf
+from pywebtransport import ConfigurationError
+from pywebtransport.exceptions import SerializationError
 
 try:
     from google.protobuf.message import DecodeError, Message
@@ -47,7 +49,7 @@ class NotAMessage:
 
 def test_environment_missing_dependency() -> None:
     with pytest.MonkeyPatch.context() as mp:
-        mp.setitem(sys.modules, "google.protobuf.message", None)
+        mp.setitem(dic=sys.modules, name="google.protobuf.message", value=None)
         if "pywebtransport.serializer.protobuf" in sys.modules:
             del sys.modules["pywebtransport.serializer.protobuf"]
 
@@ -57,7 +59,7 @@ def test_environment_missing_dependency() -> None:
 
     if "pywebtransport.serializer.protobuf" in sys.modules:
         del sys.modules["pywebtransport.serializer.protobuf"]
-    importlib.import_module("pywebtransport.serializer.protobuf")
+    importlib.import_module(name="pywebtransport.serializer.protobuf")
 
 
 class TestProtobufSerializer:
@@ -70,17 +72,17 @@ class TestProtobufSerializer:
 
     @pytest.fixture(autouse=True)
     def setup_dependencies(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("pywebtransport.serializer.protobuf.Message", MockBaseMessage)
-        monkeypatch.setattr("pywebtransport.serializer.protobuf.DecodeError", RuntimeError)
+        monkeypatch.setattr(target=pywebtransport.serializer.protobuf, name="Message", value=MockBaseMessage)
+        monkeypatch.setattr(target=pywebtransport.serializer.protobuf, name="DecodeError", value=RuntimeError)
 
     def test_deserialize_invalid_data_raises_error(self, serializer: Any) -> None:
         data = b"invalid_data"
 
-        with pytest.raises(SerializationError, match="Failed to deserialize data"):
+        with pytest.raises(expected_exception=SerializationError, match="Failed to deserialize data"):
             serializer.deserialize(data=data, obj_type=MockProtoMessage)
 
     def test_deserialize_invalid_obj_type_raises_error(self, serializer: Any) -> None:
-        with pytest.raises(SerializationError, match="is not a valid Protobuf Message"):
+        with pytest.raises(expected_exception=SerializationError, match="is not a valid Protobuf Message"):
             serializer.deserialize(data=b"data", obj_type=NotAMessage)
 
     def test_deserialize_memoryview_input(self, serializer: Any) -> None:
@@ -92,7 +94,7 @@ class TestProtobufSerializer:
         assert result == MockProtoMessage(id=1, name="parsed")
 
     def test_deserialize_requires_obj_type(self, serializer: Any) -> None:
-        with pytest.raises(SerializationError, match="requires a specific 'obj_type'"):
+        with pytest.raises(expected_exception=SerializationError, match="requires a specific 'obj_type'"):
             serializer.deserialize(data=b"data")
 
     def test_deserialize_success(self, serializer: Any) -> None:
@@ -108,16 +110,16 @@ class TestProtobufSerializer:
         assert not hasattr(serializer, "__dict__")
 
     def test_init_raises_configuration_error_if_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("pywebtransport.serializer.protobuf.Message", None)
+        monkeypatch.setattr(target=pywebtransport.serializer.protobuf, name="Message", value=None)
         from pywebtransport.serializer.protobuf import ProtobufSerializer
 
-        with pytest.raises(ConfigurationError, match="library is required"):
+        with pytest.raises(expected_exception=ConfigurationError, match="library is required"):
             ProtobufSerializer()
 
     def test_serialize_internal_failure_raises_error(self, serializer: Any) -> None:
         message = MockProtoMessage(_raise_on_serialize=True)
 
-        with pytest.raises(SerializationError, match="Failed to serialize"):
+        with pytest.raises(expected_exception=SerializationError, match="Failed to serialize"):
             serializer.serialize(obj=message)
 
     def test_serialize_success(self, serializer: Any) -> None:
@@ -130,5 +132,5 @@ class TestProtobufSerializer:
     def test_serialize_wrong_object_type_raises_error(self, serializer: Any) -> None:
         message = NotAMessage()
 
-        with pytest.raises(SerializationError, match="is not a valid Protobuf Message"):
+        with pytest.raises(expected_exception=SerializationError, match="is not a valid Protobuf Message"):
             serializer.serialize(obj=message)

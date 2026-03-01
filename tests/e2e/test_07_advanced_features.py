@@ -20,7 +20,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 if DEBUG_MODE:
     logging.getLogger().setLevel(logging.DEBUG)
 
-logger = logging.getLogger("test_advanced_features")
+logger = logging.getLogger(name="test_advanced_features")
 
 
 async def test_session_statistics() -> bool:
@@ -41,7 +41,7 @@ async def test_session_statistics() -> bool:
             for i in range(5):
                 await session.send_datagram(data=f"Datagram {i + 1}".encode())
 
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(delay=0.1)
             final_stats = await session.diagnostics()
             logger.info("Final session statistics retrieved.")
 
@@ -101,7 +101,7 @@ async def test_client_statistics() -> bool:
             for _ in range(3):
                 session = await client.connect(url=SERVER_URL)
                 await session.close()
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(delay=0.2)
 
             final_stats = (await client.diagnostics()).stats
             logger.info("Final client statistics:")
@@ -172,7 +172,7 @@ async def test_datagram_statistics() -> bool:
                 await session.send_datagram(data=data)
                 total_bytes_sent += len(data)
 
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(delay=0.1)
             final_stats = await session.diagnostics()
 
             logger.info("Final session datagram statistics:")
@@ -259,7 +259,7 @@ async def test_server_diagnostics() -> bool:
                 logger.error("FAILURE: Received no data from /diagnostics endpoint.")
                 return False
 
-            stats = json.loads(response_data)
+            stats = json.loads(s=response_data)
             logger.info("Received server diagnostics successfully.")
 
             if (
@@ -306,7 +306,7 @@ async def main() -> int:
                 logger.error("%s: FAILED", test_name)
         except Exception as e:
             logger.error("%s: CRASHED - %s", test_name, e, exc_info=True)
-        await asyncio.sleep(1)
+        await asyncio.sleep(delay=1)
 
     logger.info("")
     logger.info("=" * 60)

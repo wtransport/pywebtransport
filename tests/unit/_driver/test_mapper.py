@@ -12,8 +12,8 @@ from pywebtransport._protocol import events
 class TestMapper:
 
     @pytest.mark.parametrize(
-        "event, expected",
-        [
+        argnames="event, expected",
+        argvalues=[
             (
                 events.ConnectionClose(request_id=1, error_code=100, reason="closing"),
                 (abi.CONNECTION_CLOSE, (1, 100, "closing")),
@@ -77,5 +77,7 @@ class TestMapper:
 
         event = UnsupportedEvent()
 
-        with pytest.raises(ValueError, match="Unsupported event type for FFI translation: UnsupportedEvent"):
+        with pytest.raises(
+            expected_exception=ValueError, match="Unsupported event type for FFI translation: UnsupportedEvent"
+        ):
             pack_user_event(event=event)

@@ -47,7 +47,9 @@ class TestLatency:
         benchmark.extra_info["max_ms"] = stats["max"] * 1000
         benchmark.extra_info["min_ms"] = stats["min"] * 1000
 
-    @pytest.mark.parametrize("payload,label", [(PAYLOAD_64B, "64b"), (PAYLOAD_1KB, "1kb")], ids=["64b", "1kb"])
+    @pytest.mark.parametrize(
+        argnames="payload,label", argvalues=[(PAYLOAD_64B, "64b"), (PAYLOAD_1KB, "1kb")], ids=["64b", "1kb"]
+    )
     def test_request_response_latency(
         self, *, benchmark: BenchmarkFixture, client_config: ClientConfig, payload: bytes, label: str
     ) -> None:

@@ -46,10 +46,7 @@ class TestStreamThroughput:
             return PAYLOAD_SIZE
 
         self._run_benchmark_scenario(
-            benchmark=benchmark,
-            client_config=client_config,
-            endpoint="/discard",
-            stream_handler=upload_worker,
+            benchmark=benchmark, client_config=client_config, endpoint="/discard", stream_handler=upload_worker
         )
 
     def test_download_throughput(self, *, benchmark: BenchmarkFixture, client_config: ClientConfig) -> None:
@@ -68,10 +65,7 @@ class TestStreamThroughput:
             return received
 
         self._run_benchmark_scenario(
-            benchmark=benchmark,
-            client_config=client_config,
-            endpoint="/produce",
-            stream_handler=download_worker,
+            benchmark=benchmark, client_config=client_config, endpoint="/produce", stream_handler=download_worker
         )
 
     def test_duplex_throughput(self, *, benchmark: BenchmarkFixture, client_config: ClientConfig) -> None:
@@ -96,10 +90,7 @@ class TestStreamThroughput:
             return sum(results)
 
         self._run_benchmark_scenario(
-            benchmark=benchmark,
-            client_config=client_config,
-            endpoint="/duplex",
-            stream_handler=duplex_worker,
+            benchmark=benchmark, client_config=client_config, endpoint="/duplex", stream_handler=duplex_worker
         )
 
     def _run_benchmark_scenario(

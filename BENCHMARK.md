@@ -10,8 +10,9 @@ The test configuration detailed below serves as the reference environment for al
 | :------------------- | :---------------------------------------- |
 | **Library Version**  | `PyWebTransport v0.14.0` (Ref: `HEAD`)    |
 | **Python Runtime**   | CPython 3.12.12                           |
-| **Event Loop**       | `uvloop` v0.22.1+                         |
-| **Cryptography**     | OpenSSL 3.0.17                            |
+| **Rust Compiler**    | rustc 1.93.1                              |
+| **Event Loop**       | `uvloop` v0.22.1                          |
+| **Cryptography**     | `rustls` v0.23.36 (ring)                  |
 | **Test Suite**       | `pytest-benchmark`                        |
 | **OS / Kernel**      | Debian 12.12 / Linux 6.1.0-41-amd64       |
 | **CPU Architecture** | Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GHz |

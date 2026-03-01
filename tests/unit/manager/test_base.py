@@ -9,7 +9,8 @@ import pytest
 from _pytest.logging import LogCaptureFixture
 from pytest_mock import MockerFixture
 
-from pywebtransport.events import Event, EventEmitter
+from pywebtransport import Event
+from pywebtransport.events import EventEmitter
 from pywebtransport.manager._base import BaseResourceManager
 from pywebtransport.types import EventType
 
@@ -54,7 +55,7 @@ class TestBaseResourceManager:
         return ConcreteResourceManager(resource_name="test_item", max_resources=5)
 
     async def test_abstract_methods_raise(self) -> None:
-        resource = MockResource("r1")
+        resource = MockResource(resource_id="r1")
 
         class PartialManager(BaseResourceManager[str, MockResource]):
             _resource_closed_event_type = EventType.CONNECTION_CLOSED
@@ -67,14 +68,14 @@ class TestBaseResourceManager:
 
         manager = PartialManager(resource_name="test", max_resources=1)
 
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(expected_exception=NotImplementedError):
             await manager._close_resource(resource=resource)
 
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(expected_exception=NotImplementedError):
             manager._get_resource_id(resource=resource)
 
     async def test_add_resource(self, manager: ConcreteResourceManager) -> None:
-        resource = MockResource("r1")
+        resource = MockResource(resource_id="r1")
 
         async with manager:
             await manager.add_resource(resource=resource)
@@ -90,14 +91,14 @@ class TestBaseResourceManager:
     async def test_add_resource_closed_during_registration(
         self, manager: ConcreteResourceManager, mocker: MockerFixture
     ) -> None:
-        resource = MockResource("r1")
+        resource = MockResource(resource_id="r1")
         resource.events = mocker.MagicMock(spec=EventEmitter)
         cast(MagicMock, resource.events.off).side_effect = ValueError("Handler not found")
 
-        mocker.patch.object(manager, "_check_is_closed", return_value=True)
+        mocker.patch.object(target=manager, attribute="_check_is_closed", return_value=True)
 
         async with manager:
-            with pytest.raises(RuntimeError, match="closed during registration"):
+            with pytest.raises(expected_exception=RuntimeError, match="closed during registration"):
                 await manager.add_resource(resource=resource)
 
         cast(MagicMock, resource.events.off).assert_called_once()
@@ -106,28 +107,28 @@ class TestBaseResourceManager:
     async def test_add_resource_closed_handler_invalid_data(
         self, manager: ConcreteResourceManager, mocker: MockerFixture
     ) -> None:
-        resource = MockResource("r1")
+        resource = MockResource(resource_id="r1")
 
         async with manager:
             await manager.add_resource(resource=resource)
 
             event = Event(type=EventType.CONNECTION_CLOSED, data="invalid")
             resource.events.emit_nowait(event_type=EventType.CONNECTION_CLOSED, data=event.data)
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(delay=0.01)
 
             assert len(manager) == 0
 
     async def test_add_resource_closed_handler_mismatch_id(
         self, manager: ConcreteResourceManager, caplog: LogCaptureFixture
     ) -> None:
-        resource = MockResource("r1")
+        resource = MockResource(resource_id="r1")
 
         async with manager:
             await manager.add_resource(resource=resource)
 
             event = Event(type=EventType.CONNECTION_CLOSED, data={"test_item_id": "other"})
             resource.events.emit_nowait(event_type=EventType.CONNECTION_CLOSED, data=event.data)
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(delay=0.01)
 
             assert len(manager) == 0
             assert "Resource ID mismatch in close event" in caplog.text
@@ -137,7 +138,7 @@ class TestBaseResourceManager:
     async def test_add_resource_closed_inside_lock(self, manager: ConcreteResourceManager) -> None:
         class FlakyClosedResource(MockResource):
             def __init__(self, resource_id: str) -> None:
-                super().__init__(resource_id)
+                super().__init__(resource_id=resource_id)
                 self._access_count = 0
 
             @property
@@ -145,17 +146,17 @@ class TestBaseResourceManager:
                 self._access_count += 1
                 return self._access_count > 1
 
-        resource = FlakyClosedResource("r1")
+        resource = FlakyClosedResource(resource_id="r1")
 
         async with manager:
-            with pytest.raises(RuntimeError, match="Cannot add closed test_item"):
+            with pytest.raises(expected_exception=RuntimeError, match="Cannot add closed test_item"):
                 await manager.add_resource(resource=resource)
 
         assert len(manager) == 0
 
     async def test_add_resource_duplicate(self, manager: ConcreteResourceManager, caplog: LogCaptureFixture) -> None:
-        caplog.set_level(logging.DEBUG)
-        resource = MockResource("r1")
+        caplog.set_level(level=logging.DEBUG)
+        resource = MockResource(resource_id="r1")
 
         async with manager:
             await manager.add_resource(resource=resource)
@@ -168,48 +169,48 @@ class TestBaseResourceManager:
             assert "Resource r1 already managed." in caplog.text
 
     async def test_add_resource_initially_closed(self, manager: ConcreteResourceManager) -> None:
-        resource = MockResource("r1")
+        resource = MockResource(resource_id="r1")
         await resource.close()
 
         async with manager:
-            with pytest.raises(RuntimeError, match="Cannot add closed test_item"):
+            with pytest.raises(expected_exception=RuntimeError, match="Cannot add closed test_item"):
                 await manager.add_resource(resource=resource)
 
         assert len(manager) == 0
 
     async def test_add_resource_limit_reached(self, manager: ConcreteResourceManager) -> None:
         manager._max_resources = 1
-        r1 = MockResource("r1")
-        r2 = MockResource("r2")
+        r1 = MockResource(resource_id="r1")
+        r2 = MockResource(resource_id="r2")
 
         async with manager:
             await manager.add_resource(resource=r1)
 
-            with pytest.raises(RuntimeError, match="Maximum test_item limit reached"):
+            with pytest.raises(expected_exception=RuntimeError, match="Maximum test_item limit reached"):
                 await manager.add_resource(resource=r2)
 
             assert len(manager) == 1
             assert r2.closed is True
 
     async def test_add_resource_not_activated(self, manager: ConcreteResourceManager) -> None:
-        resource = MockResource("r1")
+        resource = MockResource(resource_id="r1")
 
-        with pytest.raises(RuntimeError, match="is not activated"):
+        with pytest.raises(expected_exception=RuntimeError, match="is not activated"):
             await manager.add_resource(resource=resource)
 
     async def test_add_resource_shutting_down(self, manager: ConcreteResourceManager) -> None:
-        resource = MockResource("r1")
+        resource = MockResource(resource_id="r1")
 
         async with manager:
             await manager.shutdown()
-            with pytest.raises(RuntimeError, match="is shutting down"):
+            with pytest.raises(expected_exception=RuntimeError, match="is shutting down"):
                 await manager.add_resource(resource=resource)
             assert resource.closed is True
 
     async def test_close_all_resources_event_off_error(
         self, manager: ConcreteResourceManager, mocker: MockerFixture
     ) -> None:
-        resource = MockResource("r1")
+        resource = MockResource(resource_id="r1")
         resource.events = mocker.MagicMock(spec=EventEmitter)
         cast(MagicMock, resource.events.off).side_effect = ValueError("Cleanup error")
 
@@ -244,8 +245,8 @@ class TestBaseResourceManager:
         assert manager._is_shutting_down
 
     async def test_get_all_resources(self, manager: ConcreteResourceManager) -> None:
-        r1 = MockResource("r1")
-        r2 = MockResource("r2")
+        r1 = MockResource(resource_id="r1")
+        r2 = MockResource(resource_id="r2")
 
         async with manager:
             await manager.add_resource(resource=r1)
@@ -270,7 +271,7 @@ class TestBaseResourceManager:
     ) -> None:
         manager._is_shutting_down = True
         manager._active = True
-        manager._resources["r1"] = MockResource("r1")
+        manager._resources["r1"] = MockResource(resource_id="r1")
 
         await manager._handle_resource_closed(resource_id="r1")
 
@@ -278,7 +279,7 @@ class TestBaseResourceManager:
         assert manager._stats["total_closed"] == 1
 
     async def test_handle_resource_closed_falsy_resource(self, manager: ConcreteResourceManager) -> None:
-        resource = FalsyResource("r_falsy")
+        resource = FalsyResource(resource_id="r_falsy")
 
         async with manager:
             await manager.add_resource(resource=resource)
@@ -299,7 +300,7 @@ class TestBaseResourceManager:
         assert manager._stats["total_closed"] == 0
 
     async def test_resource_closed_event_handling(self, manager: ConcreteResourceManager) -> None:
-        resource = MockResource("r1")
+        resource = MockResource(resource_id="r1")
 
         async with manager:
             await manager.add_resource(resource=resource)
@@ -308,15 +309,15 @@ class TestBaseResourceManager:
             event = Event(type=EventType.CONNECTION_CLOSED, data={"test_item_id": "r1"})
             resource.events.emit_nowait(event_type=EventType.CONNECTION_CLOSED, data=event.data)
 
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(delay=0.01)
 
             assert len(manager) == 0
             stats = await manager.get_stats()
             assert stats["total_closed"] == 1
 
     async def test_shutdown_closes_resources(self, manager: ConcreteResourceManager) -> None:
-        r1 = MockResource("r1")
-        r2 = MockResource("r2")
+        r1 = MockResource(resource_id="r1")
+        r2 = MockResource(resource_id="r2")
 
         async with manager:
             await manager.add_resource(resource=r1)
@@ -330,10 +331,10 @@ class TestBaseResourceManager:
     async def test_shutdown_handles_multiple_close_errors(
         self, manager: ConcreteResourceManager, mocker: MockerFixture, caplog: LogCaptureFixture
     ) -> None:
-        r1 = MockResource("r1")
-        r2 = MockResource("r2")
-        mocker.patch.object(r1, "close", side_effect=ValueError("Fail 1"))
-        mocker.patch.object(r2, "close", side_effect=RuntimeError("Fail 2"))
+        r1 = MockResource(resource_id="r1")
+        r2 = MockResource(resource_id="r2")
+        mocker.patch.object(target=r1, attribute="close", side_effect=ValueError("Fail 1"))
+        mocker.patch.object(target=r2, attribute="close", side_effect=RuntimeError("Fail 2"))
 
         async with manager:
             await manager.add_resource(resource=r1)

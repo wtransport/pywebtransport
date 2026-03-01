@@ -27,10 +27,10 @@ class TestServerCluster:
 
     @pytest.fixture
     def mock_webtransport_server_class(self, mocker: MockerFixture) -> Any:
-        mock_server_class = mocker.patch("pywebtransport.server.cluster.WebTransportServer")
+        mock_server_class = mocker.patch(target="pywebtransport.server.cluster.WebTransportServer")
 
         def new_server_instance(*args: Any, **kwargs: Any) -> Any:
-            instance = mocker.create_autospec(WebTransportServer, instance=True)
+            instance = mocker.create_autospec(spec=WebTransportServer, instance=True)
             instance.__aenter__ = mocker.AsyncMock(return_value=instance)
             instance.listen = mocker.AsyncMock()
             instance.close = mocker.AsyncMock()
@@ -89,7 +89,7 @@ class TestServerCluster:
     async def test_add_server_failure_during_listen(
         self, cluster: ServerCluster, mocker: MockerFixture, mock_webtransport_server_class: Any, tmp_path: Path
     ) -> None:
-        mock_fail_instance = mocker.create_autospec(WebTransportServer, instance=True)
+        mock_fail_instance = mocker.create_autospec(spec=WebTransportServer, instance=True)
         mock_fail_instance.__aenter__ = mocker.AsyncMock(return_value=mock_fail_instance)
         mock_fail_instance.listen = mocker.AsyncMock(side_effect=ValueError("Listen failed"))
         mock_fail_instance.close = mocker.AsyncMock()
@@ -111,7 +111,7 @@ class TestServerCluster:
         self, cluster: ServerCluster, mocker: MockerFixture, tmp_path: Path
     ) -> None:
         initial_count = await cluster.get_server_count()
-        mocker.patch.object(cluster, "_create_and_start_server", side_effect=IOError("Failed to bind"))
+        mocker.patch.object(target=cluster, attribute="_create_and_start_server", side_effect=IOError("Failed to bind"))
         c3 = tmp_path / "c3.pem"
         k3 = tmp_path / "k3.pem"
         c3.touch()
@@ -133,7 +133,7 @@ class TestServerCluster:
         k3.touch()
         new_config = ServerConfig(bind_port=8003, certfile=str(c3), keyfile=str(k3))
 
-        mock_instance = mocker.create_autospec(WebTransportServer, instance=True)
+        mock_instance = mocker.create_autospec(spec=WebTransportServer, instance=True)
         mock_instance.__aenter__ = mocker.AsyncMock(return_value=mock_instance)
         mock_instance.listen = mocker.AsyncMock()
         mock_instance.close = mocker.AsyncMock()
@@ -143,7 +143,7 @@ class TestServerCluster:
                 cluster._running = False
             return mock_instance
 
-        mocker.patch.object(cluster, "_create_and_start_server", side_effect=create_and_stop_cluster)
+        mocker.patch.object(target=cluster, attribute="_create_and_start_server", side_effect=create_and_stop_cluster)
 
         result = await cluster.add_server(config=new_config)
 
@@ -170,8 +170,8 @@ class TestServerCluster:
     @pytest.mark.asyncio
     async def test_async_context_manager(self, server_configs: list[ServerConfig], mocker: MockerFixture) -> None:
         cluster = ServerCluster(configs=server_configs)
-        mock_start = mocker.patch.object(cluster, "start_all", new_callable=mocker.AsyncMock)
-        mock_stop = mocker.patch.object(cluster, "stop_all", new_callable=mocker.AsyncMock)
+        mock_start = mocker.patch.object(target=cluster, attribute="start_all", new_callable=mocker.AsyncMock)
+        mock_stop = mocker.patch.object(target=cluster, attribute="stop_all", new_callable=mocker.AsyncMock)
 
         async with cluster:
             assert cluster._active
@@ -210,7 +210,7 @@ class TestServerCluster:
         server_to_fail = cluster._servers[0]
         cast(Any, server_to_fail.diagnostics).side_effect = ValueError("Stats failed")
 
-        with pytest.raises(ExceptionGroup):
+        with pytest.raises(expected_exception=ExceptionGroup):
             await cluster.get_cluster_stats()
 
     @pytest.mark.asyncio
@@ -235,8 +235,8 @@ class TestServerCluster:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "method_name, method_args, expected_match",
-        [
+        argnames="method_name, method_args, expected_match",
+        argvalues=[
             ("start_all", {}, "ServerCluster has not been activated"),
             ("stop_all", {}, "ServerCluster has not been activated"),
             ("add_server", {"config": None}, "ServerCluster has not been activated"),
@@ -264,7 +264,7 @@ class TestServerCluster:
             k.touch()
             method_args = {"config": ServerConfig(certfile=str(c), keyfile=str(k))}
 
-        with pytest.raises(ServerError, match=expected_match):
+        with pytest.raises(expected_exception=ServerError, match=expected_match):
             await method(**method_args)
 
     @pytest.mark.asyncio
@@ -288,9 +288,9 @@ class TestServerCluster:
     @pytest.mark.asyncio
     async def test_serve_forever(self, cluster: ServerCluster) -> None:
         await cluster.start_all()
-        serve_task = asyncio.create_task(cluster.serve_forever())
+        serve_task = asyncio.create_task(coro=cluster.serve_forever())
 
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(delay=0.01)
         assert not serve_task.done()
 
         cluster._shutdown_event.set()
@@ -301,10 +301,10 @@ class TestServerCluster:
     @pytest.mark.asyncio
     async def test_serve_forever_cancellation(self, cluster: ServerCluster, caplog: pytest.LogCaptureFixture) -> None:
         await cluster.start_all()
-        serve_task = asyncio.create_task(cluster.serve_forever())
-        await asyncio.sleep(0.01)
+        serve_task = asyncio.create_task(coro=cluster.serve_forever())
+        await asyncio.sleep(delay=0.01)
 
-        with caplog.at_level(logging.INFO):
+        with caplog.at_level(level=logging.INFO):
             serve_task.cancel()
             try:
                 await serve_task
@@ -317,21 +317,23 @@ class TestServerCluster:
     async def test_serve_forever_not_activated(self, server_configs: list[ServerConfig]) -> None:
         cluster = ServerCluster(configs=server_configs)
 
-        with pytest.raises(ServerError, match="Cluster not activated"):
+        with pytest.raises(expected_exception=ServerError, match="Cluster not activated"):
             await cluster.serve_forever()
 
     @pytest.mark.asyncio
     async def test_serve_forever_not_running(self, cluster: ServerCluster) -> None:
         await cluster.stop_all()
 
-        with pytest.raises(ServerError, match="Cluster is not running"):
+        with pytest.raises(expected_exception=ServerError, match="Cluster is not running"):
             await cluster.serve_forever()
 
     @pytest.mark.asyncio
     async def test_serve_forever_wait_exception(self, cluster: ServerCluster, mocker: MockerFixture) -> None:
         await cluster.start_all()
-        mocker.patch.object(cluster._shutdown_event, "wait", side_effect=ValueError("Unexpected error"))
-        mock_logger = mocker.patch("pywebtransport.server.cluster._logger")
+        mocker.patch.object(
+            target=cluster._shutdown_event, attribute="wait", side_effect=ValueError("Unexpected error")
+        )
+        mock_logger = mocker.patch(target="pywebtransport.server.cluster._logger")
 
         await cluster.serve_forever()
 
@@ -341,12 +343,12 @@ class TestServerCluster:
     async def test_start_all_failure(
         self, server_configs: list[ServerConfig], mock_webtransport_server_class: Any, mocker: MockerFixture
     ) -> None:
-        mock_server_fail = mocker.create_autospec(WebTransportServer, instance=True)
+        mock_server_fail = mocker.create_autospec(spec=WebTransportServer, instance=True)
         mock_server_fail.__aenter__ = mocker.AsyncMock(return_value=mock_server_fail)
         mock_server_fail.listen = mocker.AsyncMock(side_effect=ValueError("Listen failed"))
         mock_server_fail.close = mocker.AsyncMock()
 
-        mock_server_ok = mocker.create_autospec(WebTransportServer, instance=True)
+        mock_server_ok = mocker.create_autospec(spec=WebTransportServer, instance=True)
         mock_server_ok.__aenter__ = mocker.AsyncMock(return_value=mock_server_ok)
         mock_server_ok.listen = mocker.AsyncMock()
         mock_server_ok.close = mocker.AsyncMock()
@@ -366,12 +368,12 @@ class TestServerCluster:
     async def test_start_all_failure_during_cleanup(
         self, server_configs: list[ServerConfig], mock_webtransport_server_class: Any, mocker: MockerFixture
     ) -> None:
-        mock_server_fail = mocker.create_autospec(WebTransportServer, instance=True)
+        mock_server_fail = mocker.create_autospec(spec=WebTransportServer, instance=True)
         mock_server_fail.__aenter__ = mocker.AsyncMock(return_value=mock_server_fail)
         mock_server_fail.listen = mocker.AsyncMock(side_effect=ValueError("Listen failed"))
         mock_server_fail.close = mocker.AsyncMock(side_effect=IOError("Cleanup failed"))
 
-        mock_server_ok = mocker.create_autospec(WebTransportServer, instance=True)
+        mock_server_ok = mocker.create_autospec(spec=WebTransportServer, instance=True)
         mock_server_ok.__aenter__ = mocker.AsyncMock(return_value=mock_server_ok)
         mock_server_ok.listen = mocker.AsyncMock()
         mock_server_ok.close = mocker.AsyncMock()
@@ -419,7 +421,7 @@ class TestServerCluster:
         server_to_fail = cluster._servers[0]
         cast(Any, server_to_fail.close).side_effect = ValueError("Close failed")
 
-        with pytest.raises(ExceptionGroup):
+        with pytest.raises(expected_exception=ExceptionGroup):
             await cluster.stop_all()
 
         assert not cluster.is_running

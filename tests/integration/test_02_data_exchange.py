@@ -56,7 +56,7 @@ async def test_bidirectional_stream_echo(
         assert response == test_message
         await stream.close()
 
-    async with asyncio.timeout(2.0):
+    async with asyncio.timeout(delay=2.0):
         await server_handler_finished.wait()
 
 
@@ -113,10 +113,10 @@ async def test_concurrent_streams_and_datagrams(
             if fut.done():
                 break
             await session.send_datagram(data=msg)
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(delay=0.1)
 
         try:
-            async with asyncio.timeout(2.0):
+            async with asyncio.timeout(delay=2.0):
                 await fut
             return True
         except TimeoutError:
@@ -168,15 +168,15 @@ async def test_datagram_echo(server: tuple[str, int], client: WebTransportClient
         for _ in range(5):
             await session.send_datagram(data=test_message)
             try:
-                async with asyncio.timeout(0.5):
-                    await asyncio.shield(fut)
+                async with asyncio.timeout(delay=0.5):
+                    await asyncio.shield(arg=fut)
                 break
             except TimeoutError:
                 continue
         else:
-            pytest.fail("Datagram echo timed out")
+            pytest.fail(reason="Datagram echo timed out")
 
-    async with asyncio.timeout(2.0):
+    async with asyncio.timeout(delay=2.0):
         await server_handler_finished.wait()
 
 
@@ -193,7 +193,7 @@ async def test_unidirectional_stream_to_server(
                 s = event.data.get("stream")
                 if isinstance(s, WebTransportReceiveStream):
                     data = await s.read()
-                    await data_queue.put(data)
+                    await data_queue.put(item=data)
 
         session.events.on(event_type=EventType.STREAM_OPENED, handler=on_stream)
         try:
@@ -208,7 +208,7 @@ async def test_unidirectional_stream_to_server(
         await stream.write(data=test_message)
         await stream.close()
 
-    async with asyncio.timeout(2.0):
+    async with asyncio.timeout(delay=2.0):
         received_data = await data_queue.get()
 
     assert received_data == test_message

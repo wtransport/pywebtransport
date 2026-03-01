@@ -30,7 +30,7 @@ class TestResources:
 
     def test_idle_memory_footprint(self, *, benchmark: BenchmarkFixture, client_config: ClientConfig) -> None:
         url = f"{SERVER_URL_BASE}/latency"
-        process = psutil.Process(os.getpid())
+        process = psutil.Process(pid=os.getpid())
 
         def run_measurement() -> float:
             async def run_full_cycle() -> float:
@@ -41,17 +41,17 @@ class TestResources:
 
                 async with WebTransportClient(config=client_config) as client:
                     try:
-                        semaphore = asyncio.Semaphore(100)
+                        semaphore = asyncio.Semaphore(value=100)
 
                         async def connect_one() -> None:
                             async with semaphore:
                                 session = await client.connect(url=url)
                                 sessions.append(session)
 
-                        tasks = [asyncio.create_task(connect_one()) for _ in range(CONNECTION_COUNT)]
+                        tasks = [asyncio.create_task(coro=connect_one()) for _ in range(CONNECTION_COUNT)]
                         await asyncio.gather(*tasks)
 
-                        await asyncio.sleep(STABILIZATION_SECONDS)
+                        await asyncio.sleep(delay=STABILIZATION_SECONDS)
 
                         gc.collect()
 
@@ -60,22 +60,20 @@ class TestResources:
 
                     finally:
                         if sessions:
-                            close_sem = asyncio.Semaphore(100)
+                            close_sem = asyncio.Semaphore(value=100)
 
                             async def close_one(s: WebTransportSession) -> None:
                                 async with close_sem:
                                     if not s.is_closed:
                                         await s.close()
 
-                            tasks = [asyncio.create_task(close_one(s)) for s in sessions]
+                            tasks = [asyncio.create_task(coro=close_one(s)) for s in sessions]
                             await asyncio.gather(*tasks)
 
             return uvloop.run(run_full_cycle())
 
         memory_increase = benchmark.pedantic(
-            target=run_measurement,
-            iterations=1,
-            rounds=1,
+            target=run_measurement, iterations=1, rounds=1
         )  # type: ignore[no-untyped-call]
 
         kb_per_connection = (memory_increase / 1024) / CONNECTION_COUNT

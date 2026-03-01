@@ -29,6 +29,10 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         constants::DEFAULT_CONGESTION_CONTROL_ALGORITHM,
     )?;
     m.add(
+        "DEFAULT_CONNECTION_ATTEMPT_DELAY",
+        constants::DEFAULT_CONNECTION_ATTEMPT_DELAY,
+    )?;
+    m.add(
         "DEFAULT_CONNECTION_IDLE_TIMEOUT",
         constants::DEFAULT_CONNECTION_IDLE_TIMEOUT,
     )?;

@@ -14,13 +14,14 @@ import uvloop
 from pywebtransport import (
     ServerApp,
     ServerConfig,
+    StreamError,
+    TimeoutError,
     WebTransportReceiveStream,
     WebTransportSendStream,
     WebTransportSession,
     WebTransportStream,
 )
 from pywebtransport import __version__ as LIB_VERSION
-from pywebtransport.exceptions import StreamError, TimeoutError
 from pywebtransport.serializer import JSONSerializer
 from pywebtransport.server.middleware import MiddlewareRejected
 from pywebtransport.types import EventType, SessionProtocol, StreamDirection
@@ -45,11 +46,9 @@ ERR_SUS: Final[int] = 0x03
 ERR_WHATEVER: Final[int] = 0x02
 
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - [%(name)s] %(message)s",
-    datefmt="%H:%M:%S",
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - [%(name)s] %(message)s", datefmt="%H:%M:%S"
 )
-logger = logging.getLogger("interop")
+logger = logging.getLogger(name="interop")
 
 
 def deque_converter(o: Any) -> Any:
@@ -72,7 +71,7 @@ class InteropServer(ServerApp):
 
     async def handle_devious_baton(self, session: WebTransportSession, **kwargs: Any) -> None:
         """Handle the Devious Baton protocol."""
-        query = parse_qs(urlparse(session.path).query)
+        query = parse_qs(qs=urlparse(url=session.path).query)
         count = int(query.get("count", ["1"])[0])
         baton_arg = query.get("baton", [None])[0]
         initial_baton = int(baton_arg) if baton_arg is not None else random.randint(1, 255)
@@ -94,7 +93,7 @@ class InteropServer(ServerApp):
                 payload = self._create_baton_payload(initial_baton)
 
                 try:
-                    async with asyncio.timeout(BATON_TIMEOUT):
+                    async with asyncio.timeout(delay=BATON_TIMEOUT):
                         await stream.write(data=payload)
                         await stream.close()
                 except asyncio.TimeoutError:
@@ -119,10 +118,11 @@ class InteropServer(ServerApp):
                 self._attach_baton_handlers(session, stream)
 
                 source_type = "unknown"
-                if stream.direction == StreamDirection.RECEIVE_ONLY:
-                    source_type = "uni"
-                elif stream.direction == StreamDirection.BIDIRECTIONAL:
-                    source_type = "bidi_peer"
+                match stream.direction:
+                    case StreamDirection.RECEIVE_ONLY:
+                        source_type = "uni"
+                    case StreamDirection.BIDIRECTIONAL:
+                        source_type = "bidi_peer"
 
                 if source_type != "unknown":
                     expected = None
@@ -130,7 +130,7 @@ class InteropServer(ServerApp):
                         expected = (initial_baton + 1) % 256 if count == 1 else None
 
                     asyncio.create_task(
-                        self._handle_baton_stream(session, stream, source_type, state, expected_val=expected)
+                        coro=self._handle_baton_stream(session, stream, source_type, state, expected_val=expected)
                     )
 
         session.events.on(event_type=EventType.DATAGRAM_RECEIVED, handler=on_datagram)
@@ -157,7 +157,7 @@ class InteropServer(ServerApp):
         async def on_stream(event: Any) -> None:
             if isinstance(event.data, dict) and (stream := event.data.get("stream")):
                 if isinstance(stream, WebTransportStream):
-                    asyncio.create_task(self._echo_stream(stream))
+                    asyncio.create_task(coro=self._echo_stream(stream))
 
         session.events.on(event_type=EventType.DATAGRAM_RECEIVED, handler=on_datagram)
         session.events.on(event_type=EventType.STREAM_OPENED, handler=on_stream)
@@ -259,12 +259,13 @@ class InteropServer(ServerApp):
         data = bytes([first]) + rest
         value = int.from_bytes(data, "big")
 
-        if length == 2:
-            return value & 0x3FFF, raw
-        elif length == 4:
-            return value & 0x3FFFFFFF, raw
-        else:
-            return value & 0x3FFFFFFFFFFFFFFF, raw
+        match length:
+            case 2:
+                return value & 0x3FFF, raw
+            case 4:
+                return value & 0x3FFFFFFF, raw
+            case _:
+                return value & 0x3FFFFFFFFFFFFFFF, raw
 
     def _baton_write_varint(self, value: int) -> bytes:
         """Encode an integer into QUIC variable-length bytes."""
@@ -294,7 +295,7 @@ class InteropServer(ServerApp):
         if baton % 5 == 0:
             p_len = random.randint(1, 256)
             padding = bytes([random.randint(0, 255) for _ in range(p_len)])
-        return self._baton_write_varint(len(padding)) + padding + bytes([baton])
+        return self._baton_write_varint(value=len(padding)) + padding + bytes([baton])
 
     async def _echo_stream(self, stream: WebTransportStream) -> None:
         """Echo data back to the client."""
@@ -351,59 +352,62 @@ class InteropServer(ServerApp):
             next_baton = (baton_val + 1) % 256
             out_msg = self._create_baton_payload(next_baton)
 
-            if source_type == "uni":
-                try:
-                    new_bidi_stream = await session.create_bidirectional_stream()
-                except TimeoutError:
-                    await session.close(error_code=ERR_BORED, reason="Timeout waiting for credit")
-                    return
-                except Exception:
-                    await session.close(error_code=ERR_DA_YAMN, reason="Insufficient credit")
-                    return
-
-                self._attach_baton_handlers(session, new_bidi_stream)
-
-                try:
-                    async with asyncio.timeout(BATON_TIMEOUT):
-                        await new_bidi_stream.write(data=out_msg)
-                        await new_bidi_stream.write(data=b"", end_stream=True)
-                except asyncio.TimeoutError:
-                    await session.close(error_code=ERR_BORED, reason="Timeout writing")
-                    return
-
-                asyncio.create_task(
-                    self._handle_baton_stream(session, new_bidi_stream, "bidi_self", state, (next_baton + 1) % 256)
-                )
-
-            elif source_type == "bidi_peer":
-                if isinstance(stream, WebTransportStream):
+            match source_type:
+                case "uni":
                     try:
-                        async with asyncio.timeout(BATON_TIMEOUT):
-                            await stream.write(data=out_msg)
-                            await stream.write(data=b"", end_stream=True)
+                        new_bidi_stream = await session.create_bidirectional_stream()
+                    except TimeoutError:
+                        await session.close(error_code=ERR_BORED, reason="Timeout waiting for credit")
+                        return
+                    except Exception:
+                        await session.close(error_code=ERR_DA_YAMN, reason="Insufficient credit")
+                        return
+
+                    self._attach_baton_handlers(session, new_bidi_stream)
+
+                    try:
+                        async with asyncio.timeout(delay=BATON_TIMEOUT):
+                            await new_bidi_stream.write(data=out_msg)
+                            await new_bidi_stream.write(data=b"", end_stream=True)
                     except asyncio.TimeoutError:
                         await session.close(error_code=ERR_BORED, reason="Timeout writing")
                         return
 
-            elif source_type == "bidi_self":
-                try:
-                    new_uni_stream = await session.create_unidirectional_stream()
-                except TimeoutError:
-                    await session.close(error_code=ERR_BORED, reason="Timeout waiting for credit")
-                    return
-                except Exception:
-                    await session.close(error_code=ERR_DA_YAMN, reason="Insufficient credit")
-                    return
+                    asyncio.create_task(
+                        coro=self._handle_baton_stream(
+                            session, new_bidi_stream, "bidi_self", state, (next_baton + 1) % 256
+                        )
+                    )
 
-                self._attach_baton_handlers(session, new_uni_stream)
+                case "bidi_peer":
+                    if isinstance(stream, WebTransportStream):
+                        try:
+                            async with asyncio.timeout(delay=BATON_TIMEOUT):
+                                await stream.write(data=out_msg)
+                                await stream.write(data=b"", end_stream=True)
+                        except asyncio.TimeoutError:
+                            await session.close(error_code=ERR_BORED, reason="Timeout writing")
+                            return
 
-                try:
-                    async with asyncio.timeout(BATON_TIMEOUT):
-                        await new_uni_stream.write(data=out_msg)
-                        await new_uni_stream.close()
-                except asyncio.TimeoutError:
-                    await session.close(error_code=ERR_BORED, reason="Timeout writing")
-                    return
+                case "bidi_self":
+                    try:
+                        new_uni_stream = await session.create_unidirectional_stream()
+                    except TimeoutError:
+                        await session.close(error_code=ERR_BORED, reason="Timeout waiting for credit")
+                        return
+                    except Exception:
+                        await session.close(error_code=ERR_DA_YAMN, reason="Insufficient credit")
+                        return
+
+                    self._attach_baton_handlers(session, new_uni_stream)
+
+                    try:
+                        async with asyncio.timeout(delay=BATON_TIMEOUT):
+                            await new_uni_stream.write(data=out_msg)
+                            await new_uni_stream.close()
+                    except asyncio.TimeoutError:
+                        await session.close(error_code=ERR_BORED, reason="Timeout writing")
+                        return
 
         except asyncio.IncompleteReadError:
             await session.close(error_code=ERR_BRUH, reason="Malformed baton")
@@ -454,7 +458,7 @@ class InteropServer(ServerApp):
         if "/webtransport/devious-baton" not in session.path:
             return
 
-        query = parse_qs(urlparse(session.path).query)
+        query = parse_qs(qs=urlparse(url=session.path).query)
         try:
             if "version" in query:
                 version = int(query["version"][0])
@@ -480,12 +484,7 @@ async def main() -> None:
     if not CERT_PATH.exists() or not KEY_PATH.exists():
         generate_self_signed_cert(hostname=CERT_HOSTNAME, output_dir=".")
 
-    config = ServerConfig(
-        bind_host=HOST,
-        bind_port=PORT,
-        certfile=str(CERT_PATH),
-        keyfile=str(KEY_PATH),
-    )
+    config = ServerConfig(bind_host=HOST, bind_port=PORT, certfile=str(CERT_PATH), keyfile=str(KEY_PATH))
 
     app = InteropServer(config=config)
     logger.info("Server starting on https://[%s]:%s", HOST, PORT)

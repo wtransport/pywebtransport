@@ -12,8 +12,9 @@ from pywebtransport.constants import (
     DEFAULT_CLIENT_MAX_SESSIONS,
     DEFAULT_CLOSE_TIMEOUT,
     DEFAULT_CONGESTION_CONTROL_ALGORITHM,
-    DEFAULT_CONNECT_TIMEOUT,
+    DEFAULT_CONNECTION_ATTEMPT_DELAY,
     DEFAULT_CONNECTION_IDLE_TIMEOUT,
+    DEFAULT_CONNECT_TIMEOUT,
     DEFAULT_DEV_PORT,
     DEFAULT_ENABLE_STATELESS_RETRY,
     DEFAULT_FLOW_CONTROL_WINDOW_AUTO_SCALE,
@@ -68,8 +69,9 @@ class TestConstantsValues:
         assert DEFAULT_CLIENT_MAX_SESSIONS == 100
         assert DEFAULT_CLOSE_TIMEOUT == 5.0
         assert DEFAULT_CONGESTION_CONTROL_ALGORITHM == "cubic"
-        assert DEFAULT_CONNECT_TIMEOUT == 30.0
+        assert DEFAULT_CONNECTION_ATTEMPT_DELAY == 0.250
         assert DEFAULT_CONNECTION_IDLE_TIMEOUT == 60.0
+        assert DEFAULT_CONNECT_TIMEOUT == 30.0
         assert DEFAULT_DEV_PORT == 4433
         assert DEFAULT_ENABLE_STATELESS_RETRY is False
         assert DEFAULT_FLOW_CONTROL_WINDOW_AUTO_SCALE is True
@@ -107,8 +109,8 @@ class TestConstantsValues:
 class TestErrorCodes:
 
     @pytest.mark.parametrize(
-        "member, expected_value",
-        [
+        argnames="member, expected_value",
+        argvalues=[
             (ErrorCodes.NO_ERROR, 0x0),
             (ErrorCodes.INTERNAL_ERROR, 0x1),
             (ErrorCodes.CONNECTION_REFUSED, 0x2),

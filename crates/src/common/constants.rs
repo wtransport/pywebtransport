@@ -30,6 +30,9 @@ pub const DEFAULT_CLOSE_TIMEOUT: f64 = 5.0;
 /// Default congestion control algorithm.
 pub const DEFAULT_CONGESTION_CONTROL_ALGORITHM: &str = "cubic";
 
+/// Default delay between concurrent connection attempts.
+pub const DEFAULT_CONNECTION_ATTEMPT_DELAY: f64 = 0.250;
+
 /// Default connection idle timeout.
 pub const DEFAULT_CONNECTION_IDLE_TIMEOUT: f64 = 60.0;
 

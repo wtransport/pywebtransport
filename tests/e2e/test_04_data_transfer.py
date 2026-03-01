@@ -17,9 +17,9 @@ DEBUG_MODE: Final[bool] = "--debug" in sys.argv
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 if DEBUG_MODE:
-    logging.getLogger().setLevel(logging.DEBUG)
+    logging.getLogger().setLevel(level=logging.DEBUG)
 
-logger = logging.getLogger("test_data_transfer")
+logger = logging.getLogger(name="test_data_transfer")
 
 
 def generate_test_data(*, size: int) -> bytes:
@@ -224,7 +224,7 @@ async def main() -> int:
                 logger.error("%s: FAILED", test_name)
         except Exception as e:
             logger.error("%s: CRASHED - %s", test_name, e, exc_info=True)
-        await asyncio.sleep(1)
+        await asyncio.sleep(delay=1)
 
     logger.info("")
     logger.info("=" * 60)

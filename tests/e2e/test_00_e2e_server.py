@@ -43,7 +43,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 if DEBUG_MODE:
     logging.getLogger().setLevel(logging.DEBUG)
 
-logger = logging.getLogger("e2e_server")
+logger = logging.getLogger(name="e2e_server")
 
 
 @dataclass(kw_only=True)
@@ -90,7 +90,7 @@ class E2EServerApp(ServerApp):
                 return
 
             diagnostics = await self.server.diagnostics()
-            stats_json = json.dumps(asdict(diagnostics), indent=2).encode("utf-8")
+            stats_json = json.dumps(obj=asdict(obj=diagnostics), indent=2).encode(encoding="utf-8")
             await stream.write(data=stats_json, end_stream=True)
             logger.info("Sent diagnostics: %s bytes", len(stats_json))
         except asyncio.TimeoutError:
@@ -117,7 +117,7 @@ class E2EServerApp(ServerApp):
                 "active_sessions": active_sessions,
                 "active_connections": active_connections,
             }
-            await session.send_datagram(data=json.dumps(health_data).encode("utf-8"))
+            await session.send_datagram(data=json.dumps(obj=health_data).encode(encoding="utf-8"))
             logger.info("Sent health status: %s", health_data["status"])
         except Exception as e:
             logger.error("Health handler error: %s", e)

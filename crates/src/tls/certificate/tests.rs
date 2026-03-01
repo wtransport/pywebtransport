@@ -121,3 +121,27 @@ fn test_generate_self_signed_cert_key_permissions_unix_success() {
 
     let _ = fs::remove_dir_all(&temp_dir).ok();
 }
+
+#[rstest]
+fn test_load_certs_fails_with_invalid_path() {
+    let path = Path::new("/non/existent/path/certs.pem");
+
+    let result = load_certs(path);
+
+    let Err(_) = result else {
+        assert_eq!("err", "ok", "Expected err");
+        unreachable!()
+    };
+}
+
+#[rstest]
+fn test_load_private_key_fails_with_invalid_path() {
+    let path = Path::new("/non/existent/path/key.pem");
+
+    let result = load_private_key(path);
+
+    let Err(_) = result else {
+        assert_eq!("err", "ok", "Expected err");
+        unreachable!()
+    };
+}

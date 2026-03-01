@@ -45,7 +45,7 @@ async def test_middleware_accepts_session(
 
     headers: Headers = {"x-auth-token": "valid-token"}
     async with await client.connect(url=f"https://{host}:{port}/protected", headers=headers):
-        async with asyncio.timeout(2.0):
+        async with asyncio.timeout(delay=2.0):
             await handler_was_reached.wait()
 
 
@@ -63,10 +63,10 @@ async def test_middleware_rejects_session(
 
     @server_app.route(path="/protected")
     async def protected_handler(session: WebTransportSession, **kwargs: Any) -> None:
-        pytest.fail("Rejected session reached the route handler.")
+        pytest.fail(reason="Rejected session reached the route handler.")
 
     headers: Headers = {"x-auth-token": "invalid-token"}
-    with pytest.raises(ClientError) as exc_info:
+    with pytest.raises(expected_exception=ClientError) as exc_info:
         await client.connect(url=f"https://{host}:{port}/protected", headers=headers)
 
     error_message = str(exc_info.value).lower()
@@ -125,7 +125,7 @@ async def test_routing_to_path_one(server: tuple[str, int], client: WebTransport
             pass
 
     async with await client.connect(url=f"https://{host}:{port}/path_one"):
-        async with asyncio.timeout(2.0):
+        async with asyncio.timeout(delay=2.0):
             await handler_one_called.wait()
 
     assert handler_one_called.is_set()
@@ -154,7 +154,7 @@ async def test_routing_to_path_two(server: tuple[str, int], client: WebTransport
             pass
 
     async with await client.connect(url=f"https://{host}:{port}/path_two"):
-        async with asyncio.timeout(2.0):
+        async with asyncio.timeout(delay=2.0):
             await handler_two_called.wait()
 
     assert handler_two_called.is_set()

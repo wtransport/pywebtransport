@@ -26,11 +26,11 @@ class TestStructuredStream:
 
     @pytest.fixture
     def mock_serializer(self, mocker: MockerFixture) -> MagicMock:
-        return mocker.create_autospec(Serializer, spec_set=True, instance=True)
+        return mocker.create_autospec(spec=Serializer, spec_set=True, instance=True)
 
     @pytest.fixture
     def mock_stream(self, mocker: MockerFixture) -> AsyncMock:
-        mock = mocker.create_autospec(WebTransportStream, spec_set=True, instance=True)
+        mock = mocker.create_autospec(spec=WebTransportStream, spec_set=True, instance=True)
         mock.readexactly = AsyncMock()
         mock.write = AsyncMock()
         mock.close = AsyncMock()
@@ -53,9 +53,9 @@ class TestStructuredStream:
     async def test_anext_raises_on_protocol_error(
         self, structured_stream: StructuredStream, mock_stream: AsyncMock
     ) -> None:
-        mock_stream.readexactly.side_effect = asyncio.IncompleteReadError(b"part", 8)
+        mock_stream.readexactly.side_effect = asyncio.IncompleteReadError(partial=b"part", expected=8)
 
-        with pytest.raises(StreamError) as exc_info:
+        with pytest.raises(expected_exception=StreamError) as exc_info:
             await structured_stream.__anext__()
         assert exc_info.value.error_code == ErrorCodes.H3_MESSAGE_ERROR
 
@@ -63,9 +63,9 @@ class TestStructuredStream:
     async def test_anext_stops_on_clean_close(
         self, structured_stream: StructuredStream, mock_stream: AsyncMock
     ) -> None:
-        mock_stream.readexactly.side_effect = asyncio.IncompleteReadError(b"", 8)
+        mock_stream.readexactly.side_effect = asyncio.IncompleteReadError(partial=b"", expected=8)
 
-        with pytest.raises(StopAsyncIteration):
+        with pytest.raises(expected_exception=StopAsyncIteration):
             await structured_stream.__anext__()
 
     @pytest.mark.asyncio
@@ -77,7 +77,7 @@ class TestStructuredStream:
         h2 = struct.pack("!HI", 2, 4)
         p2 = b"obj2"
 
-        mock_stream.readexactly.side_effect = [h1, p1, h2, p2, asyncio.IncompleteReadError(b"", 8)]
+        mock_stream.readexactly.side_effect = [h1, p1, h2, p2, asyncio.IncompleteReadError(partial=b"", expected=8)]
 
         obj1, obj2 = MockMsgA(), MockMsgB()
         mock_serializer.deserialize.side_effect = [obj1, obj2]
@@ -117,12 +117,14 @@ class TestStructuredStream:
     ) -> None:
         faulty_registry = {1: MockMsgA, 2: MockMsgA}
 
-        with pytest.raises(ConfigurationError, match="Types in the structured stream registry must be unique"):
+        with pytest.raises(
+            expected_exception=ConfigurationError, match="Types in the structured stream registry must be unique"
+        ):
             StructuredStream(
                 stream=mock_stream, registry=faulty_registry, serializer=mock_serializer, max_message_size=1024
             )
 
-    @pytest.mark.parametrize("closed_status", [True, False])
+    @pytest.mark.parametrize(argnames="closed_status", argvalues=[True, False])
     def test_is_closed_property(
         self, structured_stream: StructuredStream, mock_stream: AsyncMock, closed_status: bool
     ) -> None:
@@ -132,9 +134,9 @@ class TestStructuredStream:
 
     @pytest.mark.asyncio
     async def test_receive_obj_eof_clean(self, structured_stream: StructuredStream, mock_stream: AsyncMock) -> None:
-        mock_stream.readexactly.side_effect = asyncio.IncompleteReadError(b"", 8)
+        mock_stream.readexactly.side_effect = asyncio.IncompleteReadError(partial=b"", expected=8)
 
-        with pytest.raises(StreamError) as exc_info:
+        with pytest.raises(expected_exception=StreamError) as exc_info:
             await structured_stream.receive_obj()
 
         assert exc_info.value.error_code == ErrorCodes.NO_ERROR
@@ -152,7 +154,7 @@ class TestStructuredStream:
         header = struct.pack("!HI", type_id, large_payload_len)
         mock_stream.readexactly.return_value = header
 
-        with pytest.raises(SerializationError, match="exceeds the configured limit"):
+        with pytest.raises(expected_exception=SerializationError, match="exceeds the configured limit"):
             await stream.receive_obj()
 
         mock_stream.stop_receiving.assert_awaited_once_with(error_code=ErrorCodes.APPLICATION_ERROR)
@@ -161,9 +163,9 @@ class TestStructuredStream:
     async def test_receive_obj_incomplete_header_raises_stream_error(
         self, structured_stream: StructuredStream, mock_stream: AsyncMock
     ) -> None:
-        mock_stream.readexactly.side_effect = asyncio.IncompleteReadError(b"part", 8)
+        mock_stream.readexactly.side_effect = asyncio.IncompleteReadError(partial=b"part", expected=8)
 
-        with pytest.raises(StreamError) as exc_info:
+        with pytest.raises(expected_exception=StreamError) as exc_info:
             await structured_stream.receive_obj()
 
         assert exc_info.value.error_code == ErrorCodes.H3_MESSAGE_ERROR
@@ -176,9 +178,12 @@ class TestStructuredStream:
         type_id = 1
         payload_len = 100
         header = struct.pack("!HI", type_id, payload_len)
-        mock_stream.readexactly.side_effect = [header, asyncio.IncompleteReadError(b"partial", payload_len)]
+        mock_stream.readexactly.side_effect = [
+            header,
+            asyncio.IncompleteReadError(partial=b"partial", expected=payload_len),
+        ]
 
-        with pytest.raises(StreamError) as exc_info:
+        with pytest.raises(expected_exception=StreamError) as exc_info:
             await structured_stream.receive_obj()
 
         assert exc_info.value.error_code == ErrorCodes.H3_MESSAGE_ERROR
@@ -212,7 +217,9 @@ class TestStructuredStream:
         header = struct.pack("!HI", unknown_type_id, 10)
         mock_stream.readexactly.return_value = header
 
-        with pytest.raises(SerializationError, match=f"Received unknown message type ID: {unknown_type_id}"):
+        with pytest.raises(
+            expected_exception=SerializationError, match=f"Received unknown message type ID: {unknown_type_id}"
+        ):
             await structured_stream.receive_obj()
 
         mock_stream.readexactly.assert_awaited_once()
@@ -226,7 +233,7 @@ class TestStructuredStream:
         mock_serializer.serialize.return_value = b"data"
 
         async def slow_write(data: bytes) -> None:
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(delay=0.01)
 
         mock_stream.write.side_effect = slow_write
 
@@ -258,7 +265,7 @@ class TestStructuredStream:
         class UnregisteredMsg:
             pass
 
-        with pytest.raises(SerializationError):
+        with pytest.raises(expected_exception=SerializationError):
             await structured_stream.send_obj(obj=UnregisteredMsg())
 
         mock_serializer.serialize.assert_not_called()

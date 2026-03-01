@@ -30,7 +30,7 @@ CHUNK_SIZE: Final[int] = 65536
 STATIC_VIEW: Final[memoryview] = memoryview(b"x" * (100 * 1024 * 1024))
 
 logging.basicConfig(level=logging.CRITICAL)
-logger = logging.getLogger("bench_server")
+logger = logging.getLogger(name="bench_server")
 
 
 class BenchmarkServerApp(ServerApp):

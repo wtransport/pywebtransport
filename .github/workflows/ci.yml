@@ -26,10 +26,10 @@ jobs:
       image: python:3.12-slim-bookworm
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Cache dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .cache/pip
           key: ${{ runner.os }}-pip-lint-${{ hashFiles('dev-requirements.txt') }}
@@ -57,10 +57,10 @@ jobs:
       image: python:${{ matrix.python-version }}-slim-bookworm
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Cache dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             .cache/pip
@@ -94,7 +94,7 @@ jobs:
         run: |
           pytest --cov=pywebtransport --cov-report=xml:coverage-${{ matrix.python-version }}.xml
       - name: Upload coverage reports
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-reports-${{ matrix.python-version }}
           path: coverage-*.xml
@@ -107,9 +107,9 @@ jobs:
       image: python:3.12-slim-bookworm
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Download coverage reports
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: coverage-reports/
       - name: Install Codecov dependencies

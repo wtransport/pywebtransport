@@ -10,7 +10,9 @@ from typing import Any
 
 import pytest
 
-from pywebtransport.exceptions import ConfigurationError, SerializationError
+import pywebtransport.serializer.msgpack
+from pywebtransport import ConfigurationError
+from pywebtransport.exceptions import SerializationError
 
 try:
     import msgpack
@@ -35,7 +37,7 @@ class Status(Enum):
 
 def test_module_import_handles_missing_msgpack() -> None:
     with pytest.MonkeyPatch.context() as mp:
-        mp.setitem(sys.modules, "msgpack", None)
+        mp.setitem(dic=sys.modules, name="msgpack", value=None)
         if "pywebtransport.serializer.msgpack" in sys.modules:
             del sys.modules["pywebtransport.serializer.msgpack"]
 
@@ -45,10 +47,10 @@ def test_module_import_handles_missing_msgpack() -> None:
 
     if "pywebtransport.serializer.msgpack" in sys.modules:
         del sys.modules["pywebtransport.serializer.msgpack"]
-    importlib.import_module("pywebtransport.serializer.msgpack")
+    importlib.import_module(name="pywebtransport.serializer.msgpack")
 
 
-@pytest.mark.skipif(msgpack is None, reason="msgpack library not installed")
+@pytest.mark.skipif(condition=msgpack is None, reason="msgpack library not installed")
 class TestMsgPackSerializer:
 
     @pytest.fixture
@@ -58,11 +60,11 @@ class TestMsgPackSerializer:
         return MsgPackSerializer()
 
     def test_deserialize_invalid_data_raises_error(self, serializer: Any) -> None:
-        with pytest.raises(SerializationError, match="Data is not valid MsgPack"):
+        with pytest.raises(expected_exception=SerializationError, match="Data is not valid MsgPack"):
             serializer.deserialize(data=b"\xc1")
 
     def test_deserialize_memoryview_input(self, serializer: Any) -> None:
-        data = msgpack.packb({"id": 1, "name": "test"})
+        data = msgpack.packb(o={"id": 1, "name": "test"})
         mv = memoryview(data)
 
         result = serializer.deserialize(data=mv, obj_type=SimpleData)
@@ -70,30 +72,30 @@ class TestMsgPackSerializer:
         assert result == SimpleData(id=1, name="test")
 
     def test_deserialize_to_dataclass(self, serializer: Any) -> None:
-        data = msgpack.packb({"id": 1, "name": "test"})
+        data = msgpack.packb(o={"id": 1, "name": "test"})
 
         result = serializer.deserialize(data=data, obj_type=SimpleData)
 
         assert result == SimpleData(id=1, name="test")
 
     def test_deserialize_to_dict(self, serializer: Any) -> None:
-        data = msgpack.packb({"id": 1, "name": "test"})
+        data = msgpack.packb(o={"id": 1, "name": "test"})
 
         result = serializer.deserialize(data=data)
 
         assert result == {"id": 1, "name": "test"}
 
     def test_deserialize_type_mismatch_raises_error(self, serializer: Any) -> None:
-        data = msgpack.packb({"name": "test"})
+        data = msgpack.packb(o={"name": "test"})
 
-        with pytest.raises(SerializationError, match="Failed to unpack"):
+        with pytest.raises(expected_exception=SerializationError, match="Failed to unpack"):
             serializer.deserialize(data=data, obj_type=SimpleData)
 
     def test_deserialize_with_unpack_kwargs(self) -> None:
         from pywebtransport.serializer.msgpack import MsgPackSerializer
 
         serializer = MsgPackSerializer(unpack_kwargs={"use_list": False})
-        data = msgpack.packb([1, 2, 3])
+        data = msgpack.packb(o=[1, 2, 3])
 
         result = serializer.deserialize(data=data)
 
@@ -108,10 +110,10 @@ class TestMsgPackSerializer:
         assert not hasattr(serializer, "__dict__")
 
     def test_init_raises_configuration_error_if_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("pywebtransport.serializer.msgpack.msgpack", None)
+        monkeypatch.setattr(target=pywebtransport.serializer.msgpack, name="msgpack", value=None, raising=False)
         from pywebtransport.serializer.msgpack import MsgPackSerializer
 
-        with pytest.raises(ConfigurationError, match="library is required"):
+        with pytest.raises(expected_exception=ConfigurationError, match="library is required"):
             MsgPackSerializer()
 
     def test_serialize_custom_default_handler(self) -> None:
@@ -134,7 +136,7 @@ class TestMsgPackSerializer:
         instance = SimpleData(id=1, name="test")
 
         result = serializer.serialize(obj=instance)
-        unpacked = msgpack.unpackb(result)
+        unpacked = msgpack.unpackb(packed=result)
 
         assert unpacked == {"id": 1, "name": "test"}
 
@@ -142,7 +144,7 @@ class TestMsgPackSerializer:
         data = {"key": "value", "items": [1, True, None]}
 
         result = serializer.serialize(obj=data)
-        unpacked = msgpack.unpackb(result)
+        unpacked = msgpack.unpackb(packed=result)
 
         assert unpacked == data
 
@@ -167,7 +169,7 @@ class TestMsgPackSerializer:
         assert result["datetime"] == test_time.isoformat()
 
     def test_serialize_unsupported_type_raises_error(self, serializer: Any) -> None:
-        with pytest.raises(SerializationError) as exc_info:
+        with pytest.raises(expected_exception=SerializationError) as exc_info:
             serializer.serialize(obj=NonSerializable())
 
         assert "is not MsgPack serializable" in str(exc_info.value)

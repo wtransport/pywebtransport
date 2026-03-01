@@ -27,7 +27,7 @@ async def idle_handler(session: WebTransportSession, **kwargs: Any) -> None:
         pass
 
 
-@pytest.mark.parametrize("server_app", [{"max_connections": 1}], indirect=True)
+@pytest.mark.parametrize(argnames="server_app", argvalues=[{"max_connections": 1}], indirect=True)
 async def test_max_connections_limit_rejection(
     server_app: ServerApp, server: tuple[str, int], client_config: ClientConfig
 ) -> None:
@@ -39,7 +39,9 @@ async def test_max_connections_limit_rejection(
         session1 = await client1.connect(url=url)
         try:
             async with WebTransportClient(config=client_config) as client2:
-                with pytest.raises((ClientError, ConnectionError, TimeoutError, asyncio.TimeoutError)):
+                with pytest.raises(
+                    expected_exception=(ClientError, ConnectionError, TimeoutError, asyncio.TimeoutError)
+                ):
                     await client2.connect(url=url)
         finally:
             if not session1.is_closed:
@@ -47,7 +49,9 @@ async def test_max_connections_limit_rejection(
 
 
 @pytest.mark.parametrize(
-    "server_app", [{"initial_max_streams_bidi": 2, "flow_control_window_auto_scale": False}], indirect=True
+    argnames="server_app",
+    argvalues=[{"initial_max_streams_bidi": 2, "flow_control_window_auto_scale": False}],
+    indirect=True,
 )
 async def test_max_streams_limit(server_app: ServerApp, server: tuple[str, int], client_config: ClientConfig) -> None:
     server_app.route(path="/")(idle_handler)
@@ -64,15 +68,13 @@ async def test_max_streams_limit(server_app: ServerApp, server: tuple[str, int],
             await s1.write(data=b"1")
             await s2.write(data=b"2")
 
-            with pytest.raises((StreamError, TimeoutError, asyncio.TimeoutError)):
+            with pytest.raises(expected_exception=(StreamError, TimeoutError, asyncio.TimeoutError)):
                 async with asyncio.timeout(delay=1.0):
                     await session.create_bidirectional_stream()
 
 
 @pytest.mark.parametrize(
-    "server_app",
-    [{"connection_idle_timeout": 0.2, "resource_cleanup_interval": 0.1}],
-    indirect=True,
+    argnames="server_app", argvalues=[{"connection_idle_timeout": 0.2, "resource_cleanup_interval": 0.1}], indirect=True
 )
 async def test_server_cleans_up_closed_connection(
     server_app: ServerApp, server: tuple[str, int], client_config: ClientConfig

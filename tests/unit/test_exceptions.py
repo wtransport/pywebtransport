@@ -30,8 +30,8 @@ from pywebtransport.types import SessionState
 class TestSubclassExceptions:
 
     @pytest.mark.parametrize(
-        "exc_class, kwargs, expected_category",
-        [
+        argnames="exc_class, kwargs, expected_category",
+        argvalues=[
             (AuthenticationError, {"auth_method": "token"}, "authentication"),
             (CertificateError, {"certificate_path": "/c.pem"}, "certificate"),
             (ClientError, {"target_url": "https://a.com"}, "client"),
