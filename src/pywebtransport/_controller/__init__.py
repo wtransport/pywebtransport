@@ -1,6 +1,6 @@
-"""Low-level native protocol driver and FFI bindings."""
+"""Threaded reactor concurrency controller and FFI runtime bindings."""
 
-from pywebtransport._driver.abi import ABI_VERSION as _PY_ABI_VERSION
+from pywebtransport._controller.abi import ABI_VERSION as _PY_ABI_VERSION
 from pywebtransport._wtransport import ABI_VERSION as _NATIVE_ABI_VERSION
 
 if _PY_ABI_VERSION != _NATIVE_ABI_VERSION:

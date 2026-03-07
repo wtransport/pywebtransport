@@ -277,5 +277,12 @@ class ServerCluster:
 
             self._configs.append(config)
             self._servers.append(server)
-            _logger.info("Added server to cluster: %s", server.local_address)
+
+            addresses = server.local_addresses
+            if addresses:
+                addr_str = "[" + ", ".join(f"{ip}:{port}" for ip, port in addresses) + "]"
+            else:
+                addr_str = "unknown"
+
+            _logger.info("Added server to cluster: %s", addr_str)
             return server

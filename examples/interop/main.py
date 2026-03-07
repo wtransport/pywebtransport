@@ -14,6 +14,7 @@ import uvloop
 from pywebtransport import (
     ServerApp,
     ServerConfig,
+    SessionClosedError,
     StreamError,
     TimeoutError,
     WebTransportReceiveStream,
@@ -24,7 +25,7 @@ from pywebtransport import (
 from pywebtransport import __version__ as LIB_VERSION
 from pywebtransport.serializer import JSONSerializer
 from pywebtransport.server.middleware import MiddlewareRejected
-from pywebtransport.types import EventType, SessionProtocol, StreamDirection
+from pywebtransport.types import EventType, SessionProtocol
 from pywebtransport.utils import generate_self_signed_cert
 
 CERT_HOSTNAME: Final[str] = "localhost"
@@ -110,37 +111,40 @@ class InteropServer(ServerApp):
                 if not self._validate_baton_datagram(data):
                     await session.close(error_code=ERR_BRUH, reason="Malformed baton datagram")
 
-        async def on_stream(event: Any) -> None:
-            if isinstance(event.data, dict) and (stream := event.data.get("stream")):
-                if not stream.is_remote:
-                    return
-
-                self._attach_baton_handlers(session, stream)
-
-                source_type = "unknown"
-                match stream.direction:
-                    case StreamDirection.RECEIVE_ONLY:
-                        source_type = "uni"
-                    case StreamDirection.BIDIRECTIONAL:
-                        source_type = "bidi_peer"
-
-                if source_type != "unknown":
-                    expected = None
-                    if source_type == "bidi_peer":
-                        expected = (initial_baton + 1) % 256 if count == 1 else None
-
+        async def accept_bidi() -> None:
+            try:
+                while True:
+                    s = await session.accept_bidirectional_stream()
+                    self._attach_baton_handlers(session, s)
+                    expected = (initial_baton + 1) % 256 if count == 1 else None
                     asyncio.create_task(
-                        coro=self._handle_baton_stream(session, stream, source_type, state, expected_val=expected)
+                        coro=self._handle_baton_stream(session, s, "bidi_peer", state, expected_val=expected)
                     )
+            except SessionClosedError:
+                pass
+
+        async def accept_uni() -> None:
+            try:
+                while True:
+                    s = await session.accept_unidirectional_stream()
+                    self._attach_baton_handlers(session, s)
+                    asyncio.create_task(coro=self._handle_baton_stream(session, s, "uni", state, expected_val=None))
+            except SessionClosedError:
+                pass
 
         session.events.on(event_type=EventType.DATAGRAM_RECEIVED, handler=on_datagram)
-        session.events.on(event_type=EventType.STREAM_OPENED, handler=on_stream)
+
+        bidi_task = asyncio.create_task(coro=accept_bidi())
+        uni_task = asyncio.create_task(coro=accept_uni())
 
         try:
             await session.events.wait_for(event_type=EventType.SESSION_CLOSED)
             logger.info("Session %s: closed", session.session_id)
         except Exception:
             pass
+        finally:
+            bidi_task.cancel()
+            uni_task.cancel()
 
     async def handle_echo(self, session: WebTransportSession, **kwargs: Any) -> None:
         """Handle bidirectional stream and datagram echo."""
@@ -154,28 +158,35 @@ class InteropServer(ServerApp):
                 except Exception:
                     pass
 
-        async def on_stream(event: Any) -> None:
-            if isinstance(event.data, dict) and (stream := event.data.get("stream")):
-                if isinstance(stream, WebTransportStream):
+        async def accept_bidi() -> None:
+            try:
+                while True:
+                    stream = await session.accept_bidirectional_stream()
                     asyncio.create_task(coro=self._echo_stream(stream))
+            except SessionClosedError:
+                pass
 
         session.events.on(event_type=EventType.DATAGRAM_RECEIVED, handler=on_datagram)
-        session.events.on(event_type=EventType.STREAM_OPENED, handler=on_stream)
+
+        stream_task = asyncio.create_task(coro=accept_bidi())
 
         try:
             await session.events.wait_for(event_type=EventType.SESSION_CLOSED)
             logger.info("Session %s: closed", sid)
         except Exception:
             pass
+        finally:
+            stream_task.cancel()
 
     async def handle_stats(self, session: WebTransportSession, **kwargs: Any) -> None:
         """Respond with current session diagnostics."""
         sid = session.session_id
         logger.info("Session %s: stats started", sid)
 
-        async def on_stream(event: Any) -> None:
-            if isinstance(event.data, dict) and (stream := event.data.get("stream")):
-                if isinstance(stream, WebTransportStream):
+        async def accept_bidi() -> None:
+            try:
+                while True:
+                    stream = await session.accept_bidirectional_stream()
                     try:
                         await stream.read_all()
                         payload = self._serializer.serialize(obj=await session.diagnostics())
@@ -183,23 +194,28 @@ class InteropServer(ServerApp):
                         await stream.write(data=b"", end_stream=True)
                     except Exception as e:
                         logger.error("Session %s: stats stream error: %s", sid, e)
+            except SessionClosedError:
+                pass
 
-        session.events.on(event_type=EventType.STREAM_OPENED, handler=on_stream)
+        stream_task = asyncio.create_task(coro=accept_bidi())
 
         try:
             await session.events.wait_for(event_type=EventType.SESSION_CLOSED)
             logger.info("Session %s: closed", sid)
         except Exception:
             pass
+        finally:
+            stream_task.cancel()
 
     async def handle_status(self, session: WebTransportSession, **kwargs: Any) -> None:
         """Respond with global server diagnostics."""
         sid = session.session_id
         logger.info("Session %s: status started", sid)
 
-        async def on_stream(event: Any) -> None:
-            if isinstance(event.data, dict) and (stream := event.data.get("stream")):
-                if isinstance(stream, WebTransportStream):
+        async def accept_bidi() -> None:
+            try:
+                while True:
+                    stream = await session.accept_bidirectional_stream()
                     try:
                         await stream.read_all()
                         payload = self._serializer.serialize(obj=await self.server.diagnostics())
@@ -207,14 +223,18 @@ class InteropServer(ServerApp):
                         await stream.write(data=b"", end_stream=True)
                     except Exception as e:
                         logger.error("Session %s: status stream error: %s", sid, e)
+            except SessionClosedError:
+                pass
 
-        session.events.on(event_type=EventType.STREAM_OPENED, handler=on_stream)
+        stream_task = asyncio.create_task(coro=accept_bidi())
 
         try:
             await session.events.wait_for(event_type=EventType.SESSION_CLOSED)
             logger.info("Session %s: closed", sid)
         except Exception:
             pass
+        finally:
+            stream_task.cancel()
 
     def _attach_baton_handlers(
         self,

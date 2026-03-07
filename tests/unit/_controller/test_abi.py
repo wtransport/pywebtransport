@@ -1,8 +1,8 @@
-"""Unit tests for the pywebtransport._driver.abi module."""
+"""Unit tests for the pywebtransport._controller.abi module."""
 
 import pytest
 
-from pywebtransport._driver import abi
+from pywebtransport._controller import abi
 
 
 class TestAbi:
@@ -10,11 +10,12 @@ class TestAbi:
     @pytest.mark.parametrize(
         argnames="constant_name, expected_value",
         argvalues=[
-            ("ABI_VERSION", 1),
-            ("CONNECTION_EFFECTS", 0x00),
-            ("CONNECTION_SPAWNED", 0x01),
-            ("CONSUMED", 0x02),
-            ("TRANSMIT", 0x03),
+            ("ABI_VERSION", 2),
+            ("COMMAND_COMPLETED", 0x00),
+            ("COMMAND_FAILED", 0x01),
+            ("CONNECTION_EFFECTS", 0x02),
+            ("CONNECTION_SPAWNED", 0x03),
+            ("REACTOR_SHUTDOWN", 0x04),
             ("CLEANUP_H3_STREAM", 0x40),
             ("EMIT_CONNECTION_EVENT", 0x41),
             ("EMIT_SESSION_EVENT", 0x42),

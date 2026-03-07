@@ -1,8 +1,8 @@
-"""Unit tests for the pywebtransport._driver.pending module."""
+"""Unit tests for the pywebtransport._controller.pending module."""
 
 import pytest
 
-from pywebtransport._driver.pending import PendingRequestManager
+from pywebtransport._controller.pending import PendingRequestManager
 
 
 class TestPendingRequestManager:

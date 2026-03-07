@@ -6,11 +6,12 @@ from typing import Final
 
 __all__: list[str] = []
 
-ABI_VERSION: Final[int] = 1
-CONNECTION_EFFECTS: Final[int] = 0x00
-CONNECTION_SPAWNED: Final[int] = 0x01
-CONSUMED: Final[int] = 0x02
-TRANSMIT: Final[int] = 0x03
+ABI_VERSION: Final[int] = 2
+COMMAND_COMPLETED: Final[int] = 0x00
+COMMAND_FAILED: Final[int] = 0x01
+CONNECTION_EFFECTS: Final[int] = 0x02
+CONNECTION_SPAWNED: Final[int] = 0x03
+REACTOR_SHUTDOWN: Final[int] = 0x04
 CLEANUP_H3_STREAM: Final[int] = 0x40
 EMIT_CONNECTION_EVENT: Final[int] = 0x41
 EMIT_SESSION_EVENT: Final[int] = 0x42

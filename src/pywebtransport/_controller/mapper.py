@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pywebtransport._driver import abi
+from pywebtransport._controller import abi
 from pywebtransport._protocol import events
 
 __all__: list[str] = []

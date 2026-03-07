@@ -2,11 +2,12 @@
 
 use pyo3::prelude::*;
 
-pub(super) const ABI_VERSION: u8 = 1;
-pub(super) const CONNECTION_EFFECTS: u8 = 0x00;
-pub(super) const CONNECTION_SPAWNED: u8 = 0x01;
-pub(super) const CONSUMED: u8 = 0x02;
-pub(super) const TRANSMIT: u8 = 0x03;
+pub(super) const ABI_VERSION: u8 = 2;
+pub(super) const COMMAND_COMPLETED: u8 = 0x00;
+pub(super) const COMMAND_FAILED: u8 = 0x01;
+pub(super) const CONNECTION_EFFECTS: u8 = 0x02;
+pub(super) const CONNECTION_SPAWNED: u8 = 0x03;
+pub(super) const REACTOR_SHUTDOWN: u8 = 0x04;
 pub(super) const CLEANUP_H3_STREAM: u8 = 0x40;
 pub(super) const EMIT_CONNECTION_EVENT: u8 = 0x41;
 pub(super) const EMIT_SESSION_EVENT: u8 = 0x42;

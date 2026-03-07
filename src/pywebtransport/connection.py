@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Self
 
-from pywebtransport._driver.driver import EndpointDriver
+from pywebtransport._controller.controller import EndpointController
 from pywebtransport._protocol.events import (
     ConnectionClose,
     UserConnectionGracefulClose,
@@ -68,13 +68,11 @@ class WebTransportConnection:
 
     __slots__ = (
         "_config",
-        "_driver",
+        "_controller",
         "_handle",
-        "_transport",
         "_is_client",
         "_connection_id",
         "_cached_state",
-        "_cached_remote_address",
         "events",
         "_session_handles",
         "_stream_handles",
@@ -85,21 +83,18 @@ class WebTransportConnection:
         self,
         *,
         config: ClientConfig | ServerConfig,
-        driver: EndpointDriver,
+        controller: EndpointController,
         handle: int,
-        transport: asyncio.DatagramTransport,
         is_client: bool,
     ) -> None:
         """Initialize the instance."""
         self._config = config
-        self._driver = driver
+        self._controller = controller
         self._handle = handle
-        self._transport = transport
         self._is_client = is_client
 
         self._connection_id: ConnectionId = str(uuid.uuid4())
         self._cached_state = ConnectionState.IDLE
-        self._cached_remote_address: Address | None = None
         self.events = EventEmitter(
             max_queue_size=self._config.max_event_queue_size,
             max_listeners=self._config.max_event_listeners,
@@ -108,7 +103,7 @@ class WebTransportConnection:
         self._session_handles: dict[SessionId, WebTransportSession] = {}
         self._stream_handles: dict[StreamId, _StreamHandle] = {}
 
-        self._driver.register_connection(handle=self._handle, callback=self._notify_owner)
+        self._controller.register_connection(handle=self._handle, callback=self._notify_owner)
         _logger.debug("WebTransportConnection %s initialized with handle %d.", self.connection_id, self._handle)
 
     async def __aenter__(self) -> Self:
@@ -152,25 +147,16 @@ class WebTransportConnection:
         return self.state == ConnectionState.CONNECTED
 
     @property
-    def local_address(self) -> Address | None:
-        """Return the local address of the connection."""
-        addr = self._transport.get_extra_info("sockname")
-        if isinstance(addr, tuple) and len(addr) >= 2:
-            return (addr[0], addr[1])
-        return None
+    def local_addresses(self) -> list[Address]:
+        """Return the local addresses of the connection."""
+        return self._controller.get_local_addresses()
 
     @property
     def remote_address(self) -> Address | None:
         """Return the remote address of the connection."""
-        if not self.is_closed:
-            try:
-                addr = self._driver.get_remote_address(handle=self._handle)
-                if addr is not None:
-                    self._cached_remote_address = addr
-            except Exception as e:
-                _logger.debug("Failed to query remote address from endpoint driver: %s", e)
-
-        return self._cached_remote_address
+        if self.is_closed:
+            return None
+        return self._controller.get_remote_address(handle=self._handle)
 
     @property
     def state(self) -> ConnectionState:
@@ -178,26 +164,22 @@ class WebTransportConnection:
         return self._cached_state
 
     @classmethod
-    def accept(
-        cls, *, driver: EndpointDriver, handle: int, transport: asyncio.DatagramTransport, config: ServerConfig
-    ) -> WebTransportConnection:
+    def accept(cls, *, controller: EndpointController, handle: int, config: ServerConfig) -> WebTransportConnection:
         """Instantiate a connection wrapper for an accepted server connection."""
-        connection = cls(config=config, driver=driver, handle=handle, transport=transport, is_client=False)
+        connection = cls(config=config, controller=controller, handle=handle, is_client=False)
         return connection
 
     async def close(self, *, error_code: int = ErrorCodes.NO_ERROR, reason: str = "Closed by application") -> None:
         """Terminate the WebTransport connection."""
-        if self._cached_state == ConnectionState.CLOSED:
+        if self.state == ConnectionState.CLOSED:
             return
 
         _logger.info("Closing connection %s...", self.connection_id)
 
         try:
-            _ = self.remote_address
-
-            request_id, future = self._driver.create_request()
+            request_id, future = self._controller._pending_manager.create_request()
             event = ConnectionClose(request_id=request_id, error_code=error_code, reason=reason)
-            self._driver.send_user_event(handle=self._handle, event=event)
+            self._controller.send_user_event(handle=self._handle, event=event)
 
             try:
                 async with asyncio.timeout(delay=5.0):
@@ -211,12 +193,7 @@ class WebTransportConnection:
                     _logger.warning("Connection error during close: %s", e)
             except Exception as e:
                 _logger.warning("Error during close event processing: %s", e)
-
         finally:
-            self._driver.unregister_connection(handle=self._handle)
-            self._session_handles.clear()
-            self._stream_handles.clear()
-            self._cached_state = ConnectionState.CLOSED
             _logger.info("Connection %s close process finished.", self.connection_id)
 
     async def create_session(self, *, path: str, headers: Headers | None = None) -> WebTransportSession:
@@ -224,9 +201,9 @@ class WebTransportConnection:
         if not self.is_client:
             raise ConnectionError("Sessions can only be created by the client.")
 
-        request_id, future = self._driver.create_request()
+        request_id, future = self._controller._pending_manager.create_request()
         event = UserCreateSession(request_id=request_id, path=path, headers=headers if headers is not None else {})
-        self._driver.send_user_event(handle=self._handle, event=event)
+        self._controller.send_user_event(handle=self._handle, event=event)
 
         try:
             session_id: SessionId = await future
@@ -248,9 +225,9 @@ class WebTransportConnection:
 
     async def diagnostics(self) -> ConnectionDiagnostics:
         """Retrieve diagnostic information about the connection."""
-        request_id, future = self._driver.create_request()
+        request_id, future = self._controller._pending_manager.create_request()
         event = UserGetConnectionDiagnostics(request_id=request_id)
-        self._driver.send_user_event(handle=self._handle, event=event)
+        self._controller.send_user_event(handle=self._handle, event=event)
 
         diag_data: dict[str, Any] = await future
         diag_data["active_session_handles"] = len(self._session_handles)
@@ -265,9 +242,9 @@ class WebTransportConnection:
         """Initiate a graceful shutdown of the connection."""
         _logger.info("Initiating graceful shutdown for connection %s...", self.connection_id)
 
-        request_id, future = self._driver.create_request()
+        request_id, future = self._controller._pending_manager.create_request()
         event = UserConnectionGracefulClose(request_id=request_id)
-        self._driver.send_user_event(handle=self._handle, event=event)
+        self._controller.send_user_event(handle=self._handle, event=event)
 
         try:
             async with asyncio.timeout(delay=5.0):
@@ -363,6 +340,9 @@ class WebTransportConnection:
                 self._cached_state = ConnectionState.CONNECTED
             elif event_type == EventType.CONNECTION_CLOSED:
                 self._cached_state = ConnectionState.CLOSED
+                self._controller.unregister_connection(handle=self._handle)
+                self._session_handles.clear()
+                self._stream_handles.clear()
 
             if event_type in (EventType.SESSION_REQUEST, EventType.SESSION_READY):
                 self._handle_session_event(event_type=event_type, data=data)
@@ -409,4 +389,4 @@ class WebTransportConnection:
 
     def __repr__(self) -> str:
         """Return the string representation."""
-        return f"<WebTransportConnection id={self.connection_id} state={self._cached_state} client={self.is_client}>"
+        return f"<WebTransportConnection id={self.connection_id} state={self.state} client={self.is_client}>"

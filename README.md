@@ -22,7 +22,7 @@ _An async-native WebTransport stack for Python_
 
 ## Features
 
-- **Sans-I/O Architecture**: Powered by an ownership-driven Rust state machine decoupled from the I/O runtime.
+- **Sans-I/O Architecture**: Powered by an ownership-driven Rust state machine decoupled from an autonomous threaded reactor via a lock-free IPC boundary.
 - **Transport Primitives**: Full implementation of bidirectional streams, unidirectional streams, and unreliable datagrams.
 - **Structured Concurrency**: Deterministic lifecycle management for connections and streams via asynchronous context managers.
 - **Zero-Copy I/O**: End-to-end support for buffer protocols and `memoryview` to minimize data copying overhead.
@@ -57,19 +57,13 @@ async def echo_handler(session: WebTransportSession) -> None:
         if isinstance(event.data, dict) and (data := event.data.get("data")):
             await session.send_datagram(data=b"ECHO: " + data)
 
-    async def on_stream(event: Event) -> None:
-        if isinstance(event.data, dict) and (stream := event.data.get("stream")):
-            if isinstance(stream, WebTransportStream):
-                asyncio.create_task(handle_stream(stream))
-
     session.events.on(event_type=EventType.DATAGRAM_RECEIVED, handler=on_datagram)
-    session.events.on(event_type=EventType.STREAM_OPENED, handler=on_stream)
 
     try:
-        await session.events.wait_for(event_type=EventType.SESSION_CLOSED)
+        async for stream in session.incoming_bidirectional_streams():
+            asyncio.create_task(handle_stream(stream))
     finally:
         session.events.off(event_type=EventType.DATAGRAM_RECEIVED, handler=on_datagram)
-        session.events.off(event_type=EventType.STREAM_OPENED, handler=on_stream)
 
 
 async def handle_stream(stream: WebTransportStream) -> None:

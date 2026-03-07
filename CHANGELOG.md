@@ -11,6 +11,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(No planned changes for the next release yet.)_
 
+## [0.15.0] - 2026-03-07
+
+This release executes an architectural transition by migrating L4 socket multiplexing and L7 I/O operations from the Python `asyncio` event loop into an autonomous threaded reactor within the Rust core. It establishes a lock-free Inter-Process Communication (IPC) boundary, significantly mitigating Global Interpreter Lock (GIL) contention by offloading cryptography and protocol state machine execution to the background thread. The high-level Python API is concurrently updated to utilize asynchronous generators for stream ingestion.
+
+### Added
+
+- **Threaded Reactor Integration**: Implemented `EndpointController` to establish a lock-free asynchronous command-event pipeline between Python and the Rust core. This includes edge-triggered cross-thread notifications via `os.pipe()` and a strict Two-Phase Teardown mechanism to guarantee safe file descriptor deallocation upon terminal `REACTOR_SHUTDOWN` events.
+- **Asynchronous Stream Ingestion**: Introduced `incoming_bidirectional_streams()` and `incoming_unidirectional_streams()` to `WebTransportSession`, utilizing `asyncio.Queue` and async generators for backpressure-aware stream consumption.
+- **Deterministic Iterator Termination**: Introduced `SessionClosedError` to safely implement the Poison Pill pattern, ensuring deterministic termination of asynchronous stream generation loops upon session closure.
+- **Lock-Free FFI Boundaries**: Replaced GIL-bound state management in the Rust FFI with lock-free concurrency primitives (`ArrayQueue`, `mpsc`), enabling fully autonomous execution of the protocol state machine in the background thread.
+
+### Changed
+
+- **Application Entry Points**: Re-architected `WebTransportClient` and `WebTransportServer` to delegate all L4 socket multiplexing and server-side address resolution to the Rust core, replacing the Python-bound `EndpointDriver` with the IPC-driven `EndpointController`.
+- **ABI Contract Upgrade**: Updated the FFI application binary interface to version 2, replacing legacy synchronous L4 I/O instructions with decoupled asynchronous command-event opcodes.
+- **Zero-Copy Memory Constraints**: Restricted `UserSendDatagram` payload validation in `conversion.rs` and `events.py` to strictly accept a singular contiguous `Buffer`, preventing implicit memory reallocation overhead at the FFI boundary.
+- **Proxy State Decoupling**: Refactored connection and stream proxy objects to eliminate localized shadow state machines; runtime lifecycles are now strictly derived from the unidirectional stream of protocol events.
+- **Domain Utility Scope**: Relocated `resolve_host` to client-specific utility modules, reflecting the architectural delegation of server-side bind resolution to the Rust environment.
+- **Topology Exposure**: Replaced the scalar `local_address` property across all endpoints with the `local_addresses` sequence to accurately reflect dual-stack (IPv4/IPv6) concurrent bindings managed by the backend reactor.
+
+### Removed
+
+- **Python Socket Dependencies**: Removed all L4 physical socket dependencies (`asyncio.DatagramTransport`) and legacy asynchronous adapter factories (`create_client`, `create_server`) from the Python API layer.
+- **Legacy Driver Subpackage**: Deleted the entire `_driver` subpackage as its I/O loop responsibilities are now completely absorbed by the Rust threaded reactor.
+
 ## [0.14.1] - 2026-03-01
 
 This release implements asynchronous DNS resolution to support hostname-based connections, establishing Happy Eyeballs connection racing for clients and sequential bind fallbacks for servers, alongside stricter cryptographic boundaries within the Rust core.
@@ -806,7 +831,8 @@ This is a major release focused on enhancing runtime safety and modernizing the 
 - cryptography (>=45.0.4,<46.0.0) for SSL/TLS operations
 - typing-extensions (>=4.14.0,<5.0.0) for Python <3.10 support
 
-[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.14.1...HEAD
+[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/wtransport/pywebtransport/compare/v0.14.1...v0.15.0
 [0.14.1]: https://github.com/wtransport/pywebtransport/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/wtransport/pywebtransport/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/wtransport/pywebtransport/compare/v0.13.0...v0.13.1

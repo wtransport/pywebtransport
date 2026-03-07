@@ -1,7 +1,6 @@
 //! Single QUIC connection orchestrator bridging WebTransport engine and Quinn state machine.
 
 use std::collections::{HashMap, VecDeque};
-use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use bytes::{Buf, Bytes};
@@ -119,11 +118,6 @@ impl TransportConnection {
         workspace: &mut Vec<u8>,
     ) -> Option<Transmit> {
         self.quic.poll_transmit(now_instant, 1, workspace)
-    }
-
-    // Retrieves the current validated remote socket address of the QUIC connection.
-    pub(super) fn remote_address(&self) -> SocketAddr {
-        self.quic.remote_address()
     }
 
     // Polls the earliest timeout across network and application layers.

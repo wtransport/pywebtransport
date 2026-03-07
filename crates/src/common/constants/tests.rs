@@ -49,6 +49,7 @@ fn test_congestion_control_algorithms_list() {
 }
 
 #[rstest]
+#[case(ERR_H3_DATAGRAM_ERROR, 0x33)]
 #[case(ERR_H3_NO_ERROR, 0x100)]
 #[case(ERR_H3_GENERAL_PROTOCOL_ERROR, 0x101)]
 #[case(ERR_H3_INTERNAL_ERROR, 0x102)]
@@ -66,7 +67,6 @@ fn test_congestion_control_algorithms_list() {
 #[case(ERR_H3_MESSAGE_ERROR, 0x10E)]
 #[case(ERR_H3_CONNECT_ERROR, 0x10F)]
 #[case(ERR_H3_VERSION_FALLBACK, 0x110)]
-#[case(ERR_H3_DATAGRAM_ERROR, 0x33)]
 #[test]
 fn test_http3_error_codes_match_spec(#[case] error_code: u64, #[case] expected: u64) {
     let actual = error_code;
@@ -216,6 +216,23 @@ fn test_quic_transport_error_codes(#[case] error_code: u64, #[case] expected: u6
     assert_eq!(actual, expected);
 }
 
+#[test]
+fn test_runtime_constants_integrity() {
+    assert_eq!(RUNTIME_IPC_CHANNEL_CAPACITY, 65536);
+    assert_eq!(RUNTIME_UDP_CHANNEL_CAPACITY, 8192);
+    assert_eq!(RUNTIME_UDP_SLAB_CAPACITY, 65536);
+    assert_eq!(RUNTIME_UDP_SLAB_THRESHOLD, 2048);
+}
+
+#[test]
+fn test_runtime_udp_slab_threshold_is_valid() {
+    let threshold = RUNTIME_UDP_SLAB_THRESHOLD;
+    let capacity = RUNTIME_UDP_SLAB_CAPACITY;
+    let is_valid = threshold < capacity;
+
+    assert!(is_valid);
+}
+
 #[rstest]
 #[case(DEFAULT_FLOW_CONTROL_WINDOW_SIZE)]
 #[case(DEFAULT_INITIAL_MAX_DATA)]
@@ -252,9 +269,9 @@ fn test_stream_direction_masks(#[case] mask: u64, #[case] expected: u64) {
 
 #[rstest]
 #[case(DEFAULT_CLOSE_TIMEOUT)]
+#[case(DEFAULT_CONNECT_TIMEOUT)]
 #[case(DEFAULT_CONNECTION_ATTEMPT_DELAY)]
 #[case(DEFAULT_CONNECTION_IDLE_TIMEOUT)]
-#[case(DEFAULT_CONNECT_TIMEOUT)]
 #[case(DEFAULT_KEEP_ALIVE)]
 #[case(DEFAULT_MAX_RETRY_DELAY)]
 #[case(DEFAULT_PENDING_EVENT_TTL)]
@@ -331,11 +348,11 @@ fn test_webtransport_frame_types_distinctness() {
 }
 
 #[rstest]
+#[case(WT_DATA_BLOCKED_TYPE, 0x190B_4D41)]
 #[case(WT_MAX_DATA_TYPE, 0x190B_4D3D)]
 #[case(WT_MAX_STREAM_DATA_TYPE, 0x190B_4D3E)]
 #[case(WT_MAX_STREAMS_BIDI_TYPE, 0x190B_4D3F)]
 #[case(WT_MAX_STREAMS_UNI_TYPE, 0x190B_4D40)]
-#[case(WT_DATA_BLOCKED_TYPE, 0x190B_4D41)]
 #[case(WT_STREAM_DATA_BLOCKED_TYPE, 0x190B_4D42)]
 #[case(WT_STREAMS_BLOCKED_BIDI_TYPE, 0x190B_4D43)]
 #[case(WT_STREAMS_BLOCKED_UNI_TYPE, 0x190B_4D44)]

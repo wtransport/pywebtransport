@@ -425,8 +425,9 @@ class TestStructuredDatagramTransport:
         obj = 123
         expected_header = struct.pack("!H", 1)
         expected_payload = b"123"
+        expected_data = b"".join((expected_header, expected_payload))
 
         await transport.send_obj(obj=obj)
 
         mock_serializer.serialize.assert_called_once_with(obj=obj)
-        mock_session.send_datagram.assert_awaited_once_with(data=[expected_header, expected_payload])
+        mock_session.send_datagram.assert_awaited_once_with(data=expected_data)

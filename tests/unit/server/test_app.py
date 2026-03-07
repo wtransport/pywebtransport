@@ -29,10 +29,12 @@ class TestServerApp:
         conn.connection_id = "conn_1"
         conn._handle = 42
 
-        mock_driver = mocker.Mock()
-        mock_driver.create_request.return_value = (123, mock_future)
-        mock_driver.send_user_event = mocker.Mock()
-        conn._driver = mock_driver
+        mock_controller = mocker.Mock()
+        mock_pending_manager = mocker.Mock()
+        mock_pending_manager.create_request.return_value = (123, mock_future)
+        mock_controller._pending_manager = mock_pending_manager
+        mock_controller.send_user_event = mocker.Mock()
+        conn._controller = mock_controller
 
         return conn
 
@@ -161,7 +163,7 @@ class TestServerApp:
         mock_router.route_request.return_value = (mock_handler, {})
         error_future: asyncio.Future[None] = asyncio.Future()
         error_future.set_exception(ValueError("Accept failed"))
-        mock_connection._driver.create_request.return_value = (1, error_future)
+        mock_connection._controller._pending_manager.create_request.return_value = (1, error_future)
         mock_logger_error = mocker.patch(target="pywebtransport.server.app._logger.error")
 
         await app._dispatch_to_handler(session=mock_session)
@@ -192,14 +194,14 @@ class TestServerApp:
     ) -> None:
         mock_router.route_request.return_value = None
         req_id = 99
-        mock_connection._driver.create_request.return_value = (req_id, mock_future)
+        mock_connection._controller._pending_manager.create_request.return_value = (req_id, mock_future)
 
         await app._dispatch_to_handler(session=mock_session)
 
-        mock_connection._driver.create_request.assert_called_once()
-        mock_connection._driver.send_user_event.assert_called_once()
+        mock_connection._controller._pending_manager.create_request.assert_called_once()
+        mock_connection._controller.send_user_event.assert_called_once()
 
-        call_args = mock_connection._driver.send_user_event.call_args
+        call_args = mock_connection._controller.send_user_event.call_args
         assert call_args.kwargs["handle"] == 42
         event = call_args.kwargs["event"]
 
@@ -234,7 +236,7 @@ class TestServerApp:
         mock_handler = mocker.AsyncMock()
         mock_router.route_request.return_value = (mock_handler, {"id": "123"})
         req_id = 55
-        mock_connection._driver.create_request.return_value = (req_id, mock_future)
+        mock_connection._controller._pending_manager.create_request.return_value = (req_id, mock_future)
 
         mock_tg = mocker.Mock()
         mock_task = mocker.Mock(spec=asyncio.Task)
@@ -243,10 +245,10 @@ class TestServerApp:
 
         await app._dispatch_to_handler(session=mock_session)
 
-        mock_connection._driver.create_request.assert_called_once()
-        mock_connection._driver.send_user_event.assert_called_once()
+        mock_connection._controller._pending_manager.create_request.assert_called_once()
+        mock_connection._controller.send_user_event.assert_called_once()
 
-        call_args = mock_connection._driver.send_user_event.call_args
+        call_args = mock_connection._controller.send_user_event.call_args
         assert call_args.kwargs["handle"] == 42
         event = call_args.kwargs["event"]
 
@@ -387,7 +389,7 @@ class TestServerApp:
     ) -> None:
         mocker.patch.object(target=app, attribute="_get_session_from_event", side_effect=ValueError("Unexpected"))
         req_id = 77
-        mock_connection._driver.create_request.return_value = (req_id, mock_future)
+        mock_connection._controller._pending_manager.create_request.return_value = (req_id, mock_future)
 
         event = Event(
             type=EventType.SESSION_REQUEST,
@@ -396,8 +398,8 @@ class TestServerApp:
 
         await app._handle_session_request(event=event)
 
-        mock_connection._driver.send_user_event.assert_called_once()
-        call_args = mock_connection._driver.send_user_event.call_args
+        mock_connection._controller.send_user_event.assert_called_once()
+        call_args = mock_connection._controller.send_user_event.call_args
 
         assert call_args.kwargs["handle"] == 42
         event_sent = call_args.kwargs["event"]
@@ -416,14 +418,14 @@ class TestServerApp:
 
         await app._handle_session_request(event=event_no_id)
 
-        mock_connection._driver.send_user_event.assert_not_called()
+        mock_connection._controller.send_user_event.assert_not_called()
         mock_connection.reset_mock()
 
         event_no_conn = Event(type=EventType.SESSION_REQUEST, data={"session_id": 100})
 
         await app._handle_session_request(event=event_no_conn)
 
-        mock_connection._driver.send_user_event.assert_not_called()
+        mock_connection._controller.send_user_event.assert_not_called()
 
         mock_session.is_closed = True
         event_closed = Event(
@@ -440,7 +442,7 @@ class TestServerApp:
         self, app: ServerApp, mocker: MockerFixture, mock_connection: Any
     ) -> None:
         mocker.patch.object(target=app, attribute="_get_session_from_event", side_effect=ValueError("Unexpected"))
-        mock_connection._driver.create_request.side_effect = ValueError("Cleanup error")
+        mock_connection._controller._pending_manager.create_request.side_effect = ValueError("Cleanup error")
         mock_logger_error = mocker.patch(target="pywebtransport.server.app._logger.error")
 
         event = Event(type=EventType.SESSION_REQUEST, data={"connection": mock_connection, "session_id": 100})
@@ -466,7 +468,7 @@ class TestServerApp:
         mock_session.close.side_effect = ValueError("Session close error")
         mock_logger_error = mocker.patch(target="pywebtransport.server.app._logger.error")
         req_id = 88
-        mock_connection._driver.create_request.return_value = (req_id, mock_future)
+        mock_connection._controller._pending_manager.create_request.return_value = (req_id, mock_future)
 
         event = Event(type=EventType.SESSION_REQUEST, data={})
 
@@ -507,16 +509,16 @@ class TestServerApp:
         mocker.patch.object(target=app, attribute="_get_session_from_event", return_value=mock_session)
         mock_middleware_manager.process_request.side_effect = MiddlewareRejected(status_code=403)
         req_id = 66
-        mock_connection._driver.create_request.return_value = (req_id, mock_future)
+        mock_connection._controller._pending_manager.create_request.return_value = (req_id, mock_future)
 
         event = Event(type=EventType.SESSION_REQUEST, data={"connection": mock_connection})
 
         await app._handle_session_request(event=event)
 
-        mock_connection._driver.create_request.assert_called_once()
-        mock_connection._driver.send_user_event.assert_called_once()
+        mock_connection._controller._pending_manager.create_request.assert_called_once()
+        mock_connection._controller.send_user_event.assert_called_once()
 
-        call_args = mock_connection._driver.send_user_event.call_args
+        call_args = mock_connection._controller.send_user_event.call_args
         assert call_args.kwargs["handle"] == 42
         event_sent = call_args.kwargs["event"]
 
@@ -539,7 +541,7 @@ class TestServerApp:
         mocker.patch.object(target=app, attribute="_get_session_from_event", return_value=mock_session)
         mock_middleware_manager.process_request.side_effect = MiddlewareRejected(status_code=403)
         req_id = 66
-        mock_connection._driver.create_request.return_value = (req_id, mock_future)
+        mock_connection._controller._pending_manager.create_request.return_value = (req_id, mock_future)
 
         event = Event(type=EventType.SESSION_REQUEST, data={"connection": mock_connection})
 
@@ -548,7 +550,7 @@ class TestServerApp:
         mock_session.close.assert_awaited_once()
 
         mock_session.close.reset_mock()
-        mock_connection._driver.create_request.reset_mock()
+        mock_connection._controller._pending_manager.create_request.reset_mock()
 
         mock_session.is_closed = True
 

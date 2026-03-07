@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from asyncio import DatagramTransport
 from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Self, cast
+from typing import Any, Self
 
-from pywebtransport._driver.driver import EndpointDriver, create_server
+from pywebtransport._controller.controller import EndpointController
 from pywebtransport.config import ServerConfig
 from pywebtransport.connection import WebTransportConnection
 from pywebtransport.events import Event, EventEmitter
@@ -18,7 +17,7 @@ from pywebtransport.exceptions import ServerError
 from pywebtransport.manager.connection import ConnectionManager
 from pywebtransport.manager.session import SessionManager
 from pywebtransport.types import Address, ConnectionState, EventType, SessionState
-from pywebtransport.utils import get_logger, get_timestamp, resolve_host
+from pywebtransport.utils import get_logger, get_timestamp
 
 __all__: list[str] = ["ServerDiagnostics", "ServerStats", "WebTransportServer"]
 
@@ -123,9 +122,8 @@ class WebTransportServer(EventEmitter):
         self._connection_manager = ConnectionManager(max_connections=effective_config.max_connections)
         self._session_manager = SessionManager(max_sessions=effective_config.max_sessions)
 
-        self._driver: EndpointDriver | None = None
+        self._controller: EndpointController | None = None
         self._stats = ServerStats()
-        self._transport: DatagramTransport | None = None
 
         _logger.info("WebTransport server initialized.")
 
@@ -157,14 +155,11 @@ class WebTransportServer(EventEmitter):
         return self._serving
 
     @property
-    def local_address(self) -> Address | None:
-        """Return the local address the server is bound to."""
-        if self._transport is not None:
-            try:
-                return cast(Address | None, self._transport.get_extra_info("sockname"))
-            except (OSError, AttributeError):
-                return None
-        return None
+    def local_addresses(self) -> list[Address]:
+        """Return the local addresses the server is bound to."""
+        if self._controller is not None:
+            return self._controller.get_local_addresses()
+        return []
 
     @property
     def session_manager(self) -> SessionManager:
@@ -228,31 +223,24 @@ class WebTransportServer(EventEmitter):
         _logger.info("Starting WebTransport server on %s:%s", bind_host, bind_port)
 
         try:
-            resolved_ips = await resolve_host(host=bind_host, port=bind_port)
-            last_error: Exception | None = None
+            listen_config = self._config
+            if host is not None or port is not None:
+                listen_config = self._config.update(bind_host=bind_host, bind_port=bind_port)
 
-            transport: DatagramTransport | None = None
-            driver: EndpointDriver | None = None
+            controller = EndpointController(config=listen_config, is_client=False, loop=asyncio.get_running_loop())
 
-            for ip in resolved_ips:
-                try:
-                    transport, driver = await create_server(host=ip, port=bind_port, config=self._config)
-                    break
-                except FileNotFoundError:
-                    raise
-                except Exception as e:
-                    last_error = e
+            controller.set_spawn_callback(callback=self._spawn_connection_callback)
 
-            if transport is None or driver is None:
-                raise ServerError(message=f"Could not bind to any resolved IP for {bind_host}") from last_error
-
-            driver.set_spawn_callback(callback=self._spawn_connection_callback)
-
-            self._transport = transport
-            self._driver = driver
+            self._controller = controller
             self._serving = True
             self._stats.start_time = get_timestamp()
-            _logger.info("WebTransport server listening on %s", self.local_address)
+
+            addresses = self.local_addresses
+            if addresses:
+                addr_strs = [f"{ip}:{p}" for ip, p in addresses]
+                _logger.info("WebTransport server listening on %s", ", ".join(addr_strs))
+            else:
+                _logger.info("WebTransport server listening but no addresses acquired.")
 
         except FileNotFoundError as e:
             _logger.critical("Certificate/Key file error: %s", e)
@@ -263,7 +251,7 @@ class WebTransportServer(EventEmitter):
 
     async def serve_forever(self) -> None:
         """Run the server indefinitely until interrupted."""
-        if not self._serving or self._transport is None:
+        if not self._serving or self._controller is None:
             raise ServerError(message="Server is not listening")
 
         _logger.info("Server is running. Press Ctrl+C to stop.")
@@ -296,8 +284,8 @@ class WebTransportServer(EventEmitter):
         except* Exception as eg:
             _logger.error("Errors occurred during manager shutdown: %s", eg.exceptions, exc_info=eg)
 
-        if self._transport is not None and not self._transport.is_closing():
-            self._transport.close()
+        if self._controller is not None:
+            self._controller.close()
 
         self._shutdown_event.set()
 
@@ -308,14 +296,12 @@ class WebTransportServer(EventEmitter):
         """Instantiate a new WebTransportConnection from the spawned endpoint handle."""
         _logger.debug("Creating WebTransportConnection for handle %d.", handle)
 
-        if self._transport is None or self._driver is None:
+        if self._controller is None:
             _logger.error("Spawn callback triggered but server is not fully initialized.")
             return
 
         try:
-            connection = WebTransportConnection.accept(
-                driver=self._driver, handle=handle, transport=self._transport, config=self._config
-            )
+            connection = WebTransportConnection.accept(controller=self._controller, handle=handle, config=self._config)
             task = asyncio.create_task(coro=self._initialize_and_register_connection(connection=connection))
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
@@ -361,13 +347,18 @@ class WebTransportServer(EventEmitter):
     def __str__(self) -> str:
         """Return the string representation."""
         status = "serving" if self.is_serving else "stopped"
-        address_info = self.local_address
-        address_str = f"{address_info[0]}:{address_info[1]}" if address_info is not None else "unknown"
+
+        addresses = self.local_addresses
+        if addresses:
+            address_str = "[" + ", ".join(f"{ip}:{port}" for ip, port in addresses) + "]"
+        else:
+            address_str = "unknown"
+
         conn_count = len(self._connection_manager)
         sess_count = len(self._session_manager)
         return (
             f"WebTransportServer(status={status}, "
-            f"address={address_str}, "
+            f"addresses={address_str}, "
             f"connections={conn_count}, "
             f"sessions={sess_count})"
         )

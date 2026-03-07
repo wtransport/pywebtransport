@@ -17,21 +17,6 @@ use crate::protocol::engine::WebTransportEngine;
 use crate::protocol::events::{Effect, ProtocolEvent};
 use crate::transport::connection::TransportConnection;
 
-// Terminal actions produced by the multiplexer for the external I/O runtime.
-#[derive(Debug)]
-pub(crate) enum EndpointEvent {
-    ConnectionEffects {
-        handle: ConnectionHandle,
-        effects: Vec<Effect>,
-    },
-    ConnectionSpawned {
-        handle: ConnectionHandle,
-        effects: Vec<Effect>,
-    },
-    Consumed,
-    Transmit(Transmit),
-}
-
 // L4 UDP router and WebTransport connection multiplexer.
 pub(crate) struct TransportEndpoint {
     endpoint: QuinnEndpoint,
@@ -95,7 +80,7 @@ impl TransportEndpoint {
         remote: SocketAddr,
         server_name: &str,
         now_instant: Instant,
-    ) -> Result<ConnectionHandle, WebTransportError> {
+    ) -> Result<(ConnectionHandle, SocketAddr), WebTransportError> {
         let config = self.client_config.as_ref().ok_or_else(|| {
             WebTransportError::Unknown(
                 Some(constants::ERR_LIB_INTERNAL_ERROR),
@@ -113,6 +98,7 @@ impl TransportEndpoint {
                 )
             })?;
 
+        let remote_address = quic_conn.remote_address();
         let t_cfg = &self.transport_config;
         let engine = WebTransportEngine::new(
             handle.0.to_string(),
@@ -128,6 +114,7 @@ impl TransportEndpoint {
             t_cfg.flow_control_window_auto_scale,
             t_cfg.max_capsule_size,
         )?;
+
         let gc_interval = if t_cfg.resource_cleanup_interval.is_zero() {
             None
         } else {
@@ -147,7 +134,7 @@ impl TransportEndpoint {
 
         self.connections.insert(handle, transport_conn);
 
-        Ok(handle)
+        Ok((handle, remote_address))
     }
 
     // Processes an incoming UDP datagram and routes it to the appropriate state machine.
@@ -158,7 +145,7 @@ impl TransportEndpoint {
         local: Option<SocketAddr>,
         now: f64,
         now_instant: Instant,
-    ) -> EndpointEvent {
+    ) -> TransportEvent {
         match self.endpoint.handle(
             now_instant,
             remote,
@@ -183,20 +170,20 @@ impl TransportEndpoint {
 
                     Self::collect_effects(conn)
                 } else {
-                    return EndpointEvent::Consumed;
+                    return TransportEvent::Consumed;
                 };
 
                 if is_drained {
                     self.connections.remove(&handle);
                 }
 
-                EndpointEvent::ConnectionEffects { handle, effects }
+                TransportEvent::ConnectionEffects { handle, effects }
             }
             Some(DatagramEvent::NewConnection(incoming)) => {
                 let Some(_) = &self.server_config else {
                     let transmit = self.endpoint.refuse(incoming, &mut self.transmit_workspace);
 
-                    return EndpointEvent::Transmit(transmit);
+                    return TransportEvent::Transmit(transmit);
                 };
 
                 match self.endpoint.accept(
@@ -206,6 +193,7 @@ impl TransportEndpoint {
                     None,
                 ) {
                     Ok((handle, quic_conn)) => {
+                        let remote_address = quic_conn.remote_address();
                         let t_cfg = &self.transport_config;
                         let Ok(engine) = WebTransportEngine::new(
                             handle.0.to_string(),
@@ -221,7 +209,7 @@ impl TransportEndpoint {
                             t_cfg.flow_control_window_auto_scale,
                             t_cfg.max_capsule_size,
                         ) else {
-                            return EndpointEvent::Consumed;
+                            return TransportEvent::Consumed;
                         };
 
                         let gc_interval = if t_cfg.resource_cleanup_interval.is_zero() {
@@ -250,13 +238,17 @@ impl TransportEndpoint {
 
                         self.connections.insert(handle, transport_conn);
 
-                        EndpointEvent::ConnectionSpawned { handle, effects }
+                        TransportEvent::ConnectionSpawned {
+                            handle,
+                            effects,
+                            remote_address,
+                        }
                     }
-                    Err(_) => EndpointEvent::Consumed,
+                    Err(_) => TransportEvent::Consumed,
                 }
             }
-            Some(DatagramEvent::Response(transmit)) => EndpointEvent::Transmit(transmit),
-            None => EndpointEvent::Consumed,
+            Some(DatagramEvent::Response(transmit)) => TransportEvent::Transmit(transmit),
+            None => TransportEvent::Consumed,
         }
     }
 
@@ -308,7 +300,7 @@ impl TransportEndpoint {
         event: ProtocolEvent,
         now: f64,
         now_instant: Instant,
-    ) -> Option<EndpointEvent> {
+    ) -> Option<TransportEvent> {
         let mut is_drained = false;
 
         let effects = if let Some(conn) = self.connections.get_mut(&handle) {
@@ -334,7 +326,7 @@ impl TransportEndpoint {
         if effects.is_empty() {
             None
         } else {
-            Some(EndpointEvent::ConnectionEffects { handle, effects })
+            Some(TransportEvent::ConnectionEffects { handle, effects })
         }
     }
 
@@ -356,13 +348,6 @@ impl TransportEndpoint {
         }
 
         None
-    }
-
-    // Retrieves the current validated remote socket address for a specific connection.
-    pub(crate) fn remote_address(&self, handle: ConnectionHandle) -> Option<SocketAddr> {
-        self.connections
-            .get(&handle)
-            .map(TransportConnection::remote_address)
     }
 
     // Computes the earliest wakeup instant required by any entity within the endpoint.
@@ -401,6 +386,22 @@ impl TransportEndpoint {
 
         effects
     }
+}
+
+// Terminal actions produced by the multiplexer for the external I/O runtime.
+#[derive(Debug)]
+pub(crate) enum TransportEvent {
+    ConnectionEffects {
+        handle: ConnectionHandle,
+        effects: Vec<Effect>,
+    },
+    ConnectionSpawned {
+        handle: ConnectionHandle,
+        effects: Vec<Effect>,
+        remote_address: SocketAddr,
+    },
+    Consumed,
+    Transmit(Transmit),
 }
 
 #[cfg(test)]

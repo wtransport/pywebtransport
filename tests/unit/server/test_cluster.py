@@ -47,8 +47,8 @@ class TestServerCluster:
             if "config" in kwargs:
                 instance.config = kwargs["config"]
                 if hasattr(kwargs["config"], "bind_port"):
-                    local_address = ("127.0.0.1", kwargs["config"].bind_port)
-                    type(instance).local_address = mocker.PropertyMock(return_value=local_address)
+                    local_addresses = [("127.0.0.1", kwargs["config"].bind_port)]
+                    type(instance).local_addresses = mocker.PropertyMock(return_value=local_addresses)
 
             return instance
 
@@ -166,6 +166,37 @@ class TestServerCluster:
         assert result is None
         assert len(cluster._servers) == 0
         assert len(cluster._configs) == 3
+
+    @pytest.mark.asyncio
+    async def test_add_server_with_no_addresses(
+        self, cluster: ServerCluster, mocker: MockerFixture, mock_webtransport_server_class: Any, tmp_path: Path
+    ) -> None:
+        def new_server_instance_no_address(*args: Any, **kwargs: Any) -> Any:
+            instance = mocker.create_autospec(spec=WebTransportServer, instance=True)
+            instance.__aenter__ = mocker.AsyncMock(return_value=instance)
+            instance.listen = mocker.AsyncMock()
+            instance.close = mocker.AsyncMock()
+
+            if "config" in kwargs:
+                instance.config = kwargs["config"]
+                type(instance).local_addresses = mocker.PropertyMock(return_value=[])
+
+            return instance
+
+        mock_webtransport_server_class.side_effect = new_server_instance_no_address
+        spy_logger = mocker.patch(target="pywebtransport.server.cluster._logger.info")
+
+        c3 = tmp_path / "c3.pem"
+        k3 = tmp_path / "k3.pem"
+        c3.touch()
+        k3.touch()
+        new_config = ServerConfig(bind_port=8003, certfile=str(c3), keyfile=str(k3))
+
+        result = await cluster.add_server(config=new_config)
+
+        assert result is not None
+        assert len(cluster._servers) == 3
+        spy_logger.assert_any_call("Added server to cluster: %s", "unknown")
 
     @pytest.mark.asyncio
     async def test_async_context_manager(self, server_configs: list[ServerConfig], mocker: MockerFixture) -> None:

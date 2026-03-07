@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import weakref
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Self
@@ -18,8 +19,8 @@ from pywebtransport._protocol.events import (
 )
 from pywebtransport.constants import ErrorCodes
 from pywebtransport.events import Event, EventEmitter
-from pywebtransport.exceptions import ConnectionError, SessionError, StreamError, TimeoutError
-from pywebtransport.stream import WebTransportSendStream, WebTransportStream
+from pywebtransport.exceptions import ConnectionError, SessionClosedError, SessionError, StreamError, TimeoutError
+from pywebtransport.stream import WebTransportReceiveStream, WebTransportSendStream, WebTransportStream
 from pywebtransport.types import Address, Buffer, EventType, Headers, SessionId, SessionState, StreamId
 from pywebtransport.utils import get_logger
 
@@ -72,7 +73,17 @@ class SessionDiagnostics:
 class WebTransportSession:
     """Manage the high-level WebTransport session."""
 
-    __slots__ = ("_connection", "_session_id", "_path", "_headers", "_cached_state", "events", "__weakref__")
+    __slots__ = (
+        "_connection",
+        "_session_id",
+        "_path",
+        "_headers",
+        "_cached_state",
+        "_incoming_bidi_streams",
+        "_incoming_uni_streams",
+        "events",
+        "__weakref__",
+    )
 
     def __init__(
         self, *, connection: WebTransportConnection, session_id: SessionId, path: str, headers: Headers
@@ -84,13 +95,17 @@ class WebTransportSession:
         self._headers = headers
 
         self._cached_state = SessionState.CONNECTING
+        self._incoming_bidi_streams: asyncio.Queue[WebTransportStream | None] = asyncio.Queue()
+        self._incoming_uni_streams: asyncio.Queue[WebTransportReceiveStream | None] = asyncio.Queue()
+
         self.events = EventEmitter(
-            max_queue_size=connection.config.max_event_queue_size,
             max_listeners=connection.config.max_event_listeners,
             max_history=connection.config.max_event_history_size,
+            max_queue_size=connection.config.max_event_queue_size,
         )
 
         self.events.on(event_type=EventType.SESSION_READY, handler=self._on_session_ready)
+        self.events.on(event_type=EventType.STREAM_OPENED, handler=self._enqueue_stream)
         self.events.on(event_type=EventType.SESSION_CLOSED, handler=self._on_session_closed)
 
         _logger.debug("WebTransportSession handle created for session %s", self._session_id)
@@ -138,6 +153,20 @@ class WebTransportSession:
         """Return the current state of the session."""
         return self._cached_state
 
+    async def accept_bidirectional_stream(self) -> WebTransportStream:
+        """Accept the next incoming bidirectional stream."""
+        stream = await self._incoming_bidi_streams.get()
+        if stream is None:
+            raise SessionClosedError()
+        return stream
+
+    async def accept_unidirectional_stream(self) -> WebTransportReceiveStream:
+        """Accept the next incoming unidirectional stream."""
+        stream = await self._incoming_uni_streams.get()
+        if stream is None:
+            raise SessionClosedError()
+        return stream
+
     async def close(self, *, error_code: int = ErrorCodes.NO_ERROR, reason: str | None = None) -> None:
         """Terminate the WebTransport session."""
         if self._cached_state == SessionState.CLOSED:
@@ -148,11 +177,11 @@ class WebTransportSession:
         if connection is None:
             return
 
-        request_id, future = connection._driver.create_request()
+        request_id, future = connection._controller._pending_manager.create_request()
         event = UserCloseSession(
             request_id=request_id, session_id=self.session_id, error_code=error_code, reason=reason
         )
-        connection._driver.send_user_event(handle=connection._handle, event=event)
+        connection._controller.send_user_event(handle=connection._handle, event=event)
 
         try:
             await future
@@ -179,11 +208,11 @@ class WebTransportSession:
         if connection is None:
             raise ConnectionError("Connection is gone.")
 
-        request_id, future = connection._driver.create_request()
+        request_id, future = connection._controller._pending_manager.create_request()
         event = UserGetSessionDiagnostics(request_id=request_id, session_id=self.session_id)
 
         try:
-            connection._driver.send_user_event(handle=connection._handle, event=event)
+            connection._controller.send_user_event(handle=connection._handle, event=event)
             diag_data: dict[str, Any] = await future
             return SessionDiagnostics(**diag_data)
         except ConnectionError as e:
@@ -195,9 +224,9 @@ class WebTransportSession:
         if connection is None:
             raise ConnectionError("Connection is gone.")
 
-        request_id, future = connection._driver.create_request()
+        request_id, future = connection._controller._pending_manager.create_request()
         event = UserGrantDataCredit(request_id=request_id, session_id=self.session_id, max_data=max_data)
-        connection._driver.send_user_event(handle=connection._handle, event=event)
+        connection._controller.send_user_event(handle=connection._handle, event=event)
         await future
 
     async def grant_streams_credit(self, *, is_unidirectional: bool, max_streams: int) -> None:
@@ -206,25 +235,41 @@ class WebTransportSession:
         if connection is None:
             raise ConnectionError("Connection is gone.")
 
-        request_id, future = connection._driver.create_request()
+        request_id, future = connection._controller._pending_manager.create_request()
         event = UserGrantStreamsCredit(
             request_id=request_id,
             session_id=self.session_id,
             is_unidirectional=is_unidirectional,
             max_streams=max_streams,
         )
-        connection._driver.send_user_event(handle=connection._handle, event=event)
+        connection._controller.send_user_event(handle=connection._handle, event=event)
         await future
 
-    async def send_datagram(self, *, data: Buffer | list[Buffer]) -> None:
+    async def incoming_bidirectional_streams(self) -> AsyncGenerator[WebTransportStream, None]:
+        """Yield incoming bidirectional streams until the session is closed."""
+        try:
+            while True:
+                yield await self.accept_bidirectional_stream()
+        except SessionClosedError:
+            pass
+
+    async def incoming_unidirectional_streams(self) -> AsyncGenerator[WebTransportReceiveStream, None]:
+        """Yield incoming unidirectional streams until the session is closed."""
+        try:
+            while True:
+                yield await self.accept_unidirectional_stream()
+        except SessionClosedError:
+            pass
+
+    async def send_datagram(self, *, data: Buffer) -> None:
         """Transmit an unreliable datagram."""
         connection = self._connection()
         if connection is None:
             raise ConnectionError("Connection is gone.")
 
-        request_id, future = connection._driver.create_request()
+        request_id, future = connection._controller._pending_manager.create_request()
         event = UserSendDatagram(request_id=request_id, session_id=self.session_id, data=data)
-        connection._driver.send_user_event(handle=connection._handle, event=event)
+        connection._controller.send_user_event(handle=connection._handle, event=event)
         await future
 
     async def _create_stream_internal(self, *, is_unidirectional: bool) -> WebTransportStream | WebTransportSendStream:
@@ -233,9 +278,9 @@ class WebTransportSession:
         if connection is None:
             raise ConnectionError("Connection is gone.")
 
-        request_id, future = connection._driver.create_request()
+        request_id, future = connection._controller._pending_manager.create_request()
         event = UserCreateStream(request_id=request_id, session_id=self.session_id, is_unidirectional=is_unidirectional)
-        connection._driver.send_user_event(handle=connection._handle, event=event)
+        connection._controller.send_user_event(handle=connection._handle, event=event)
 
         try:
             timeout = connection.config.stream_creation_timeout
@@ -257,9 +302,24 @@ class WebTransportSession:
 
         return stream_handle
 
+    def _enqueue_stream(self, event: Event) -> None:
+        """Route incoming streams to the appropriate internal queues."""
+        if not isinstance(event.data, dict):
+            return
+        stream = event.data.get("stream")
+        if stream is None:
+            return
+
+        if isinstance(stream, WebTransportStream):
+            self._incoming_bidi_streams.put_nowait(stream)
+        elif isinstance(stream, WebTransportReceiveStream):
+            self._incoming_uni_streams.put_nowait(stream)
+
     def _on_session_closed(self, event: Event) -> None:
         """Handle the session closed event."""
         self._cached_state = SessionState.CLOSED
+        self._incoming_bidi_streams.put_nowait(None)
+        self._incoming_uni_streams.put_nowait(None)
 
     def _on_session_ready(self, event: Event) -> None:
         """Handle the session ready event."""
@@ -267,4 +327,4 @@ class WebTransportSession:
 
     def __repr__(self) -> str:
         """Return the string representation."""
-        return f"<WebTransportSession id={self.session_id} state={self._cached_state}>"
+        return f"<WebTransportSession id={self.session_id} state={self.state}>"

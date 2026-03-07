@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any, Self, final
 
 from pywebtransport.config import ClientConfig, ServerConfig
-from pywebtransport.types import Buffer
 
 ABI_VERSION: int
 
@@ -110,46 +109,48 @@ ERR_WT_SESSION_GONE: int
 MAX_DATAGRAM_SIZE: int
 MAX_PROTOCOL_STREAMS_LIMIT: int
 
+@final
+class Endpoint:
+    """FFI proxy for the threaded Tokio reactor."""
+
+    def __new__(cls, is_client: bool, config: ClientConfig | ServerConfig, waker: Waker) -> Self:
+        """Initialize a new threaded Tokio reactor for QUIC endpoints."""
+        ...
+
+    def close(self) -> None:
+        """Send a shutdown signal to the threaded Tokio reactor."""
+        ...
+
+    def connect(self, request_id: int, remote: tuple[str, int] | tuple[str, int, int, int], server_name: str) -> None:
+        """Dispatch an asynchronous outbound QUIC connection command to the reactor."""
+        ...
+
+    def get_local_addresses(self) -> list[tuple[str, int]]:
+        """Retrieve the synchronized OS-allocated local socket addresses."""
+        ...
+
+    def handle_user_event(self, handle: int, event: tuple[int, Any]) -> None:
+        """Dispatch a user-level application event to the specific connection handle."""
+        ...
+
+    def poll_runtime_events(self) -> list[tuple[int, Any]]:
+        """Harvest all pending IPC runtime events from the threaded Tokio reactor."""
+        ...
+
+@final
+class Waker:
+    """Cross-language async waker mechanism using OS-level handles."""
+
+    def __new__(cls, fd: int) -> Self:
+        """Initialize the waker with a platform-specific non-blocking OS handle."""
+        ...
+
+    def clear(self) -> None:
+        """Acknowledge the wake-up and arm the waker for subsequent events."""
+        ...
+
 def generate_self_signed_cert(
     *, hostname: str, output_dir: str = ".", validity_days: int = 365
 ) -> tuple[str, str, str]:
     """Generate a self-signed certificate and key for testing."""
     ...
-
-@final
-class Endpoint:
-    """WebTransport endpoint scheduling state machine."""
-
-    def __new__(cls, is_client: bool, config: ClientConfig | ServerConfig, now: float) -> Self:
-        """Initialize a new QUIC endpoint with either server or client behaviors."""
-        ...
-
-    def connect(self, remote: tuple[str, int], server_name: str, now: float) -> int:
-        """Initiate an outbound QUIC connection and initialize the WebTransport engine."""
-        ...
-
-    def get_remote_address(self, handle: int) -> tuple[str, int] | None:
-        """Retrieve the current validated remote socket address for a connection."""
-        ...
-
-    def handle_datagram(
-        self, data: Buffer, remote: tuple[str, int], local: tuple[str, int] | None, now: float
-    ) -> tuple[int, Any]:
-        """Process an incoming UDP datagram and route it to the appropriate state machine."""
-        ...
-
-    def handle_timeout(self, now: float) -> list[tuple[int, Any]]:
-        """Evaluate timeouts across the entire multiplexer and trigger necessary logic."""
-        ...
-
-    def handle_user_event(self, handle: int, event: tuple[int, Any], now: float) -> tuple[int, Any] | None:
-        """Route a user-level application event to the specified connection handle."""
-        ...
-
-    def poll_transmit(self, now: float) -> tuple[int, Any] | None:
-        """Poll for any pending endpoint-level or connection-level transmission datagrams."""
-        ...
-
-    def timeout(self) -> float | None:
-        """Compute the earliest wakeup instant required by any entity within the endpoint."""
-        ...

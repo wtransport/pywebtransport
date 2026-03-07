@@ -115,9 +115,9 @@ class _BaseStream:
         if connection is None:
             raise ConnectionError("Connection is gone.")
 
-        request_id, future = connection._driver.create_request()
+        request_id, future = connection._controller._pending_manager.create_request()
         event = UserGetStreamDiagnostics(request_id=request_id, stream_id=self.stream_id)
-        connection._driver.send_user_event(handle=connection._handle, event=event)
+        connection._controller.send_user_event(handle=connection._handle, event=event)
 
         try:
             diag_data = await future
@@ -132,7 +132,7 @@ class _BaseStream:
 
     def __repr__(self) -> str:
         """Return the string representation."""
-        return f"<{self.__class__.__name__} id={self.stream_id} state={self._cached_state}>"
+        return f"<{self.__class__.__name__} id={self.stream_id} state={self.state}>"
 
 
 class WebTransportReceiveStream(_BaseStream):
@@ -183,11 +183,11 @@ class WebTransportReceiveStream(_BaseStream):
         if connection is None:
             raise ConnectionError("Connection is gone.")
 
-        request_id, future = connection._driver.create_request()
+        request_id, future = connection._controller._pending_manager.create_request()
 
         limit = max_bytes if max_bytes >= 0 else None
         event = UserStreamRead(request_id=request_id, stream_id=self.stream_id, max_bytes=limit)
-        connection._driver.send_user_event(handle=connection._handle, event=event)
+        connection._controller.send_user_event(handle=connection._handle, event=event)
 
         try:
             data = await future
@@ -271,15 +271,22 @@ class WebTransportReceiveStream(_BaseStream):
 
     async def stop_receiving(self, *, error_code: int = ErrorCodes.NO_ERROR) -> None:
         """Signal the peer to stop sending data."""
+        if self._read_eof:
+            return
+
         connection = self.session._connection()
         if connection is None:
             return
 
-        request_id, future = connection._driver.create_request()
+        request_id, future = connection._controller._pending_manager.create_request()
         event = UserStopSending(request_id=request_id, stream_id=self.stream_id, error_code=error_code)
-        connection._driver.send_user_event(handle=connection._handle, event=event)
-        await future
-        self._cached_state = StreamState.RESET_RECEIVED
+        connection._controller.send_user_event(handle=connection._handle, event=event)
+
+        try:
+            await future
+        except StreamError as e:
+            if e.error_code != ErrorCodes.STREAM_STATE_ERROR:
+                raise
 
     def __aiter__(self) -> AsyncIterator[bytes]:
         """Iterate over the stream chunks."""
@@ -333,7 +340,6 @@ class WebTransportSendStream(_BaseStream):
 
         try:
             await self.write(data=b"", end_stream=True)
-            self._cached_state = StreamState.HALF_CLOSED_LOCAL
         except StreamError as e:
             _logger.debug("Ignoring expected StreamError on stream %s close: %s", self.stream_id, e)
         except Exception as e:
@@ -346,11 +352,15 @@ class WebTransportSendStream(_BaseStream):
         if connection is None:
             raise ConnectionError("Connection is gone.")
 
-        request_id, future = connection._driver.create_request()
+        request_id, future = connection._controller._pending_manager.create_request()
         event = UserResetStream(request_id=request_id, stream_id=self.stream_id, error_code=error_code)
-        connection._driver.send_user_event(handle=connection._handle, event=event)
-        await future
-        self._cached_state = StreamState.RESET_SENT
+        connection._controller.send_user_event(handle=connection._handle, event=event)
+
+        try:
+            await future
+        except StreamError as e:
+            if e.error_code != ErrorCodes.STREAM_STATE_ERROR:
+                raise
 
     async def write(self, *, data: Buffer, end_stream: bool = False) -> None:
         """Write data to the stream."""
@@ -367,11 +377,11 @@ class WebTransportSendStream(_BaseStream):
         if connection is None:
             raise ConnectionError("Connection is gone.")
 
-        request_id, future = connection._driver.create_request()
+        request_id, future = connection._controller._pending_manager.create_request()
         event = UserSendStreamData(
             request_id=request_id, stream_id=self.stream_id, data=buffer_data, end_stream=end_stream
         )
-        connection._driver.send_user_event(handle=connection._handle, event=event)
+        connection._controller.send_user_event(handle=connection._handle, event=event)
 
         try:
             await future

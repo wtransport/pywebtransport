@@ -1,11 +1,11 @@
-"""Unit tests for the pywebtransport._driver.mapper module."""
+"""Unit tests for the pywebtransport._controller.mapper module."""
 
 from typing import Any
 
 import pytest
 
-from pywebtransport._driver import abi
-from pywebtransport._driver.mapper import pack_user_event
+from pywebtransport._controller import abi
+from pywebtransport._controller.mapper import pack_user_event
 from pywebtransport._protocol import events
 
 

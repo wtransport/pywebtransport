@@ -1,6 +1,6 @@
 //! FFI conversion logic between Python objects and Rust protocol types.
 
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -12,188 +12,6 @@ use crate::ffi::abi;
 use crate::ffi::error::create_py_exception;
 use crate::protocol::events::{Effect, ProtocolEvent, RequestResult};
 use crate::protocol::{ConnectionDiagnostics, SessionDiagnostics, StreamDiagnostics};
-
-// Bytes extraction from Python object using buffer protocol or UTF-8 encoding.
-pub(super) fn extract_bytes(obj: &Bound<'_, PyAny>) -> PyResult<Bytes> {
-    if let Ok(buffer) = obj.extract::<PyBuffer<u8>>() {
-        Ok(Bytes::from(buffer.to_vec(obj.py())?))
-    } else if let Ok(s) = obj.extract::<Bound<'_, PyString>>() {
-        Ok(Bytes::copy_from_slice(s.to_str()?.as_bytes()))
-    } else {
-        Err(PyValueError::new_err(
-            "Expected bytes, bytearray, memoryview, or str",
-        ))
-    }
-}
-
-// Extraction of bytes or list of bytes into single buffer.
-pub(super) fn extract_bytes_or_list(obj: &Bound<'_, PyAny>) -> PyResult<Bytes> {
-    if let Ok(b) = extract_bytes(obj) {
-        Ok(b)
-    } else if let Ok(list) = obj.extract::<Bound<'_, PyList>>() {
-        let mut buf = BytesMut::new();
-
-        for item in list.iter() {
-            let b = extract_bytes(&item).map_err(|e| {
-                PyValueError::new_err(format!(
-                    "Datagram list items must be bytes-like or str: {e}"
-                ))
-            })?;
-            buf.extend_from_slice(&b);
-        }
-
-        Ok(buf.freeze())
-    } else {
-        Err(PyValueError::new_err(
-            "Datagram data must be bytes-like or list[bytes-like]",
-        ))
-    }
-}
-
-// HTTP/3 header extraction from Python dictionary or list.
-pub(super) fn extract_headers(obj: &Bound<'_, PyAny>) -> PyResult<Headers> {
-    let mut headers = Vec::new();
-
-    if let Ok(dict) = obj.extract::<Bound<'_, PyDict>>() {
-        for (k, v) in dict {
-            process_header_item(&k, &v, &mut headers)?;
-        }
-    } else if let Ok(list) = obj.extract::<Bound<'_, PyList>>() {
-        for item in list {
-            let tuple = item.extract::<Bound<'_, PyTuple>>().map_err(|e| {
-                PyValueError::new_err(format!("Headers list must contain tuples: {e}"))
-            })?;
-
-            if tuple.len() != 2 {
-                return Err(PyValueError::new_err("Header tuple must have 2 elements"));
-            }
-
-            process_header_item(&tuple.get_item(0)?, &tuple.get_item(1)?, &mut headers)?;
-        }
-    } else {
-        return Err(PyValueError::new_err("Headers must be a dict or list"));
-    }
-
-    Ok(headers)
-}
-
-impl<'a, 'py> FromPyObject<'a, 'py> for ProtocolEvent {
-    type Error = PyErr;
-
-    fn extract(ob: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-        let bound = ob.as_borrowed();
-        let tuple = bound.extract::<Bound<'_, PyTuple>>().map_err(|e| {
-            PyValueError::new_err(format!("Expected FFI tagged tuple structure: {e}"))
-        })?;
-
-        let opcode = tuple.get_item(0)?.extract::<u8>()?;
-        let payload = tuple
-            .get_item(1)?
-            .extract::<Bound<'_, PyTuple>>()
-            .map_err(|e| {
-                PyValueError::new_err(format!("Expected FFI payload tuple extraction: {e}"))
-            })?;
-
-        let extract_bytes_at_index = |idx: usize| -> PyResult<Bytes> {
-            let val = payload.get_item(idx)?;
-            extract_bytes(&val).map_err(|e| {
-                PyValueError::new_err(format!("Field at index {idx} must be bytes-like: {e}"))
-            })
-        };
-
-        match opcode {
-            abi::CONNECTION_CLOSE => Ok(ProtocolEvent::ConnectionClose {
-                request_id: payload.get_item(0)?.extract()?,
-                error_code: payload.get_item(1)?.extract()?,
-                reason: payload.get_item(2)?.extract()?,
-            }),
-            abi::USER_ACCEPT_SESSION => Ok(ProtocolEvent::UserAcceptSession {
-                request_id: payload.get_item(0)?.extract()?,
-                session_id: payload.get_item(1)?.extract()?,
-            }),
-            abi::USER_CLOSE_SESSION => Ok(ProtocolEvent::UserCloseSession {
-                request_id: payload.get_item(0)?.extract()?,
-                session_id: payload.get_item(1)?.extract()?,
-                error_code: payload.get_item(2)?.extract()?,
-                reason: payload.get_item(3)?.extract()?,
-            }),
-            abi::USER_CONNECTION_GRACEFUL_CLOSE => Ok(ProtocolEvent::UserConnectionGracefulClose {
-                request_id: payload.get_item(0)?.extract()?,
-            }),
-            abi::USER_CREATE_SESSION => Ok(ProtocolEvent::UserCreateSession {
-                request_id: payload.get_item(0)?.extract()?,
-                path: payload.get_item(1)?.extract()?,
-                headers: extract_headers(&payload.get_item(2)?)?,
-            }),
-            abi::USER_CREATE_STREAM => Ok(ProtocolEvent::UserCreateStream {
-                request_id: payload.get_item(0)?.extract()?,
-                session_id: payload.get_item(1)?.extract()?,
-                is_unidirectional: payload.get_item(2)?.extract()?,
-            }),
-            abi::USER_GET_CONNECTION_DIAGNOSTICS => {
-                Ok(ProtocolEvent::UserGetConnectionDiagnostics {
-                    request_id: payload.get_item(0)?.extract()?,
-                })
-            }
-            abi::USER_GET_SESSION_DIAGNOSTICS => Ok(ProtocolEvent::UserGetSessionDiagnostics {
-                request_id: payload.get_item(0)?.extract()?,
-                session_id: payload.get_item(1)?.extract()?,
-            }),
-            abi::USER_GET_STREAM_DIAGNOSTICS => Ok(ProtocolEvent::UserGetStreamDiagnostics {
-                request_id: payload.get_item(0)?.extract()?,
-                stream_id: payload.get_item(1)?.extract()?,
-            }),
-            abi::USER_GRANT_DATA_CREDIT => Ok(ProtocolEvent::UserGrantDataCredit {
-                request_id: payload.get_item(0)?.extract()?,
-                session_id: payload.get_item(1)?.extract()?,
-                max_data: payload.get_item(2)?.extract()?,
-            }),
-            abi::USER_GRANT_STREAMS_CREDIT => Ok(ProtocolEvent::UserGrantStreamsCredit {
-                request_id: payload.get_item(0)?.extract()?,
-                session_id: payload.get_item(1)?.extract()?,
-                is_unidirectional: payload.get_item(2)?.extract()?,
-                max_streams: payload.get_item(3)?.extract()?,
-            }),
-            abi::USER_REJECT_SESSION => Ok(ProtocolEvent::UserRejectSession {
-                request_id: payload.get_item(0)?.extract()?,
-                session_id: payload.get_item(1)?.extract()?,
-                status_code: payload.get_item(2)?.extract()?,
-            }),
-            abi::USER_RESET_STREAM => Ok(ProtocolEvent::UserResetStream {
-                request_id: payload.get_item(0)?.extract()?,
-                stream_id: payload.get_item(1)?.extract()?,
-                error_code: payload.get_item(2)?.extract()?,
-            }),
-            abi::USER_SEND_DATAGRAM => Ok(ProtocolEvent::UserSendDatagram {
-                request_id: payload.get_item(0)?.extract()?,
-                session_id: payload.get_item(1)?.extract()?,
-                data: extract_bytes_or_list(&payload.get_item(2)?)?,
-            }),
-            abi::USER_SEND_STREAM_DATA => Ok(ProtocolEvent::UserSendStreamData {
-                request_id: payload.get_item(0)?.extract()?,
-                stream_id: payload.get_item(1)?.extract()?,
-                data: extract_bytes_at_index(2)?,
-                end_stream: payload.get_item(3)?.extract()?,
-            }),
-            abi::USER_STOP_SENDING => Ok(ProtocolEvent::UserStopSending {
-                request_id: payload.get_item(0)?.extract()?,
-                stream_id: payload.get_item(1)?.extract()?,
-                error_code: payload.get_item(2)?.extract()?,
-            }),
-            abi::USER_STREAM_READ => Ok(ProtocolEvent::UserStreamRead {
-                request_id: payload.get_item(0)?.extract()?,
-                stream_id: payload.get_item(1)?.extract()?,
-                max_bytes: payload
-                    .get_item(2)?
-                    .extract::<Option<u64>>()?
-                    .unwrap_or(u64::MAX),
-            }),
-            _ => Err(PyValueError::new_err(format!(
-                "Invalid ABI opcode from Python: {opcode}"
-            ))),
-        }
-    }
-}
 
 impl<'py> IntoPyObject<'py> for Effect {
     type Target = PyAny;
@@ -376,6 +194,165 @@ impl<'py> IntoPyObject<'py> for Effect {
     }
 }
 
+impl<'a, 'py> FromPyObject<'a, 'py> for ProtocolEvent {
+    type Error = PyErr;
+
+    fn extract(ob: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+        let bound = ob.as_borrowed();
+        let tuple = bound.extract::<Bound<'_, PyTuple>>().map_err(|e| {
+            PyValueError::new_err(format!("Expected FFI tagged tuple structure: {e}"))
+        })?;
+
+        let opcode = tuple.get_item(0)?.extract::<u8>()?;
+        let payload = tuple
+            .get_item(1)?
+            .extract::<Bound<'_, PyTuple>>()
+            .map_err(|e| {
+                PyValueError::new_err(format!("Expected FFI payload tuple extraction: {e}"))
+            })?;
+
+        let extract_bytes_at_index = |idx: usize| -> PyResult<Bytes> {
+            let val = payload.get_item(idx)?;
+            extract_bytes(&val).map_err(|e| {
+                PyValueError::new_err(format!("Field at index {idx} must be bytes-like: {e}"))
+            })
+        };
+
+        match opcode {
+            abi::CONNECTION_CLOSE => Ok(ProtocolEvent::ConnectionClose {
+                request_id: payload.get_item(0)?.extract()?,
+                error_code: payload.get_item(1)?.extract()?,
+                reason: payload.get_item(2)?.extract()?,
+            }),
+            abi::USER_ACCEPT_SESSION => Ok(ProtocolEvent::UserAcceptSession {
+                request_id: payload.get_item(0)?.extract()?,
+                session_id: payload.get_item(1)?.extract()?,
+            }),
+            abi::USER_CLOSE_SESSION => Ok(ProtocolEvent::UserCloseSession {
+                request_id: payload.get_item(0)?.extract()?,
+                session_id: payload.get_item(1)?.extract()?,
+                error_code: payload.get_item(2)?.extract()?,
+                reason: payload.get_item(3)?.extract()?,
+            }),
+            abi::USER_CONNECTION_GRACEFUL_CLOSE => Ok(ProtocolEvent::UserConnectionGracefulClose {
+                request_id: payload.get_item(0)?.extract()?,
+            }),
+            abi::USER_CREATE_SESSION => Ok(ProtocolEvent::UserCreateSession {
+                request_id: payload.get_item(0)?.extract()?,
+                path: payload.get_item(1)?.extract()?,
+                headers: extract_headers(&payload.get_item(2)?)?,
+            }),
+            abi::USER_CREATE_STREAM => Ok(ProtocolEvent::UserCreateStream {
+                request_id: payload.get_item(0)?.extract()?,
+                session_id: payload.get_item(1)?.extract()?,
+                is_unidirectional: payload.get_item(2)?.extract()?,
+            }),
+            abi::USER_GET_CONNECTION_DIAGNOSTICS => {
+                Ok(ProtocolEvent::UserGetConnectionDiagnostics {
+                    request_id: payload.get_item(0)?.extract()?,
+                })
+            }
+            abi::USER_GET_SESSION_DIAGNOSTICS => Ok(ProtocolEvent::UserGetSessionDiagnostics {
+                request_id: payload.get_item(0)?.extract()?,
+                session_id: payload.get_item(1)?.extract()?,
+            }),
+            abi::USER_GET_STREAM_DIAGNOSTICS => Ok(ProtocolEvent::UserGetStreamDiagnostics {
+                request_id: payload.get_item(0)?.extract()?,
+                stream_id: payload.get_item(1)?.extract()?,
+            }),
+            abi::USER_GRANT_DATA_CREDIT => Ok(ProtocolEvent::UserGrantDataCredit {
+                request_id: payload.get_item(0)?.extract()?,
+                session_id: payload.get_item(1)?.extract()?,
+                max_data: payload.get_item(2)?.extract()?,
+            }),
+            abi::USER_GRANT_STREAMS_CREDIT => Ok(ProtocolEvent::UserGrantStreamsCredit {
+                request_id: payload.get_item(0)?.extract()?,
+                session_id: payload.get_item(1)?.extract()?,
+                is_unidirectional: payload.get_item(2)?.extract()?,
+                max_streams: payload.get_item(3)?.extract()?,
+            }),
+            abi::USER_REJECT_SESSION => Ok(ProtocolEvent::UserRejectSession {
+                request_id: payload.get_item(0)?.extract()?,
+                session_id: payload.get_item(1)?.extract()?,
+                status_code: payload.get_item(2)?.extract()?,
+            }),
+            abi::USER_RESET_STREAM => Ok(ProtocolEvent::UserResetStream {
+                request_id: payload.get_item(0)?.extract()?,
+                stream_id: payload.get_item(1)?.extract()?,
+                error_code: payload.get_item(2)?.extract()?,
+            }),
+            abi::USER_SEND_DATAGRAM => Ok(ProtocolEvent::UserSendDatagram {
+                request_id: payload.get_item(0)?.extract()?,
+                session_id: payload.get_item(1)?.extract()?,
+                data: extract_bytes_at_index(2)?,
+            }),
+            abi::USER_SEND_STREAM_DATA => Ok(ProtocolEvent::UserSendStreamData {
+                request_id: payload.get_item(0)?.extract()?,
+                stream_id: payload.get_item(1)?.extract()?,
+                data: extract_bytes_at_index(2)?,
+                end_stream: payload.get_item(3)?.extract()?,
+            }),
+            abi::USER_STOP_SENDING => Ok(ProtocolEvent::UserStopSending {
+                request_id: payload.get_item(0)?.extract()?,
+                stream_id: payload.get_item(1)?.extract()?,
+                error_code: payload.get_item(2)?.extract()?,
+            }),
+            abi::USER_STREAM_READ => Ok(ProtocolEvent::UserStreamRead {
+                request_id: payload.get_item(0)?.extract()?,
+                stream_id: payload.get_item(1)?.extract()?,
+                max_bytes: payload
+                    .get_item(2)?
+                    .extract::<Option<u64>>()?
+                    .unwrap_or(u64::MAX),
+            }),
+            _ => Err(PyValueError::new_err(format!(
+                "Invalid ABI opcode from Python: {opcode}"
+            ))),
+        }
+    }
+}
+
+// Bytes extraction from Python object using buffer protocol or UTF-8 encoding.
+pub(super) fn extract_bytes(obj: &Bound<'_, PyAny>) -> PyResult<Bytes> {
+    if let Ok(buffer) = obj.extract::<PyBuffer<u8>>() {
+        Ok(Bytes::from(buffer.to_vec(obj.py())?))
+    } else if let Ok(s) = obj.extract::<Bound<'_, PyString>>() {
+        Ok(Bytes::copy_from_slice(s.to_str()?.as_bytes()))
+    } else {
+        Err(PyValueError::new_err(
+            "Expected bytes, bytearray, memoryview, or str",
+        ))
+    }
+}
+
+// HTTP/3 header extraction from Python dictionary or list.
+pub(super) fn extract_headers(obj: &Bound<'_, PyAny>) -> PyResult<Headers> {
+    let mut headers = Vec::new();
+
+    if let Ok(dict) = obj.extract::<Bound<'_, PyDict>>() {
+        for (k, v) in dict {
+            process_header_item(&k, &v, &mut headers)?;
+        }
+    } else if let Ok(list) = obj.extract::<Bound<'_, PyList>>() {
+        for item in list {
+            let tuple = item.extract::<Bound<'_, PyTuple>>().map_err(|e| {
+                PyValueError::new_err(format!("Headers list must contain tuples: {e}"))
+            })?;
+
+            if tuple.len() != 2 {
+                return Err(PyValueError::new_err("Header tuple must have 2 elements"));
+            }
+
+            process_header_item(&tuple.get_item(0)?, &tuple.get_item(1)?, &mut headers)?;
+        }
+    } else {
+        return Err(PyValueError::new_err("Headers must be a dict or list"));
+    }
+
+    Ok(headers)
+}
+
+// Converts ConnectionDiagnostics into a Python dictionary.
 fn connection_diagnostics_to_py<'py>(
     py: Python<'py>,
     diag: &ConnectionDiagnostics,
@@ -398,9 +375,11 @@ fn connection_diagnostics_to_py<'py>(
     dict.set_item("early_event_count", diag.early_event_count)?;
     dict.set_item("connected_at", diag.connected_at)?;
     dict.set_item("closed_at", diag.closed_at)?;
+
     Ok(dict.into_any())
 }
 
+// Converts a Rust Headers vector into a Python list of tuples.
 fn headers_to_py<'py>(py: Python<'py>, headers: &Headers) -> PyResult<Bound<'py, PyList>> {
     let list = PyList::empty(py);
 
@@ -415,6 +394,7 @@ fn headers_to_py<'py>(py: Python<'py>, headers: &Headers) -> PyResult<Bound<'py,
     Ok(list)
 }
 
+// Parses a single Python header key-value pair and appends it to the accumulator.
 fn process_header_item(
     key: &Bound<'_, PyAny>,
     value: &Bound<'_, PyAny>,
@@ -434,6 +414,7 @@ fn process_header_item(
     Ok(())
 }
 
+// Converts SessionDiagnostics into a Python dictionary.
 fn session_diagnostics_to_py<'py>(
     py: Python<'py>,
     diag: &SessionDiagnostics,
@@ -501,6 +482,7 @@ fn session_diagnostics_to_py<'py>(
     Ok(dict.into_any())
 }
 
+// Converts StreamDiagnostics into a Python dictionary.
 fn stream_diagnostics_to_py<'py>(
     py: Python<'py>,
     diag: &StreamDiagnostics,
@@ -519,5 +501,6 @@ fn stream_diagnostics_to_py<'py>(
     dict.set_item("close_code", diag.close_code)?;
     dict.set_item("close_reason", &diag.close_reason)?;
     dict.set_item("closed_at", diag.closed_at)?;
+
     Ok(dict.into_any())
 }

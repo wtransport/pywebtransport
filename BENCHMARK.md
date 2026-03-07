@@ -6,20 +6,20 @@ This document defines the performance characteristics of the `PyWebTransport` li
 
 The test configuration detailed below serves as the reference environment for all measurements presented in this document.
 
-| Component            | Specification                             |
-| :------------------- | :---------------------------------------- |
-| **Library Version**  | `PyWebTransport v0.14.0` (Ref: `HEAD`)    |
-| **Python Runtime**   | CPython 3.12.12                           |
-| **Rust Compiler**    | rustc 1.93.1                              |
-| **Event Loop**       | `uvloop` v0.22.1                          |
-| **Cryptography**     | `rustls` v0.23.36 (ring)                  |
-| **Test Suite**       | `pytest-benchmark`                        |
-| **OS / Kernel**      | Debian 12.12 / Linux 6.1.0-41-amd64       |
-| **CPU Architecture** | Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GHz |
-| **CPU Scaling**      | Single-threaded (GIL-bound)               |
-| **vCPU Allocation**  | 4 Cores                                   |
-| **Memory**           | 8 GB                                      |
-| **Hypervisor**       | VMware ESXi 7.0 Update 3                  |
+| Component            | Specification                                      |
+| :------------------- | :------------------------------------------------- |
+| **Library Version**  | `PyWebTransport v0.15.0` (Ref: `HEAD`)             |
+| **Python Runtime**   | CPython 3.12.12                                    |
+| **Rust Compiler**    | rustc 1.93.1                                       |
+| **Event Loop**       | `uvloop` v0.22.1                                   |
+| **Cryptography**     | `rustls` v0.23.36 (ring)                           |
+| **Test Suite**       | `pytest-benchmark`                                 |
+| **OS / Kernel**      | Debian 12.12 / Linux 6.1.0-41-amd64                |
+| **CPU Architecture** | Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GHz          |
+| **CPU Scaling**      | Dual-threaded (GIL-bound Loop + Dedicated Reactor) |
+| **vCPU Allocation**  | 4 Cores                                            |
+| **Memory**           | 8 GB                                               |
+| **Hypervisor**       | VMware ESXi 7.0 Update 3                           |
 
 ## 2. Methodology
 
@@ -40,9 +40,9 @@ This section details the sustained goodput over reliable WebTransport streams, u
 
 | Scenario     | Result (MB/s) |
 | :----------- | :------------ |
-| **Upload**   | `18.60` MB/s  |
-| **Download** | `18.57` MB/s  |
-| **Duplex**   | `29.79` MB/s  |
+| **Upload**   | `30.93` MB/s  |
+| **Download** | `33.75` MB/s  |
+| **Duplex**   | `53.19` MB/s  |
 
 ## 4. Latency & RTT
 
@@ -50,10 +50,10 @@ This section measures the Round-Trip Time (RTT) for application-layer interactio
 
 | Metric                          | Min        | Median (p50) | Max        |
 | :------------------------------ | :--------- | :----------- | :--------- |
-| **Handshake** (Connect → Ready) | `5.43` ms  | `9.75` ms    | `14.96` ms |
-| **Request-Response** (64B)      | `10.91` ms | `11.51` ms   | `17.08` ms |
-| **Request-Response** (1KB)      | `10.37` ms | `11.60` ms   | `17.98` ms |
-| **Datagram RTT**                | `10.14` ms | `10.69` ms   | `16.20` ms |
+| **Handshake** (Connect → Ready) | `7.36` ms  | `11.38` ms   | `18.19` ms |
+| **Request-Response** (64B)      | `11.88` ms | `13.27` ms   | `17.92` ms |
+| **Request-Response** (1KB)      | `11.81` ms | `13.34` ms   | `20.29` ms |
+| **Datagram RTT**                | `10.15` ms | `12.22` ms   | `20.92` ms |
 
 ## 5. Concurrency & Multiplexing
 
@@ -61,8 +61,8 @@ This section evaluates connection scalability when handling concurrent flows on 
 
 | Metric              | Result       | Description                                                                 |
 | :------------------ | :----------- | :-------------------------------------------------------------------------- |
-| **RPC Throughput**  | `206.92` RPS | Measures Requests Per Second with 100 concurrent streams using 64KB payload |
-| **Connection Rate** | `247.68` CPS | Measures Connections Per Second sustaining 50 concurrent handshakes         |
+| **RPC Throughput**  | `420.54` RPS | Measures Requests Per Second with 100 concurrent streams using 64KB payload |
+| **Connection Rate** | `234.09` CPS | Measures Connections Per Second sustaining 50 concurrent handshakes         |
 
 ## 6. Datagram Performance
 
@@ -70,7 +70,7 @@ This section measures the packet processing rate for unreliable datagrams (HTTP/
 
 | Metric        | Result          | Description                                                          |
 | :------------ | :-------------- | :------------------------------------------------------------------- |
-| **Send Rate** | `40,620.12` PPS | Tests utilize a 64-byte payload transmitted in a non-blocking burst. |
+| **Send Rate** | `23,190.15` PPS | Tests utilize a 64-byte payload transmitted in a non-blocking burst. |
 
 ## 7. Resource Utilization
 
@@ -78,4 +78,4 @@ This section measures the system memory footprint per connection in a steady, id
 
 | Metric                         | Result     |
 | :----------------------------- | :--------- |
-| **Memory per Idle Connection** | `67.69` KB |
+| **Memory per Idle Connection** | `77.79` KB |

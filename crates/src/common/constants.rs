@@ -366,6 +366,18 @@ pub(crate) const QPACK_DECODER_MAX_BLOCKED_STREAMS: u64 = 16;
 // QPACK maximum dynamic table capacity.
 pub(crate) const QPACK_DECODER_MAX_TABLE_CAPACITY: u64 = 65536;
 
+// Runtime IPC channel capacity bridging the FFI plane and Tokio reactor.
+pub(crate) const RUNTIME_IPC_CHANNEL_CAPACITY: u64 = 65536;
+
+// Runtime UDP inbound channel capacity between socket listeners and the reactor.
+pub(crate) const RUNTIME_UDP_CHANNEL_CAPACITY: u64 = 8192;
+
+// Runtime UDP slab allocation block capacity.
+pub(crate) const RUNTIME_UDP_SLAB_CAPACITY: u64 = 65536;
+
+// Runtime UDP slab remaining threshold before reallocation.
+pub(crate) const RUNTIME_UDP_SLAB_THRESHOLD: u64 = 2048;
+
 // HTTP/3 Setting: `ENABLE_CONNECT_PROTOCOL`.
 pub(crate) const SETTINGS_ENABLE_CONNECT_PROTOCOL: u64 = 0x8;
 

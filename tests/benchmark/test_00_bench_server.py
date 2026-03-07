@@ -12,6 +12,7 @@ from pywebtransport import (
     Event,
     ServerApp,
     ServerConfig,
+    SessionClosedError,
     StreamError,
     WebTransportSession,
     WebTransportStream,
@@ -50,18 +51,15 @@ class BenchmarkServerApp(ServerApp):
                 if hasattr(stream, "close"):
                     await stream.close()
 
-        async def on_stream(event: Event) -> None:
-            if isinstance(event.data, dict) and (stream := event.data.get("stream")):
-                asyncio.create_task(coro=stream_drainer(stream=stream))
-
         async def on_dgram(event: Event) -> None:
             pass
 
-        session.events.on(event_type=EventType.STREAM_OPENED, handler=on_stream)
         session.events.on(event_type=EventType.DATAGRAM_RECEIVED, handler=on_dgram)
         try:
-            await session.events.wait_for(event_type=EventType.SESSION_CLOSED)
-        except Exception:
+            while True:
+                stream = await session.accept_bidirectional_stream()
+                asyncio.create_task(coro=stream_drainer(stream=stream))
+        except SessionClosedError:
             pass
 
     async def handle_duplex(self, session: WebTransportSession, **kwargs: Any) -> None:
@@ -83,14 +81,11 @@ class BenchmarkServerApp(ServerApp):
                 if not stream.is_closed:
                     await stream.close()
 
-        async def on_stream(event: Event) -> None:
-            if isinstance(event.data, dict) and (stream := event.data.get("stream")):
-                asyncio.create_task(coro=stream_handler(stream=stream))
-
-        session.events.on(event_type=EventType.STREAM_OPENED, handler=on_stream)
         try:
-            await session.events.wait_for(event_type=EventType.SESSION_CLOSED)
-        except Exception:
+            while True:
+                stream = await session.accept_bidirectional_stream()
+                asyncio.create_task(coro=stream_handler(stream=stream))
+        except SessionClosedError:
             pass
 
     async def handle_echo(self, session: WebTransportSession, **kwargs: Any) -> None:
@@ -122,11 +117,12 @@ class BenchmarkServerApp(ServerApp):
                     await stream.close()
 
         async def stream_accept_loop() -> None:
-            async def on_stream(event: Event) -> None:
-                if isinstance(event.data, dict) and (stream := event.data.get("stream")):
+            try:
+                while True:
+                    stream = await session.accept_bidirectional_stream()
                     asyncio.create_task(coro=stream_handler(stream=stream))
-
-            session.events.on(event_type=EventType.STREAM_OPENED, handler=on_stream)
+            except SessionClosedError:
+                pass
 
         t1 = asyncio.create_task(coro=datagram_loop())
         t2 = asyncio.create_task(coro=stream_accept_loop())
@@ -151,14 +147,11 @@ class BenchmarkServerApp(ServerApp):
                 if not stream.is_closed:
                     await stream.close()
 
-        async def on_stream(event: Event) -> None:
-            if isinstance(event.data, dict) and (stream := event.data.get("stream")):
-                asyncio.create_task(coro=stream_responder(stream=stream))
-
-        session.events.on(event_type=EventType.STREAM_OPENED, handler=on_stream)
         try:
-            await session.events.wait_for(event_type=EventType.SESSION_CLOSED)
-        except Exception:
+            while True:
+                stream = await session.accept_bidirectional_stream()
+                asyncio.create_task(coro=stream_responder(stream=stream))
+        except SessionClosedError:
             pass
 
     async def handle_produce(self, session: WebTransportSession, **kwargs: Any) -> None:
@@ -178,14 +171,11 @@ class BenchmarkServerApp(ServerApp):
                 if not stream.is_closed:
                     await stream.close()
 
-        async def on_stream(event: Event) -> None:
-            if isinstance(event.data, dict) and (stream := event.data.get("stream")):
-                asyncio.create_task(coro=stream_producer(stream=stream))
-
-        session.events.on(event_type=EventType.STREAM_OPENED, handler=on_stream)
         try:
-            await session.events.wait_for(event_type=EventType.SESSION_CLOSED)
-        except Exception:
+            while True:
+                stream = await session.accept_bidirectional_stream()
+                asyncio.create_task(coro=stream_producer(stream=stream))
+        except SessionClosedError:
             pass
 
     def _register_routes(self) -> None:

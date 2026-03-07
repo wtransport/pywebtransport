@@ -36,10 +36,15 @@ async def test_basic_datagram() -> bool:
             expected_response = b"ECHO: " + test_message
 
             logger.info("Sending datagram: %r", test_message)
+
+            wait_task = asyncio.create_task(
+                coro=session.events.wait_for(event_type=EventType.DATAGRAM_RECEIVED, timeout=5.0)
+            )
+
             await session.send_datagram(data=test_message)
 
             logger.info("Waiting for echo...")
-            event: Event = await session.events.wait_for(event_type=EventType.DATAGRAM_RECEIVED, timeout=5.0)
+            event: Event = await wait_task
 
             response = None
             if isinstance(event.data, dict):
@@ -70,30 +75,30 @@ async def test_multiple_datagrams() -> bool:
             logger.info("Sending %d datagrams and awaiting echoes...", num_datagrams)
 
             received_events: list[bytes] = []
+            receiver_done = asyncio.Event()
 
-            async def receiver() -> None:
-                try:
-                    for _ in range(num_datagrams):
-                        event = await session.events.wait_for(event_type=EventType.DATAGRAM_RECEIVED, timeout=5.0)
+            async def datagram_handler(event: Event) -> None:
+                data = None
+                if isinstance(event.data, dict):
+                    data = event.data.get("data")
 
-                        data = None
-                        if isinstance(event.data, dict):
-                            data = event.data.get("data")
+                if isinstance(data, bytes):
+                    received_events.append(data)
+                    if len(received_events) >= num_datagrams:
+                        receiver_done.set()
 
-                        if isinstance(data, bytes):
-                            received_events.append(data)
-                except asyncio.TimeoutError:
-                    logger.warning("Receiver timed out.")
-                except Exception:
-                    pass
-
-            receiver_task = asyncio.create_task(coro=receiver())
-            await asyncio.sleep(delay=0.1)
+            session.events.on(event_type=EventType.DATAGRAM_RECEIVED, handler=datagram_handler)
 
             for i in range(num_datagrams):
                 await session.send_datagram(data=f"Datagram message {i + 1}".encode())
 
-            await receiver_task
+            try:
+                async with asyncio.timeout(delay=5.0):
+                    await receiver_done.wait()
+            except asyncio.TimeoutError:
+                logger.warning("Receiver timed out.")
+            finally:
+                session.events.off(event_type=EventType.DATAGRAM_RECEIVED, handler=datagram_handler)
 
             if len(received_events) != num_datagrams:
                 logger.error(

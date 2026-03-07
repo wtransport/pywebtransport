@@ -9,8 +9,8 @@ import pytest
 from pywebtransport import ClientConfig, ConfigurationError, Headers, ServerConfig
 from pywebtransport.constants import (
     DEFAULT_ALPN_PROTOCOLS,
-    DEFAULT_CONNECTION_ATTEMPT_DELAY,
     DEFAULT_CONNECT_TIMEOUT,
+    DEFAULT_CONNECTION_ATTEMPT_DELAY,
     DEFAULT_ENABLE_STATELESS_RETRY,
     DEFAULT_FLOW_CONTROL_WINDOW_SIZE,
     DEFAULT_INITIAL_MAX_DATA,

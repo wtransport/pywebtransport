@@ -14,6 +14,7 @@ from pywebtransport import (
     Event,
     ServerApp,
     ServerConfig,
+    SessionClosedError,
     SessionError,
     StreamError,
     StructuredDatagramTransport,
@@ -77,17 +78,9 @@ class E2EServerApp(ServerApp):
     async def _diagnostics_handler(self, session: WebTransportSession, **kwargs: Any) -> None:
         """Handle requests for server statistics on the /diagnostics path."""
         logger.info("Diagnostics request from session %s", session.session_id)
-        stream: WebTransportStream | None = None
         try:
-            stream_event = await session.events.wait_for(event_type=EventType.STREAM_OPENED, timeout=5.0)
-            if not isinstance(stream_event.data, dict):
-                logger.warning("Diagnostics handler: Received invalid stream event data.")
-                return
-
-            stream = stream_event.data.get("stream")
-            if not isinstance(stream, WebTransportStream):
-                logger.warning("Diagnostics handler: Client opened a non-bidirectional stream.")
-                return
+            async with asyncio.timeout(delay=5.0):
+                stream = await session.accept_bidirectional_stream()
 
             diagnostics = await self.server.diagnostics()
             stats_json = json.dumps(obj=asdict(obj=diagnostics), indent=2).encode(encoding="utf-8")
@@ -95,6 +88,8 @@ class E2EServerApp(ServerApp):
             logger.info("Sent diagnostics: %s bytes", len(stats_json))
         except asyncio.TimeoutError:
             logger.error("Diagnostics handler: Client connected but never opened a stream.")
+        except SessionClosedError:
+            pass
         except Exception as e:
             logger.error("Diagnostics handler error: %s", e)
         finally:
@@ -188,23 +183,14 @@ async def echo_handler(session: WebTransportSession, **kwargs: Any) -> None:
 async def handle_all_structured_streams(*, session: WebTransportSession, serializer: Any) -> None:
     """Listen for and handle all incoming streams for a structured session."""
     session_id = session.session_id
-
-    async def stream_opened_handler(event: Event) -> None:
-        if not isinstance(event.data, dict):
-            return
-        stream = event.data.get("stream")
-        if isinstance(stream, WebTransportStream):
-            asyncio.create_task(coro=handle_structured_stream(stream=stream, serializer=serializer))
-
-    session.events.on(event_type=EventType.STREAM_OPENED, handler=stream_opened_handler)
     try:
-        await session.events.wait_for(event_type=EventType.SESSION_CLOSED)
-    except (asyncio.CancelledError, ConnectionError):
+        while True:
+            stream = await session.accept_bidirectional_stream()
+            asyncio.create_task(coro=handle_structured_stream(stream=stream, serializer=serializer))
+    except (asyncio.CancelledError, ConnectionError, SessionClosedError):
         pass
     except Exception as e:
         logger.error("Structured stream manager for session %s error: %s", session_id, e, exc_info=True)
-    finally:
-        session.events.off(event_type=EventType.STREAM_OPENED, handler=stream_opened_handler)
 
 
 async def handle_bidirectional_stream(*, stream: WebTransportStream) -> None:
@@ -226,17 +212,15 @@ async def handle_datagrams(*, session: WebTransportSession) -> None:
     logger.debug("Starting datagram handler for session %s", session_id)
 
     async def datagram_handler(event: Event) -> None:
-        if not isinstance(event.data, dict):
-            return
-        data = event.data.get("data")
-        if not isinstance(data, bytes):
-            return
-
-        try:
-            echo_data = b"ECHO: " + data
-            await session.send_datagram(data=echo_data)
-        except (asyncio.CancelledError, ConnectionError, SessionError) as e:
-            logger.warning("Datagram handler error for session %s: %s", session_id, e)
+        if isinstance(event.data, dict) and (data := event.data.get("data")):
+            if isinstance(data, bytes):
+                try:
+                    echo_data = b"ECHO: " + data
+                    await session.send_datagram(data=echo_data)
+                except asyncio.CancelledError:
+                    pass
+                except (ConnectionError, SessionError) as e:
+                    logger.debug("Datagram echo failed due to client disconnect: %s", e)
 
     session.events.on(event_type=EventType.DATAGRAM_RECEIVED, handler=datagram_handler)
     try:
@@ -254,22 +238,32 @@ async def handle_incoming_streams(*, session: WebTransportSession) -> None:
     session_id = session.session_id
     logger.debug("Starting stream handler for session %s", session_id)
 
-    async def stream_opened_handler(event: Event) -> None:
-        if not isinstance(event.data, dict):
-            return
-        stream = event.data.get("stream")
-        if stream:
-            asyncio.create_task(coro=handle_single_stream(stream=stream, session_id=session_id))
+    async def accept_bidi() -> None:
+        try:
+            while True:
+                stream = await session.accept_bidirectional_stream()
+                asyncio.create_task(coro=handle_single_stream(stream=stream, session_id=session_id))
+        except SessionClosedError:
+            pass
 
-    session.events.on(event_type=EventType.STREAM_OPENED, handler=stream_opened_handler)
+    async def accept_uni() -> None:
+        try:
+            while True:
+                stream = await session.accept_unidirectional_stream()
+                asyncio.create_task(coro=handle_single_stream(stream=stream, session_id=session_id))
+        except SessionClosedError:
+            pass
+
+    t1 = asyncio.create_task(coro=accept_bidi())
+    t2 = asyncio.create_task(coro=accept_uni())
+
     try:
         await session.events.wait_for(event_type=EventType.SESSION_CLOSED)
-    except (asyncio.CancelledError, ConnectionError):
+    except Exception:
         pass
-    except Exception as e:
-        logger.error("Stream handler error for session %s: %s", session_id, e, exc_info=True)
     finally:
-        session.events.off(event_type=EventType.STREAM_OPENED, handler=stream_opened_handler)
+        t1.cancel()
+        t2.cancel()
 
 
 async def handle_receive_stream(*, stream: WebTransportReceiveStream) -> None:

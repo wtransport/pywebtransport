@@ -124,7 +124,7 @@ class UserSendDatagram(UserEvent[None]):
     """User command to send a datagram."""
 
     session_id: SessionId
-    data: Buffer | list[Buffer]
+    data: Buffer
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

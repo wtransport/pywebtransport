@@ -1,13 +1,12 @@
 """Unit tests for the pywebtransport.utils module."""
 
 import logging
-import socket
 from typing import Any, cast
 
 import pytest
 from pytest_mock import MockerFixture
 
-from pywebtransport import ConnectionError, Headers
+from pywebtransport import Headers
 from pywebtransport.utils import (
     ensure_buffer,
     find_header,
@@ -16,7 +15,6 @@ from pywebtransport.utils import (
     get_logger,
     get_timestamp,
     merge_headers,
-    resolve_host,
 )
 
 
@@ -159,77 +157,6 @@ class TestLoggingUtils:
 
         assert isinstance(logger, logging.Logger)
         assert logger.name == "test"
-
-
-class TestResolveHost:
-
-    @pytest.mark.asyncio
-    async def test_resolve_host_domain_name(self, mocker: MockerFixture) -> None:
-        mock_loop = mocker.MagicMock()
-        mock_loop.getaddrinfo = mocker.AsyncMock(
-            return_value=[(socket.AF_INET, socket.SOCK_DGRAM, 17, "", ("192.0.2.100", 0))]
-        )
-        mocker.patch(target="asyncio.get_running_loop", return_value=mock_loop)
-
-        result = await resolve_host(host="example.com")
-
-        assert result == ["192.0.2.100"]
-        mock_loop.getaddrinfo.assert_awaited_once_with(
-            host="example.com", port=0, family=socket.AF_UNSPEC, type=socket.SOCK_DGRAM
-        )
-
-    @pytest.mark.asyncio
-    async def test_resolve_host_empty_results(self, mocker: MockerFixture) -> None:
-        mock_loop = mocker.MagicMock()
-        mock_loop.getaddrinfo = mocker.AsyncMock(return_value=[])
-        mocker.patch(target="asyncio.get_running_loop", return_value=mock_loop)
-
-        with pytest.raises(expected_exception=ConnectionError, match="No DNS results for host: empty.local"):
-            await resolve_host(host="empty.local")
-
-    @pytest.mark.asyncio
-    async def test_resolve_host_gaierror_translation(self, mocker: MockerFixture) -> None:
-        mock_loop = mocker.MagicMock()
-        mock_loop.getaddrinfo = mocker.AsyncMock(side_effect=socket.gaierror("Name or service not known"))
-        mocker.patch(target="asyncio.get_running_loop", return_value=mock_loop)
-
-        with pytest.raises(expected_exception=ConnectionError, match="DNS resolution failed for host: invalid.local"):
-            await resolve_host(host="invalid.local")
-
-    @pytest.mark.asyncio
-    async def test_resolve_host_ipv4_fast_path(self, mocker: MockerFixture) -> None:
-        mock_loop = mocker.patch(target="asyncio.get_running_loop")
-
-        result = await resolve_host(host="192.0.2.1")
-
-        assert result == ["192.0.2.1"]
-        mock_loop.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_resolve_host_ipv6_fast_path(self, mocker: MockerFixture) -> None:
-        mock_loop = mocker.patch(target="asyncio.get_running_loop")
-
-        result = await resolve_host(host="2001:db8::1")
-
-        assert result == ["2001:db8::1"]
-        mock_loop.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_resolve_host_multiple_ips_and_deduplication(self, mocker: MockerFixture) -> None:
-        mock_loop = mocker.MagicMock()
-        mock_loop.getaddrinfo = mocker.AsyncMock(
-            return_value=[
-                (socket.AF_INET6, socket.SOCK_DGRAM, 17, "", ("2001:db8::1", 0)),
-                (socket.AF_INET, socket.SOCK_DGRAM, 17, "", ("192.0.2.100", 0)),
-                (socket.AF_INET, socket.SOCK_DGRAM, 17, "", ("192.0.2.100", 0)),
-                (socket.AF_INET6, socket.SOCK_DGRAM, 17, "", ("2001:db8::2", 0)),
-            ]
-        )
-        mocker.patch(target="asyncio.get_running_loop", return_value=mock_loop)
-
-        result = await resolve_host(host="multihomed.local")
-
-        assert result == ["2001:db8::1", "192.0.2.100", "2001:db8::2"]
 
 
 class TestTimestamp:

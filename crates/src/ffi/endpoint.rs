@@ -1,247 +1,414 @@
-//! FFI bindings for the WebTransport transport multiplexer and state machine.
+//! FFI bindings for the WebTransport multiplexer and Tokio reactor proxy.
 
 use std::fmt;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use bytes::BytesMut;
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyList, PyTuple};
-use quinn_proto::{ConnectionHandle, Endpoint as QuinnEndpoint, Transmit};
+use pyo3::types::{PyList, PyTuple};
+use quinn_proto::Endpoint as QuinnEndpoint;
+use tracing::error;
 
 use crate::common::config::{
     RustClientConfig, RustServerConfig, TransportConfig as WtTransportConfig,
 };
 use crate::ffi::abi;
-use crate::ffi::conversion::extract_bytes;
+use crate::ffi::waker::PyWaker;
 use crate::protocol::events::ProtocolEvent;
+use crate::runtime::channel::{IpcChannels, RuntimeCommand, RuntimeCommandTx, RuntimeEventRx};
+use crate::runtime::reactor::Reactor;
 use crate::transport::config::{build_client_config, build_endpoint_config, build_server_config};
-use crate::transport::endpoint::{EndpointEvent, TransportEndpoint};
+use crate::transport::endpoint::TransportEndpoint;
 
-// Registers the endpoint FFI classes to the parent Python module for initialization.
+// Registers the FFI classes to the parent Python module.
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyEndpoint>()?;
 
     Ok(())
 }
 
-/// Python wrapper for the WebTransport endpoint scheduling state machine.
-#[pyclass(name = "Endpoint", module = "pywebtransport._wtransport", unsendable)]
+// FFI proxy for the threaded Tokio reactor.
+#[pyclass(name = "Endpoint", module = "pywebtransport._wtransport")]
 struct PyEndpoint {
-    inner: TransportEndpoint,
-    time_mapper: TimeMapper,
-}
-
-impl fmt::Debug for PyEndpoint {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PyEndpoint")
-            .field("time_mapper", &self.time_mapper)
-            .finish_non_exhaustive()
-    }
+    local_addrs: Vec<SocketAddr>,
+    command_tx: RuntimeCommandTx,
+    event_rx: RuntimeEventRx,
 }
 
 #[pymethods]
 impl PyEndpoint {
+    // Initializes the endpoint proxy and spawns the Tokio reactor background thread.
     #[new]
-    #[pyo3(signature = (is_client, config, now))]
-    fn new(is_client: bool, config: &Bound<'_, PyAny>, now: f64) -> PyResult<Self> {
-        let inner = if is_client {
+    #[pyo3(signature = (is_client, config, waker))]
+    fn new(is_client: bool, config: &Bound<'_, PyAny>, waker: &PyWaker) -> PyResult<Self> {
+        let (endpoint, std_sockets) = if is_client {
             let rust_config = extract_client_config(config)?;
             let quic_crypto = build_client_config(&rust_config)?;
             let endpoint_config = Arc::new(quinn_proto::EndpointConfig::default());
             let quinn_endpoint = QuinnEndpoint::new(endpoint_config, None, false, None);
 
-            TransportEndpoint::new_client(quinn_endpoint, rust_config.transport, quic_crypto)?
+            let transport_endpoint =
+                TransportEndpoint::new_client(quinn_endpoint, rust_config.transport, quic_crypto)?;
+
+            let mut sockets = Vec::new();
+
+            if let Ok(s) = std::net::UdpSocket::bind("[::]:0") {
+                s.set_nonblocking(true)?;
+                sockets.push(s);
+            }
+
+            if let Ok(s) = std::net::UdpSocket::bind("0.0.0.0:0") {
+                s.set_nonblocking(true)?;
+                sockets.push(s);
+            }
+
+            if sockets.is_empty() {
+                return Err(PyRuntimeError::new_err(
+                    "Failed to bind any client sockets (IPv4 or IPv6)",
+                ));
+            }
+
+            (transport_endpoint, sockets)
         } else {
             let rust_config = extract_server_config(config)?;
+            let bind_addr_tuple = (rust_config.bind_host.clone(), rust_config.bind_port);
             let server_crypto = build_server_config(&rust_config)?;
             let endpoint_config = Arc::new(build_endpoint_config(&rust_config));
             let quinn_endpoint =
                 QuinnEndpoint::new(endpoint_config, Some(Arc::new(server_crypto)), false, None);
 
-            TransportEndpoint::new_server(
+            let transport_endpoint = TransportEndpoint::new_server(
                 quinn_endpoint,
                 rust_config.transport.clone(),
                 rust_config,
-            )?
-        };
-        let time_mapper = TimeMapper::new(now);
-
-        Ok(Self { inner, time_mapper })
-    }
-
-    #[pyo3(signature = (remote, server_name, now))]
-    fn connect(
-        &mut self,
-        remote: &Bound<'_, PyAny>,
-        server_name: &str,
-        now: f64,
-    ) -> PyResult<usize> {
-        let remote_addr = extract_socket_addr(remote)?;
-        let now_instant = self.time_mapper.resolve_instant(now);
-
-        let handle = self.inner.connect(remote_addr, server_name, now_instant)?;
-
-        Ok(handle.0)
-    }
-
-    #[pyo3(signature = (data, remote, local, now))]
-    fn handle_datagram<'py>(
-        &mut self,
-        py: Python<'py>,
-        data: &Bound<'_, PyAny>,
-        remote: &Bound<'_, PyAny>,
-        local: Option<&Bound<'_, PyAny>>,
-        now: f64,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let bytes_data = extract_bytes(data)?;
-        let bytes_mut = BytesMut::from(bytes_data.as_ref());
-        let remote_addr = extract_socket_addr(remote)?;
-        let local_addr = match local {
-            Some(ob) => Some(extract_socket_addr(ob)?),
-            None => None,
-        };
-        let now_instant = self.time_mapper.resolve_instant(now);
-
-        let event =
-            self.inner
-                .handle_datagram(bytes_mut, remote_addr, local_addr, now, now_instant);
-
-        Ok(map_endpoint_event(py, event, self.inner.transmit_workspace())?.into_any())
-    }
-
-    #[pyo3(signature = (now))]
-    fn handle_timeout<'py>(&mut self, py: Python<'py>, now: f64) -> PyResult<Bound<'py, PyAny>> {
-        let now_instant = self.time_mapper.resolve_instant(now);
-
-        let results = self.inner.handle_timeout(now_instant, now);
-        let list = PyList::empty(py);
-
-        for (handle, effects) in results {
-            let item = PyTuple::new(
-                py,
-                &[
-                    handle.0.into_pyobject(py)?.into_any(),
-                    effects.into_pyobject(py)?.into_any(),
-                ],
             )?;
 
-            list.append(item)?;
-        }
+            let mut sockets = Vec::new();
+            let mut bound_v4 = false;
+            let mut bound_v6 = false;
 
-        Ok(list.into_any())
-    }
+            match bind_addr_tuple.to_socket_addrs() {
+                Ok(addrs) => {
+                    for addr in addrs {
+                        if addr.is_ipv4() && bound_v4 {
+                            continue;
+                        }
+                        if addr.is_ipv6() && bound_v6 {
+                            continue;
+                        }
 
-    #[pyo3(signature = (handle, event, now))]
-    fn handle_user_event<'py>(
-        &mut self,
-        py: Python<'py>,
-        handle: usize,
-        event: &Bound<'_, PyAny>,
-        now: f64,
-    ) -> PyResult<Option<Bound<'py, PyAny>>> {
-        let protocol_event: ProtocolEvent = event.extract()?;
-        let now_instant = self.time_mapper.resolve_instant(now);
-        let conn_handle = ConnectionHandle(handle);
+                        if let Ok(s) = std::net::UdpSocket::bind(addr) {
+                            s.set_nonblocking(true)?;
+                            sockets.push(s);
+                            if addr.is_ipv4() {
+                                bound_v4 = true;
+                            }
+                            if addr.is_ipv6() {
+                                bound_v6 = true;
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    return Err(PyRuntimeError::new_err(format!(
+                        "DNS resolution failed for bind host: {e}"
+                    )));
+                }
+            }
 
-        let Some(endpoint_event) =
-            self.inner
-                .handle_user_event(conn_handle, protocol_event, now, now_instant)
-        else {
-            return Ok(None);
+            if sockets.is_empty() {
+                return Err(PyRuntimeError::new_err(format!(
+                    "Failed to bind server to any resolved address for {}:{}",
+                    bind_addr_tuple.0, bind_addr_tuple.1
+                )));
+            }
+
+            (transport_endpoint, sockets)
         };
 
-        Ok(Some(
-            map_endpoint_event(py, endpoint_event, self.inner.transmit_workspace())?.into_any(),
-        ))
+        let local_addrs: Vec<SocketAddr> = std_sockets
+            .iter()
+            .filter_map(|s| s.local_addr().ok())
+            .collect();
+
+        let IpcChannels {
+            command_tx,
+            command_rx,
+            event_tx,
+            event_rx,
+        } = IpcChannels::new().map_err(|e| {
+            PyRuntimeError::new_err(format!("Failed to initialize IPC channels: {e}"))
+        })?;
+
+        let waker_callback = waker.clone_waker_callback();
+
+        std::thread::Builder::new()
+            .name("wtransport-reactor".into())
+            .spawn(move || {
+                match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(rt) => {
+                        rt.block_on(async move {
+                            let mut tokio_sockets = Vec::new();
+
+                            for s in std_sockets {
+                                match tokio::net::UdpSocket::from_std(s) {
+                                    Ok(ts) => tokio_sockets.push(ts),
+                                    Err(e) => error!("Failed to convert std socket to tokio: {e}"),
+                                }
+                            }
+
+                            if tokio_sockets.is_empty() {
+                                error!("No valid tokio sockets could be created.");
+                                return;
+                            }
+
+                            let reactor = Reactor::new(
+                                command_rx,
+                                endpoint,
+                                event_tx,
+                                tokio_sockets,
+                                waker_callback,
+                            )
+                            .unwrap_or_else(|e| {
+                                error!("Failed to initialize the Tokio reactor: {e}");
+                                std::process::exit(1);
+                            });
+
+                            reactor.run().await;
+                        });
+                    }
+                    Err(e) => {
+                        error!("Failed to build Tokio runtime: {e}");
+                    }
+                }
+            })
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to spawn reactor thread: {e}")))?;
+
+        Ok(Self {
+            local_addrs,
+            command_tx,
+            event_rx,
+        })
     }
 
-    #[pyo3(signature = (now))]
-    fn poll_transmit<'py>(
-        &mut self,
-        py: Python<'py>,
-        now: f64,
-    ) -> PyResult<Option<Bound<'py, PyAny>>> {
-        let now_instant = self.time_mapper.resolve_instant(now);
-
-        let Some(transmit) = self.inner.poll_transmit(now_instant) else {
-            return Ok(None);
-        };
-
-        let result = map_endpoint_event(
-            py,
-            EndpointEvent::Transmit(transmit),
-            self.inner.transmit_workspace(),
-        )?;
-
-        Ok(Some(result.into_any()))
-    }
-
-    #[pyo3(name = "get_remote_address", signature = (handle))]
-    fn remote_address(&self, handle: usize) -> Option<(String, u16)> {
-        let conn_handle = ConnectionHandle(handle);
-
-        self.inner
-            .remote_address(conn_handle)
-            .map(|addr| (addr.ip().to_string(), addr.port()))
-    }
-
+    // Dispatches a graceful shutdown instruction to the underlying Tokio reactor.
     #[pyo3(signature = ())]
-    fn timeout(&mut self) -> Option<f64> {
-        let t = self.inner.timeout()?;
-
-        Some(self.time_mapper.resolve_py_time(t))
+    fn close(&self) {
+        self.command_tx.try_send(RuntimeCommand::Shutdown).ok();
     }
-}
 
-// Synchronizes Python's monotonic event loop time with Rust's Instant.
-#[derive(Debug)]
-struct TimeMapper {
-    base_instant: Instant,
-    base_py_time: f64,
-    last_instant: Instant,
-}
-
-impl TimeMapper {
-    fn new(py_time: f64) -> Self {
-        let base_instant = Instant::now();
-
-        Self {
-            base_instant,
-            base_py_time: py_time,
-            last_instant: base_instant,
+    // Dispatches an outbound connection creation command to the reactor.
+    #[pyo3(signature = (request_id, remote, server_name))]
+    fn connect(
+        &self,
+        request_id: u64,
+        remote: &Bound<'_, PyAny>,
+        server_name: String,
+    ) -> PyResult<()> {
+        if self.event_rx.len() > (self.event_rx.capacity() * 9) / 10 {
+            return Err(PyRuntimeError::new_err(
+                "IPC event queue is dangerously full. The Python event loop is severely lagging. Please yield.",
+            ));
         }
+
+        let remote_addr = extract_socket_addr(remote)?;
+
+        self.command_tx
+            .try_send(RuntimeCommand::CreateConnection {
+                request_id,
+                remote: remote_addr,
+                server_name,
+            })
+            .map_err(|e| {
+                PyRuntimeError::new_err(format!("Failed to dispatch command to reactor: {e}"))
+            })?;
+
+        Ok(())
     }
 
-    fn resolve_instant(&mut self, py_time: f64) -> Instant {
-        let delta = py_time - self.base_py_time;
-
-        let instant = if delta >= 0.0 {
-            self.base_instant + Duration::from_secs_f64(delta)
-        } else {
-            self.base_instant
-                .checked_sub(Duration::from_secs_f64(-delta))
-                .unwrap_or(self.base_instant)
-        };
-
-        self.last_instant = self.last_instant.max(instant);
-
-        self.last_instant
-    }
-
-    fn resolve_py_time(&self, instant: Instant) -> f64 {
-        if instant >= self.base_instant {
-            self.base_py_time + instant.duration_since(self.base_instant).as_secs_f64()
-        } else {
-            self.base_py_time - self.base_instant.duration_since(instant).as_secs_f64()
+    // Forwards a Python-triggered protocol event down to the Quic endpoint state machine.
+    #[pyo3(signature = (handle, event))]
+    fn handle_user_event(&self, handle: usize, event: &Bound<'_, PyAny>) -> PyResult<()> {
+        if self.event_rx.len() > (self.event_rx.capacity() * 9) / 10 {
+            return Err(PyRuntimeError::new_err(
+                "IPC event queue is dangerously full. The Python event loop is severely lagging. Please yield.",
+            ));
         }
+
+        let protocol_event: ProtocolEvent = event.extract()?;
+        let conn_handle = quinn_proto::ConnectionHandle(handle);
+
+        self.command_tx
+            .try_send(RuntimeCommand::Protocol {
+                handle: conn_handle,
+                event: protocol_event,
+            })
+            .map_err(|e| {
+                PyRuntimeError::new_err(format!("Failed to dispatch protocol event: {e}"))
+            })?;
+
+        Ok(())
+    }
+
+    // Retrieves the bound IP addresses and ports of the active UDP sockets.
+    #[pyo3(name = "get_local_addresses", signature = ())]
+    fn local_addresses(&self) -> Vec<(String, u16)> {
+        self.local_addrs
+            .iter()
+            .map(|addr| (addr.ip().to_string(), addr.port()))
+            .collect()
+    }
+
+    // Drains the IPC event queue and returns all pending network events to Python.
+    #[pyo3(signature = ())]
+    fn poll_runtime_events<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let py_list = PyList::empty(py);
+
+        while let Some(event) = self.event_rx.pop() {
+            match event {
+                crate::runtime::channel::RuntimeEvent::CommandCompleted {
+                    request_id,
+                    handle,
+                    remote_address,
+                } => {
+                    let addr_tuple = PyTuple::new(
+                        py,
+                        &[
+                            remote_address
+                                .ip()
+                                .to_string()
+                                .into_pyobject(py)?
+                                .into_any(),
+                            remote_address.port().into_pyobject(py)?.into_any(),
+                        ],
+                    )?;
+                    let payload = PyTuple::new(
+                        py,
+                        &[
+                            request_id.into_pyobject(py)?.into_any(),
+                            handle.0.into_pyobject(py)?.into_any(),
+                            addr_tuple.into_any(),
+                        ],
+                    )?;
+                    let event_tuple = PyTuple::new(
+                        py,
+                        &[
+                            abi::COMMAND_COMPLETED.into_pyobject(py)?.into_any(),
+                            payload.into_any(),
+                        ],
+                    )?;
+
+                    py_list.append(event_tuple)?;
+                }
+                crate::runtime::channel::RuntimeEvent::CommandFailed {
+                    request_id,
+                    error_code,
+                    reason,
+                } => {
+                    let payload = PyTuple::new(
+                        py,
+                        &[
+                            request_id.into_pyobject(py)?.into_any(),
+                            error_code.into_pyobject(py)?.into_any(),
+                            reason.into_pyobject(py)?.into_any(),
+                        ],
+                    )?;
+                    let event_tuple = PyTuple::new(
+                        py,
+                        &[
+                            abi::COMMAND_FAILED.into_pyobject(py)?.into_any(),
+                            payload.into_any(),
+                        ],
+                    )?;
+
+                    py_list.append(event_tuple)?;
+                }
+                crate::runtime::channel::RuntimeEvent::ConnectionEffects { handle, effects } => {
+                    let payload = PyTuple::new(
+                        py,
+                        &[
+                            handle.0.into_pyobject(py)?.into_any(),
+                            effects.into_pyobject(py)?.into_any(),
+                        ],
+                    )?;
+                    let event_tuple = PyTuple::new(
+                        py,
+                        &[
+                            abi::CONNECTION_EFFECTS.into_pyobject(py)?.into_any(),
+                            payload.into_any(),
+                        ],
+                    )?;
+
+                    py_list.append(event_tuple)?;
+                }
+                crate::runtime::channel::RuntimeEvent::ConnectionSpawned {
+                    handle,
+                    remote_address,
+                    effects,
+                } => {
+                    let addr_tuple = PyTuple::new(
+                        py,
+                        &[
+                            remote_address
+                                .ip()
+                                .to_string()
+                                .into_pyobject(py)?
+                                .into_any(),
+                            remote_address.port().into_pyobject(py)?.into_any(),
+                        ],
+                    )?;
+                    let payload = PyTuple::new(
+                        py,
+                        &[
+                            handle.0.into_pyobject(py)?.into_any(),
+                            addr_tuple.into_any(),
+                            effects.into_pyobject(py)?.into_any(),
+                        ],
+                    )?;
+                    let event_tuple = PyTuple::new(
+                        py,
+                        &[
+                            abi::CONNECTION_SPAWNED.into_pyobject(py)?.into_any(),
+                            payload.into_any(),
+                        ],
+                    )?;
+
+                    py_list.append(event_tuple)?;
+                }
+                crate::runtime::channel::RuntimeEvent::ReactorShutDown => {
+                    let payload = PyTuple::empty(py);
+                    let event_tuple = PyTuple::new(
+                        py,
+                        &[
+                            abi::REACTOR_SHUTDOWN.into_pyobject(py)?.into_any(),
+                            payload.into_any(),
+                        ],
+                    )?;
+
+                    py_list.append(event_tuple)?;
+                }
+            }
+        }
+
+        Ok(py_list)
     }
 }
 
-// Constructs pure Rust client configuration with robust absence handling.
+impl fmt::Debug for PyEndpoint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PyEndpoint")
+            .field("proxy_state", &"Active")
+            .finish()
+    }
+}
+
+// Extracts and constructs the client configuration.
 fn extract_client_config(config: &Bound<'_, PyAny>) -> PyResult<RustClientConfig> {
     let ca_certs = config
         .getattr("ca_certs")
@@ -300,7 +467,7 @@ fn extract_client_config(config: &Bound<'_, PyAny>) -> PyResult<RustClientConfig
     })
 }
 
-// Constructs pure Rust server configuration from dynamic Python properties.
+// Extracts and constructs the server configuration.
 fn extract_server_config(config: &Bound<'_, PyAny>) -> PyResult<RustServerConfig> {
     let bind_host: String = config.getattr("bind_host")?.extract()?;
     let bind_port: u16 = config.getattr("bind_port")?.extract()?;
@@ -326,7 +493,7 @@ fn extract_server_config(config: &Bound<'_, PyAny>) -> PyResult<RustServerConfig
     })
 }
 
-// Extracts a SocketAddr using PyO3 generic extraction for maximum safety.
+// Extracts a network address tuple into a socket address.
 fn extract_socket_addr(ob: &Bound<'_, PyAny>) -> PyResult<SocketAddr> {
     if let Ok((ip_str, port, flowinfo, scope_id)) = ob.extract::<(String, u16, u32, u32)>() {
         let ip: std::net::Ipv6Addr = ip_str
@@ -349,7 +516,7 @@ fn extract_socket_addr(ob: &Bound<'_, PyAny>) -> PyResult<SocketAddr> {
     }
 }
 
-// Safely dismantles the FFI type barrier for transport sub-configuration.
+// Extracts the nested transport sub-configuration.
 fn extract_transport_config(config: &Bound<'_, PyAny>) -> PyResult<WtTransportConfig> {
     let t_opt = config.getattr("transport").ok();
     let source = if let Some(tr) = &t_opt { tr } else { config };
@@ -432,7 +599,7 @@ fn extract_transport_config(config: &Bound<'_, PyAny>) -> PyResult<WtTransportCo
     })
 }
 
-// Extracts verify mode from Python object with default value fallback.
+// Extracts the certificate verification mode.
 fn extract_verify_mode(attr: &Bound<'_, PyAny>, default_val: bool) -> PyResult<bool> {
     if attr.is_none() {
         Ok(default_val)
@@ -445,96 +612,4 @@ fn extract_verify_mode(attr: &Bound<'_, PyAny>, default_val: bool) -> PyResult<b
 
         Ok(mode_int != 0)
     }
-}
-
-// Maps a terminal endpoint event to an ABI tagged Python tuple.
-fn map_endpoint_event<'py>(
-    py: Python<'py>,
-    event: EndpointEvent,
-    workspace: &[u8],
-) -> PyResult<Bound<'py, PyTuple>> {
-    match event {
-        EndpointEvent::ConnectionEffects { handle, effects } => {
-            let payload = PyTuple::new(
-                py,
-                &[
-                    handle.0.into_pyobject(py)?.into_any(),
-                    effects.into_pyobject(py)?.into_any(),
-                ],
-            )?;
-
-            PyTuple::new(
-                py,
-                &[
-                    abi::CONNECTION_EFFECTS.into_pyobject(py)?.into_any(),
-                    payload.into_any(),
-                ],
-            )
-        }
-        EndpointEvent::ConnectionSpawned { handle, effects } => {
-            let payload = PyTuple::new(
-                py,
-                &[
-                    handle.0.into_pyobject(py)?.into_any(),
-                    effects.into_pyobject(py)?.into_any(),
-                ],
-            )?;
-
-            PyTuple::new(
-                py,
-                &[
-                    abi::CONNECTION_SPAWNED.into_pyobject(py)?.into_any(),
-                    payload.into_any(),
-                ],
-            )
-        }
-        EndpointEvent::Consumed => {
-            let payload = PyTuple::empty(py);
-
-            PyTuple::new(
-                py,
-                &[
-                    abi::CONSUMED.into_pyobject(py)?.into_any(),
-                    payload.into_any(),
-                ],
-            )
-        }
-        EndpointEvent::Transmit(transmit) => {
-            let payload = map_transmit(py, &transmit, workspace)?;
-
-            PyTuple::new(
-                py,
-                &[
-                    abi::TRANSMIT.into_pyobject(py)?.into_any(),
-                    payload.into_any(),
-                ],
-            )
-        }
-    }
-}
-
-// Extracts zero-copy network payload slices mapping transmission metadata into a tuple.
-fn map_transmit<'py>(
-    py: Python<'py>,
-    transmit: &Transmit,
-    workspace: &[u8],
-) -> PyResult<Bound<'py, PyTuple>> {
-    let ip_str = transmit.destination.ip().to_string();
-    let port = transmit.destination.port();
-
-    let dest_tuple = PyTuple::new(
-        py,
-        &[
-            ip_str.into_pyobject(py)?.into_any(),
-            port.into_pyobject(py)?.into_any(),
-        ],
-    )?;
-    let payload = workspace
-        .get(0..transmit.size)
-        .ok_or_else(|| PyValueError::new_err("Transmit size exceeds workspace capacity"))?;
-
-    PyTuple::new(
-        py,
-        &[dest_tuple.into_any(), PyBytes::new(py, payload).into_any()],
-    )
 }

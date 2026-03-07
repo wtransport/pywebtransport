@@ -6,7 +6,7 @@
 #
 --index-url https://pypi.org/simple
 
-black==26.1.0
+black==26.3.0
     # via pywebtransport (pyproject.toml)
 click==8.3.0
     # via black
@@ -16,11 +16,11 @@ flake8==7.3.0
     # via pywebtransport (pyproject.toml)
 iniconfig==2.1.0
     # via pytest
-isort==8.0.0
+isort==8.0.1
     # via pywebtransport (pyproject.toml)
 librt==0.7.3
     # via mypy
-maturin[patchelf]==1.12.4
+maturin[patchelf]==1.12.6
     # via pywebtransport (pyproject.toml)
 mccabe==0.7.0
     # via flake8
@@ -48,7 +48,7 @@ pluggy==1.6.0
     # via
     #   pytest
     #   pytest-cov
-protobuf==6.33.5
+protobuf==7.34.0
     # via pywebtransport (pyproject.toml)
 psutil==7.2.2
     # via pywebtransport (pyproject.toml)
@@ -75,7 +75,7 @@ pytest-cov==7.0.0
     # via pywebtransport (pyproject.toml)
 pytest-mock==3.15.1
     # via pywebtransport (pyproject.toml)
-pytokens==0.3.0
+pytokens==0.4.1
     # via black
 types-psutil==7.2.2.20260130
     # via pywebtransport (pyproject.toml)

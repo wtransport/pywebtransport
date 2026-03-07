@@ -8,8 +8,8 @@ from dataclasses import asdict, dataclass, field
 from types import TracebackType
 from typing import Any, Final, Self
 
-from pywebtransport._driver.driver import EndpointDriver, create_client
-from pywebtransport.client.utils import normalize_headers, parse_webtransport_url
+from pywebtransport._controller.controller import EndpointController
+from pywebtransport.client.utils import normalize_headers, parse_webtransport_url, resolve_host
 from pywebtransport.config import ClientConfig
 from pywebtransport.connection import WebTransportConnection
 from pywebtransport.events import EventEmitter
@@ -17,7 +17,7 @@ from pywebtransport.exceptions import ClientError, ConnectionError, TimeoutError
 from pywebtransport.manager.connection import ConnectionManager
 from pywebtransport.session import WebTransportSession
 from pywebtransport.types import URL, ConnectionState, EventType, Headers
-from pywebtransport.utils import format_duration, get_logger, get_timestamp, merge_headers, resolve_host
+from pywebtransport.utils import format_duration, get_logger, get_timestamp, merge_headers
 from pywebtransport.version import __version__
 
 __all__: list[str] = ["ClientDiagnostics", "ClientStats", "WebTransportClient"]
@@ -114,9 +114,8 @@ class WebTransportClient(EventEmitter):
         self._connection_manager = ConnectionManager(max_connections=self._config.max_connections)
         self._default_headers: Headers = []
 
-        self._driver: EndpointDriver | None = None
+        self._controller: EndpointController | None = None
         self._stats = ClientStats()
-        self._transport: asyncio.DatagramTransport | None = None
 
         _logger.info("WebTransport client initialized")
 
@@ -193,15 +192,15 @@ class WebTransportClient(EventEmitter):
 
                 conn_config = self._config.update(headers=normalized_headers)
 
-                if self._driver is None or self._transport is None:
+                if self._controller is None:
                     async with self._init_lock:
-                        if self._driver is None or self._transport is None:
-                            self._transport, self._driver = await create_client(
-                                config=self._config, loop=asyncio.get_running_loop()
+                        if self._controller is None:
+                            self._controller = EndpointController(
+                                config=self._config, is_client=True, loop=asyncio.get_running_loop()
                             )
 
-                assert self._driver is not None
-                assert self._transport is not None
+                if self._controller is None:
+                    raise ClientError(message="Failed to initialize endpoint controller")
 
                 resolved_ips = await resolve_host(host=host, port=port)
 
@@ -263,8 +262,8 @@ class WebTransportClient(EventEmitter):
         self._closed = True
         await self._connection_manager.shutdown()
 
-        if self._transport is not None and not self._transport.is_closing():
-            self._transport.close()
+        if self._controller is not None:
+            self._controller.close()
 
         _logger.info("WebTransport client closed.")
 
@@ -277,13 +276,14 @@ class WebTransportClient(EventEmitter):
         tasks: set[asyncio.Task[WebTransportConnection]] = set()
 
         async def _attempt(*, ip: str) -> WebTransportConnection:
-            assert self._driver is not None
-            assert self._transport is not None
+            if self._controller is None:
+                raise ClientError(message="Endpoint controller is not initialized")
+
             connection: WebTransportConnection | None = None
             try:
-                handle = self._driver.connect(remote_host=ip, remote_port=port, server_name=host)
+                handle = await self._controller.connect(remote_host=ip, remote_port=port, server_name=host)
                 connection = WebTransportConnection(
-                    config=conn_config, driver=self._driver, handle=handle, transport=self._transport, is_client=True
+                    config=conn_config, controller=self._controller, handle=handle, is_client=True
                 )
 
                 if connection.state != ConnectionState.CONNECTED:
@@ -330,7 +330,7 @@ class WebTransportClient(EventEmitter):
                     break
 
             while tasks and winner is None:
-                done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                done, pending = await asyncio.wait(fs=tasks, return_when=asyncio.FIRST_COMPLETED)
                 tasks = pending
                 for d in done:
                     try:

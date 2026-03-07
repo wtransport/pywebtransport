@@ -153,7 +153,7 @@ class StructuredDatagramTransport:
         header = struct.pack(self._HEADER_FORMAT, type_id)
         payload = self._serializer.serialize(obj=obj)
 
-        await session.send_datagram(data=[header, payload])
+        await session.send_datagram(data=b"".join((header, payload)))
 
     async def _on_datagram_received(self, *, event: Event) -> None:
         """Handle incoming raw datagrams and place them in the object queue."""

@@ -10,6 +10,7 @@ mod conversion;
 mod endpoint;
 mod error;
 mod types;
+mod waker;
 
 // FFI sub-module registration.
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -17,6 +18,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     certificate::register(m)?;
     constants::register(m)?;
     endpoint::register(m)?;
+    waker::register(m)?;
 
     Ok(())
 }

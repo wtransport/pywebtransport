@@ -159,18 +159,6 @@ fn test_handle_timeout_with_no_connections_returns_empty() {
     assert!(results.is_empty());
 }
 
-#[rstest]
-#[case(0)]
-#[case(999)]
-fn test_remote_address_with_invalid_handle_returns_none(#[case] handle_id: usize) {
-    let endpoint = create_test_client_endpoint();
-    let handle = ConnectionHandle(handle_id);
-
-    let addr = endpoint.remote_address(handle);
-
-    assert!(addr.is_none());
-}
-
 #[test]
 fn test_handle_user_event_with_invalid_handle_returns_none() {
     let mut endpoint = create_test_client_endpoint();
@@ -191,7 +179,7 @@ fn test_handle_datagram_without_connections_returns_consumed() {
 
     let event = endpoint.handle_datagram(data, remote, None, 0.0, now_instant);
 
-    assert!(matches!(event, EndpointEvent::Consumed));
+    assert!(matches!(event, TransportEvent::Consumed));
 }
 
 #[test]
@@ -210,13 +198,12 @@ fn test_connect_creates_connection_and_routes_correctly(#[case] host: &str, #[ca
     let remote = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), port);
     let now = Instant::now();
 
-    let Ok(handle) = endpoint.connect(remote, host, now) else {
+    let Ok((_, addr)) = endpoint.connect(remote, host, now) else {
         assert_eq!("ok", "err", "Failed to connect endpoint");
         unreachable!()
     };
-    let addr = endpoint.remote_address(handle);
 
-    assert!(addr.is_some_and(|a| a.port() == port));
+    assert_eq!(addr.port(), port);
 }
 
 #[test]
@@ -237,19 +224,19 @@ fn test_routing_with_active_connection() {
     let mut endpoint = create_test_client_endpoint();
     let remote = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 443);
     let now = Instant::now();
-    let Ok(handle) = endpoint.connect(remote, "localhost", now) else {
+    let Ok((handle, _)) = endpoint.connect(remote, "localhost", now) else {
         assert_eq!("ok", "err", "Failed to connect endpoint");
         unreachable!()
     };
     let event = ProtocolEvent::InternalCleanupResources;
 
-    let endpoint_event = endpoint.handle_user_event(handle, event, 0.0, now);
+    let transport_event = endpoint.handle_user_event(handle, event, 0.0, now);
     let earliest_timeout = endpoint.timeout();
     let future_time = now + Duration::from_secs(60);
     let timeout_results = endpoint.handle_timeout(future_time, 60.0);
     let transmit = endpoint.poll_transmit(now);
 
-    assert!(endpoint_event.is_none());
+    assert!(transport_event.is_none());
     assert!(earliest_timeout.is_some());
     assert!(timeout_results.is_empty() || !timeout_results.is_empty());
     assert!(transmit.is_none() || transmit.is_some());
@@ -290,17 +277,17 @@ fn test_handle_user_event_yielding_effects_collects_properly() {
     let mut endpoint = create_test_client_endpoint();
     let remote = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 443);
     let now = Instant::now();
-    let Ok(handle) = endpoint.connect(remote, "localhost", now) else {
+    let Ok((handle, _)) = endpoint.connect(remote, "localhost", now) else {
         assert_eq!("ok", "err", "Failed to connect endpoint");
         unreachable!()
     };
     let event = ProtocolEvent::UserGetConnectionDiagnostics { request_id: 100 };
 
-    let endpoint_event = endpoint.handle_user_event(handle, event, 0.0, now);
+    let transport_event = endpoint.handle_user_event(handle, event, 0.0, now);
 
     assert!(matches!(
-        endpoint_event,
-        Some(EndpointEvent::ConnectionEffects { .. })
+        transport_event,
+        Some(TransportEvent::ConnectionEffects { .. })
     ));
 }
 

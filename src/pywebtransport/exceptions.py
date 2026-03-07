@@ -19,6 +19,7 @@ __all__: list[str] = [
     "ProtocolError",
     "SerializationError",
     "ServerError",
+    "SessionClosedError",
     "SessionError",
     "StreamError",
     "TimeoutError",
@@ -357,6 +358,28 @@ class SessionError(WebTransportError):
         )
         self.session_id = session_id
         self.session_state = session_state
+
+
+class SessionClosedError(SessionError):
+    """Signal that the WebTransport session has been closed gracefully."""
+
+    def __init__(
+        self,
+        message: str = "The WebTransport session has been closed.",
+        *,
+        session_id: SessionId | None = None,
+        error_code: int | None = None,
+        session_state: SessionState | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        """Initialize the instance."""
+        super().__init__(
+            message=message,
+            session_id=session_id,
+            error_code=error_code if error_code is not None else ErrorCodes.NO_ERROR,
+            session_state=session_state,
+            details=details,
+        )
 
 
 class StreamError(WebTransportError):

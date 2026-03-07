@@ -85,15 +85,20 @@ class TestLatency:
                 echo_received = loop.create_future()
 
                 async def on_dgram(event: Event) -> None:
-                    if isinstance(event.data, dict):
-                        data = event.data.get("data")
-                        if data == payload:
-                            if not echo_received.done():
-                                echo_received.set_result(True)
+                    if isinstance(event.data, dict) and (data := event.data.get("data")):
+                        if data == payload and not echo_received.done():
+                            echo_received.set_result(True)
 
                 session.events.on(event_type=EventType.DATAGRAM_RECEIVED, handler=on_dgram)
-                await session.send_datagram(data=payload)
-                await echo_received
+
+                while not echo_received.done():
+                    await session.send_datagram(data=payload)
+                    try:
+                        async with asyncio.timeout(delay=0.1):
+                            await echo_received
+                    except asyncio.TimeoutError:
+                        pass
+
                 await session.close()
 
         for _ in range(WARMUP_ROUNDS):

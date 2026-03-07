@@ -8,8 +8,8 @@ import pytest
 from pywebtransport import (
     Event,
     ServerApp,
+    SessionClosedError,
     WebTransportClient,
-    WebTransportReceiveStream,
     WebTransportSession,
     WebTransportStream,
 )
@@ -26,22 +26,12 @@ async def test_bidirectional_stream_echo(
 
     @server_app.route(path="/echo")
     async def echo_handler(session: WebTransportSession, **kwargs: Any) -> None:
-        stream_queue: asyncio.Queue[WebTransportStream] = asyncio.Queue()
-
-        async def on_stream(event: Event) -> None:
-            if isinstance(event.data, dict):
-                s = event.data.get("stream")
-                if isinstance(s, WebTransportStream):
-                    stream_queue.put_nowait(s)
-
-        session.events.on(event_type=EventType.STREAM_OPENED, handler=on_stream)
-
         try:
-            stream = await stream_queue.get()
+            stream = await session.accept_bidirectional_stream()
             data = await stream.read()
             await stream.write(data=data)
             await stream.close()
-        except Exception:
+        except SessionClosedError:
             pass
         finally:
             server_handler_finished.set()
@@ -68,21 +58,28 @@ async def test_concurrent_streams_and_datagrams(
 
     @server_app.route(path="/concurrent")
     async def concurrent_handler(session: WebTransportSession, **kwargs: Any) -> None:
-        async def on_stream(event: Event) -> None:
-            if isinstance(event.data, dict):
-                s = event.data.get("stream")
-                if isinstance(s, WebTransportStream):
-                    data = await s.read()
-                    await s.write(data=data)
-                    await s.close()
+        async def handle_streams() -> None:
+            try:
+                while True:
+                    stream = await session.accept_bidirectional_stream()
 
-        session.events.on(event_type=EventType.STREAM_OPENED, handler=on_stream)
+                    async def process_stream(*, s: WebTransportStream) -> None:
+                        try:
+                            data = await s.read()
+                            await s.write(data=data)
+                            await s.close()
+                        except Exception:
+                            pass
+
+                    asyncio.create_task(coro=process_stream(s=stream))
+            except SessionClosedError:
+                pass
+
+        stream_task = asyncio.create_task(coro=handle_streams())
 
         async def on_datagram(event: Event) -> None:
-            if isinstance(event.data, dict):
-                d = event.data.get("data")
-                if d:
-                    await session.send_datagram(data=d)
+            if isinstance(event.data, dict) and (d := event.data.get("data")):
+                await session.send_datagram(data=d)
 
         session.events.on(event_type=EventType.DATAGRAM_RECEIVED, handler=on_datagram)
 
@@ -90,6 +87,8 @@ async def test_concurrent_streams_and_datagrams(
             await session.events.wait_for(event_type=EventType.SESSION_CLOSED)
         except Exception:
             pass
+        finally:
+            stream_task.cancel()
 
     async def _stream_worker(*, session: WebTransportSession, i: int) -> bool:
         stream = await session.create_bidirectional_stream()
@@ -141,11 +140,9 @@ async def test_datagram_echo(server: tuple[str, int], client: WebTransportClient
     @server_app.route(path="/datagram")
     async def datagram_echo_handler(session: WebTransportSession, **kwargs: Any) -> None:
         async def on_datagram(event: Event) -> None:
-            if isinstance(event.data, dict):
-                data = event.data.get("data")
-                if data:
-                    await session.send_datagram(data=data)
-                    server_handler_finished.set()
+            if isinstance(event.data, dict) and (data := event.data.get("data")):
+                await session.send_datagram(data=data)
+                server_handler_finished.set()
 
         session.events.on(event_type=EventType.DATAGRAM_RECEIVED, handler=on_datagram)
         try:
@@ -188,17 +185,11 @@ async def test_unidirectional_stream_to_server(
 
     @server_app.route(path="/uni")
     async def uni_handler(session: WebTransportSession, **kwargs: Any) -> None:
-        async def on_stream(event: Event) -> None:
-            if isinstance(event.data, dict):
-                s = event.data.get("stream")
-                if isinstance(s, WebTransportReceiveStream):
-                    data = await s.read()
-                    await data_queue.put(item=data)
-
-        session.events.on(event_type=EventType.STREAM_OPENED, handler=on_stream)
         try:
-            await session.events.wait_for(event_type=EventType.SESSION_CLOSED)
-        except Exception:
+            stream = await session.accept_unidirectional_stream()
+            data = await stream.read()
+            await data_queue.put(item=data)
+        except SessionClosedError:
             pass
 
     session = await client.connect(url=f"https://{host}:{port}/uni")

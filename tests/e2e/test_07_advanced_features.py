@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable
 from typing import Final
 
 from pywebtransport import ClientConfig, WebTransportClient
+from pywebtransport.types import EventType
 
 SERVER_HOST: Final[str] = "127.0.0.1"
 SERVER_PORT: Final[int] = 4433
@@ -41,7 +42,6 @@ async def test_session_statistics() -> bool:
             for i in range(5):
                 await session.send_datagram(data=f"Datagram {i + 1}".encode())
 
-            await asyncio.sleep(delay=0.1)
             final_stats = await session.diagnostics()
             logger.info("Final session statistics retrieved.")
 
@@ -172,7 +172,6 @@ async def test_datagram_statistics() -> bool:
                 await session.send_datagram(data=data)
                 total_bytes_sent += len(data)
 
-            await asyncio.sleep(delay=0.1)
             final_stats = await session.diagnostics()
 
             logger.info("Final session datagram statistics:")
@@ -221,25 +220,27 @@ async def test_performance_monitoring() -> bool:
 
 
 async def test_session_lifecycle_events() -> bool:
-    """Test the basic session lifecycle event flow."""
+    """Test the real event emission lifecycle using deterministic history verification."""
     logger.info("--- Test 07G: Session Lifecycle Events ---")
-    config = ClientConfig(verify_mode=ssl.CERT_NONE)
+    config = ClientConfig(verify_mode=ssl.CERT_NONE, max_event_history_size=50)
 
     try:
-        events_received = []
         async with WebTransportClient(config=config) as client:
             session = await client.connect(url=SERVER_URL)
-            events_received.append("connected")
-
             await session.close()
-            events_received.append("closed")
 
-        if events_received == ["connected", "closed"]:
-            logger.info("SUCCESS: Session lifecycle events occurred in the correct order.")
-            return True
-        else:
-            logger.error("FAILURE: Incorrect event order: %s", events_received)
-            return False
+            history = session.events.get_event_history()
+            event_types = [event.type for event in history]
+
+            expected_events = [EventType.SESSION_READY, EventType.SESSION_CLOSED]
+            filtered_events = [et for et in event_types if et in expected_events]
+
+            if filtered_events == expected_events:
+                logger.info("SUCCESS: Session lifecycle events occurred in the correct order.")
+                return True
+            else:
+                logger.error("FAILURE: Incorrect event order: %s", filtered_events)
+                return False
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)
         return False
