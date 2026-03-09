@@ -1,19 +1,7 @@
 //! Protocol constants and configuration defaults.
 
-/// HTTP/3 ALPN protocol identifier.
-pub const ALPN_H3: &str = "h3";
-
-/// User-Agent header key.
-pub const USER_AGENT_HEADER: &str = "user-agent";
-
-/// Default WebTransport network port.
-pub const WEBTRANSPORT_DEFAULT_PORT: u16 = 443;
-
-/// Default WebTransport URI scheme.
-pub const WEBTRANSPORT_SCHEME: &str = "https";
-
 /// Default ALPN protocol identifier list.
-pub const DEFAULT_ALPN_PROTOCOLS: &[&str] = &[ALPN_H3];
+pub const DEFAULT_ALPN_PROTOCOLS: &[&str] = &["h3"];
 
 /// Default server bind address.
 pub const DEFAULT_BIND_HOST: &str = "::";
@@ -134,6 +122,9 @@ pub const DEFAULT_WRITE_TIMEOUT: f64 = 30.0;
 
 /// Supported congestion control algorithm list.
 pub const SUPPORTED_CONGESTION_CONTROL_ALGORITHMS: &[&str] = &["bbr", "cubic", "reno"];
+
+/// WebTransport over HTTP/3 upgrade token.
+pub const UPGRADE_TOKEN_WEBTRANSPORT: &[u8] = b"webtransport";
 
 /// Error: AEAD limit reached.
 pub const ERR_AEAD_LIMIT_REACHED: u64 = 0xF;

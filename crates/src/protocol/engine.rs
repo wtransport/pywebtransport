@@ -8,7 +8,7 @@ use tracing::{debug, error, warn};
 use crate::common::constants::{
     ERR_H3_INTERNAL_ERROR, ERR_LIB_CONNECTION_STATE_ERROR, ERR_LIB_INTERNAL_ERROR,
     ERR_LIB_STREAM_STATE_ERROR, H3_STREAM_TYPE_CONTROL, H3_STREAM_TYPE_QPACK_DECODER,
-    H3_STREAM_TYPE_QPACK_ENCODER,
+    H3_STREAM_TYPE_QPACK_ENCODER, UPGRADE_TOKEN_WEBTRANSPORT,
 };
 use crate::common::error::WebTransportError;
 use crate::common::types::{
@@ -45,6 +45,9 @@ impl WebTransportEngine {
         stream_write_buffer_size: u64,
         flow_control_window_auto_scale: bool,
         max_capsule_size: u64,
+        max_pending_events_per_session: u64,
+        max_total_pending_events: u64,
+        early_event_ttl: f64,
     ) -> Result<Self, WebTransportError> {
         let connection = Connection::new(
             connection_id,
@@ -58,6 +61,9 @@ impl WebTransportEngine {
             stream_read_buffer_size,
             stream_write_buffer_size,
             flow_control_window_auto_scale,
+            max_pending_events_per_session,
+            max_total_pending_events,
+            early_event_ttl,
         );
 
         let h3 = H3::new(
@@ -159,7 +165,7 @@ impl WebTransportEngine {
             (Bytes::from_static(b":path"), Bytes::from(path)),
             (
                 Bytes::from_static(b":protocol"),
-                Bytes::from_static(b"webtransport"),
+                Bytes::from_static(UPGRADE_TOKEN_WEBTRANSPORT),
             ),
         ];
         let final_headers = merge_headers(&initial_headers, headers);
@@ -209,7 +215,7 @@ impl WebTransportEngine {
                     ));
                 }
                 ProtocolEvent::InternalCleanupEarlyEvents => {
-                    new_effects.extend(self.connection.prune_early_events(now, 10.0));
+                    new_effects.extend(self.connection.prune_early_events(now));
                 }
                 ProtocolEvent::InternalCleanupResources => {
                     new_effects.extend(self.connection.prune_resources());

@@ -16,6 +16,7 @@ from pywebtransport import (
     ClientError,
     ConnectionError,
     SessionClosedError,
+    StreamError,
     WebTransportClient,
     WebTransportSession,
 )
@@ -242,10 +243,13 @@ class DeviousBatonTest:
                         server_bidi_opened.set()
 
                         async def handle_server_bidi(s: Any) -> None:
-                            payload = await s.read_all()
-                            if payload:
-                                next_val = (payload[-1] + 1) % 256
-                                await s.write(data=create_payload(next_val), end_stream=True)
+                            try:
+                                payload = await s.read_all()
+                                if payload:
+                                    next_val = (payload[-1] + 1) % 256
+                                    await s.write(data=create_payload(next_val), end_stream=True)
+                            except StreamError:
+                                pass
 
                         asyncio.create_task(coro=handle_server_bidi(stream))
                 except SessionClosedError:

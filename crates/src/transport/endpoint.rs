@@ -113,6 +113,9 @@ impl TransportEndpoint {
             t_cfg.max_stream_write_buffer,
             t_cfg.flow_control_window_auto_scale,
             t_cfg.max_capsule_size,
+            t_cfg.max_pending_events_per_session,
+            t_cfg.max_total_pending_events,
+            t_cfg.pending_event_ttl.as_secs_f64(),
         )?;
 
         let gc_interval = if t_cfg.resource_cleanup_interval.is_zero() {
@@ -208,6 +211,9 @@ impl TransportEndpoint {
                             t_cfg.max_stream_write_buffer,
                             t_cfg.flow_control_window_auto_scale,
                             t_cfg.max_capsule_size,
+                            t_cfg.max_pending_events_per_session,
+                            t_cfg.max_total_pending_events,
+                            t_cfg.pending_event_ttl.as_secs_f64(),
                         ) else {
                             return TransportEvent::Consumed;
                         };

@@ -19,7 +19,7 @@ use crate::common::constants::{
     QPACK_DECODER_MAX_TABLE_CAPACITY, SETTINGS_ENABLE_CONNECT_PROTOCOL, SETTINGS_H3_DATAGRAM,
     SETTINGS_QPACK_BLOCKED_STREAMS, SETTINGS_QPACK_MAX_TABLE_CAPACITY,
     SETTINGS_WT_INITIAL_MAX_DATA, SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI,
-    SETTINGS_WT_INITIAL_MAX_STREAMS_UNI,
+    SETTINGS_WT_INITIAL_MAX_STREAMS_UNI, UPGRADE_TOKEN_WEBTRANSPORT,
 };
 use crate::common::error::WebTransportError;
 use crate::common::types::{Headers, StreamId};
@@ -636,7 +636,9 @@ impl H3 {
 
                         let mut is_wt = false;
                         for (k, v) in &raw_headers {
-                            if k.as_ref() == b":protocol" && v.as_ref() == b"webtransport" {
+                            if k.as_ref() == b":protocol"
+                                && v.as_ref() == UPGRADE_TOKEN_WEBTRANSPORT
+                            {
                                 is_wt = true;
                                 break;
                             }

@@ -69,6 +69,7 @@ class TestWebTransportConnection:
         conf.max_event_queue_size = 100
         conf.max_event_listeners = 100
         conf.max_event_history_size = 100
+        conf.close_timeout = 5.0
 
         return cast(MagicMock, conf)
 

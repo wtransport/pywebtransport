@@ -96,7 +96,10 @@ pub struct TransportConfig {
 impl Default for TransportConfig {
     fn default() -> Self {
         Self {
-            alpn_protocols: vec![constants::ALPN_H3.to_owned()],
+            alpn_protocols: constants::DEFAULT_ALPN_PROTOCOLS
+                .iter()
+                .map(|&s| s.to_owned())
+                .collect(),
             close_timeout: Duration::from_secs_f64(constants::DEFAULT_CLOSE_TIMEOUT),
             congestion_control_algorithm: constants::DEFAULT_CONGESTION_CONTROL_ALGORITHM
                 .to_owned(),

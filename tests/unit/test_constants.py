@@ -49,18 +49,12 @@ from pywebtransport.constants import (
     MAX_DATAGRAM_SIZE,
     MAX_PROTOCOL_STREAMS_LIMIT,
     SUPPORTED_CONGESTION_CONTROL_ALGORITHMS,
-    USER_AGENT_HEADER,
-    WEBTRANSPORT_DEFAULT_PORT,
-    WEBTRANSPORT_SCHEME,
 )
 
 
 class TestConstantsValues:
 
     def test_top_level_constants_values(self) -> None:
-        assert USER_AGENT_HEADER == "user-agent"
-        assert WEBTRANSPORT_SCHEME == "https"
-        assert WEBTRANSPORT_DEFAULT_PORT == 443
         assert MAX_DATAGRAM_SIZE == 65535
         assert MAX_PROTOCOL_STREAMS_LIMIT == 2**60
         assert DEFAULT_ALPN_PROTOCOLS == ["h3"]

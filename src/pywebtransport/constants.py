@@ -8,7 +8,6 @@ from typing import Final
 from pywebtransport import _wtransport
 
 __all__: list[str] = [
-    "ALPN_H3",
     "DEFAULT_ALPN_PROTOCOLS",
     "DEFAULT_BIND_HOST",
     "DEFAULT_CLIENT_MAX_CONNECTIONS",
@@ -53,15 +52,8 @@ __all__: list[str] = [
     "MAX_DATAGRAM_SIZE",
     "MAX_PROTOCOL_STREAMS_LIMIT",
     "SUPPORTED_CONGESTION_CONTROL_ALGORITHMS",
-    "USER_AGENT_HEADER",
-    "WEBTRANSPORT_DEFAULT_PORT",
-    "WEBTRANSPORT_SCHEME",
 ]
 
-ALPN_H3: Final[str] = _wtransport.ALPN_H3
-USER_AGENT_HEADER: Final[str] = _wtransport.USER_AGENT_HEADER
-WEBTRANSPORT_DEFAULT_PORT: Final[int] = _wtransport.WEBTRANSPORT_DEFAULT_PORT
-WEBTRANSPORT_SCHEME: Final[str] = _wtransport.WEBTRANSPORT_SCHEME
 DEFAULT_ALPN_PROTOCOLS: Final[list[str]] = _wtransport.DEFAULT_ALPN_PROTOCOLS
 DEFAULT_BIND_HOST: Final[str] = _wtransport.DEFAULT_BIND_HOST
 DEFAULT_CLIENT_MAX_CONNECTIONS: Final[int] = _wtransport.DEFAULT_CLIENT_MAX_CONNECTIONS

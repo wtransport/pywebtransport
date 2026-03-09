@@ -8,11 +8,9 @@ use super::*;
 
 #[test]
 fn test_alpn_list_integrity() {
-    let expected_protocol = ALPN_H3;
-
     let protocols = DEFAULT_ALPN_PROTOCOLS;
 
-    assert!(protocols.contains(&expected_protocol));
+    assert!(protocols.contains(&"h3"));
     assert!(!protocols.is_empty());
 }
 
@@ -165,17 +163,9 @@ fn test_max_stream_id_limit() {
 
 #[test]
 fn test_protocol_identification_values_are_valid() {
-    let expected_alpn = "h3";
-    let expected_scheme = "https";
-    let expected_user_agent_key = "user-agent";
+    let token = UPGRADE_TOKEN_WEBTRANSPORT;
 
-    let alpn = ALPN_H3;
-    let scheme = WEBTRANSPORT_SCHEME;
-    let ua_key = USER_AGENT_HEADER;
-
-    assert_eq!(alpn, expected_alpn);
-    assert_eq!(scheme, expected_scheme);
-    assert_eq!(ua_key, expected_user_agent_key);
+    assert_eq!(token, b"webtransport");
 }
 
 #[test]

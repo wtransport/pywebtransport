@@ -8,10 +8,6 @@ from pywebtransport.config import ClientConfig, ServerConfig
 
 ABI_VERSION: int
 
-ALPN_H3: str
-USER_AGENT_HEADER: str
-WEBTRANSPORT_DEFAULT_PORT: int
-WEBTRANSPORT_SCHEME: str
 DEFAULT_ALPN_PROTOCOLS: list[str]
 DEFAULT_BIND_HOST: str
 DEFAULT_CLIENT_MAX_CONNECTIONS: int

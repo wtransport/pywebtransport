@@ -6,13 +6,6 @@ use crate::common::constants;
 
 // Protocol constant and default configuration registration.
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add("ALPN_H3", constants::ALPN_H3)?;
-    m.add("USER_AGENT_HEADER", constants::USER_AGENT_HEADER)?;
-    m.add(
-        "WEBTRANSPORT_DEFAULT_PORT",
-        constants::WEBTRANSPORT_DEFAULT_PORT,
-    )?;
-    m.add("WEBTRANSPORT_SCHEME", constants::WEBTRANSPORT_SCHEME)?;
     m.add("DEFAULT_ALPN_PROTOCOLS", constants::DEFAULT_ALPN_PROTOCOLS)?;
     m.add("DEFAULT_BIND_HOST", constants::DEFAULT_BIND_HOST)?;
     m.add(

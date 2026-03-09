@@ -27,6 +27,9 @@ fn fixture_client_connection() -> Connection {
         1024,
         1024,
         true,
+        10,
+        100,
+        5.0,
     )
 }
 
@@ -64,6 +67,9 @@ fn fixture_server_connection() -> Connection {
         1024,
         1024,
         true,
+        10,
+        100,
+        5.0,
     )
 }
 
@@ -438,6 +444,26 @@ fn test_diagnose(fixture_server_connection: Connection) {
 }
 
 #[rstest]
+fn test_early_buffer_global_limit(mut fixture_server_connection: Connection) {
+    fixture_server_connection.state = ConnectionState::Connected;
+
+    for sid in 0..10 {
+        for _ in 0..10 {
+            let _unused =
+                fixture_server_connection.recv_datagram(sid, Bytes::from_static(b"d"), 1.0);
+        }
+    }
+
+    assert_eq!(fixture_server_connection.early_event_count, 100);
+
+    let effects =
+        fixture_server_connection.recv_stream_data(100, 4, Bytes::from_static(b"d"), false, 2.0);
+
+    assert_eq!(fixture_server_connection.early_event_count, 100);
+    assert!(!effects.is_empty());
+}
+
+#[rstest]
 fn test_fail_session_cleans_pending(mut fixture_client_connection: Connection) {
     fixture_client_connection.state = ConnectionState::Connected;
     let _unused =
@@ -589,7 +615,7 @@ fn test_prune_early_events_deduplicates_child_resets(mut fixture_server_connecti
         2.0,
     );
 
-    let effects = fixture_server_connection.prune_early_events(10.0, 5.0);
+    let effects = fixture_server_connection.prune_early_events(10.0);
 
     let resets = effects
         .iter()
@@ -613,7 +639,7 @@ fn test_prune_early_events_timeout(mut fixture_server_connection: Connection) {
     let _unused =
         fixture_server_connection.recv_stream_data(MOCK_SESSION_ID, stream_id, data, false, 1.0);
 
-    let effects = fixture_server_connection.prune_early_events(10.0, 5.0);
+    let effects = fixture_server_connection.prune_early_events(10.0);
 
     assert_eq!(fixture_server_connection.early_event_count, 0);
     assert!(fixture_server_connection.early_event_buffer.is_empty());
@@ -643,7 +669,7 @@ fn test_prune_early_events_timeout_unidirectional(mut fixture_server_connection:
     let _unused =
         fixture_server_connection.recv_stream_data(MOCK_SESSION_ID, stream_id, data, false, 1.0);
 
-    let effects = fixture_server_connection.prune_early_events(10.0, 5.0);
+    let effects = fixture_server_connection.prune_early_events(10.0);
 
     assert_eq!(fixture_server_connection.early_event_count, 0);
     assert!(fixture_server_connection.early_event_buffer.is_empty());
@@ -722,6 +748,22 @@ fn test_recv_connect_close_not_found(mut fixture_server_connection: Connection) 
 }
 
 #[rstest]
+fn test_recv_datagram_early_buffer_full(mut fixture_server_connection: Connection) {
+    fixture_server_connection.state = ConnectionState::Connected;
+
+    for _ in 0..10 {
+        let _unused =
+            fixture_server_connection.recv_datagram(MOCK_SESSION_ID, Bytes::from_static(b"d"), 1.0);
+    }
+
+    let effects =
+        fixture_server_connection.recv_datagram(MOCK_SESSION_ID, Bytes::from_static(b"drop"), 2.0);
+
+    assert!(effects.is_empty());
+    assert_eq!(fixture_server_connection.early_event_count, 10);
+}
+
+#[rstest]
 fn test_recv_goaway_drains_sessions(
     mut fixture_server_connection: Connection,
     fixture_headers: Headers,
@@ -797,6 +839,76 @@ fn test_recv_stop_sending_delegates(
 fn test_recv_stop_sending_not_found(mut fixture_server_connection: Connection) {
     let effects = fixture_server_connection.recv_stop_sending(999, 0);
     assert!(effects.is_empty());
+}
+
+#[rstest]
+fn test_recv_stream_data_early_buffer_full_bidi(mut fixture_server_connection: Connection) {
+    fixture_server_connection.state = ConnectionState::Connected;
+
+    for _ in 0..10 {
+        let _unused = fixture_server_connection.recv_stream_data(
+            MOCK_SESSION_ID,
+            4,
+            Bytes::from_static(b"data"),
+            false,
+            1.0,
+        );
+    }
+
+    let effects = fixture_server_connection.recv_stream_data(
+        MOCK_SESSION_ID,
+        4,
+        Bytes::from_static(b"drop"),
+        false,
+        2.0,
+    );
+
+    assert_eq!(fixture_server_connection.early_event_count, 10);
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::ResetQuicStream { stream_id: 4, .. }))
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::StopQuicStream { stream_id: 4, .. }))
+    );
+}
+
+#[rstest]
+fn test_recv_stream_data_early_buffer_full_uni(mut fixture_server_connection: Connection) {
+    fixture_server_connection.state = ConnectionState::Connected;
+
+    for _ in 0..10 {
+        let _unused = fixture_server_connection.recv_stream_data(
+            MOCK_SESSION_ID,
+            2,
+            Bytes::from_static(b"data"),
+            false,
+            1.0,
+        );
+    }
+
+    let effects = fixture_server_connection.recv_stream_data(
+        MOCK_SESSION_ID,
+        2,
+        Bytes::from_static(b"drop"),
+        false,
+        2.0,
+    );
+
+    assert_eq!(fixture_server_connection.early_event_count, 10);
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::ResetQuicStream { .. }))
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::StopQuicStream { stream_id: 2, .. }))
+    );
 }
 
 #[rstest]

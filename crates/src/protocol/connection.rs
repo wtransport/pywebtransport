@@ -9,7 +9,7 @@ use crate::common::constants::{
     DRAIN_WEBTRANSPORT_SESSION_TYPE, ERR_H3_REQUEST_REJECTED, ERR_LIB_CONNECTION_STATE_ERROR,
     ERR_LIB_INTERNAL_ERROR, ERR_LIB_SESSION_STATE_ERROR, ERR_WT_BUFFERED_STREAM_REJECTED,
     SETTINGS_WT_INITIAL_MAX_DATA, SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI,
-    SETTINGS_WT_INITIAL_MAX_STREAMS_UNI,
+    SETTINGS_WT_INITIAL_MAX_STREAMS_UNI, UPGRADE_TOKEN_WEBTRANSPORT,
 };
 use crate::common::types::{
     ConnectionId, ConnectionState, ErrorCode, ErrorSource, EventType, Headers, RequestId,
@@ -48,6 +48,9 @@ pub(crate) struct Connection {
     max_sessions: u64,
     stream_read_buffer_size: u64,
     stream_write_buffer_size: u64,
+    max_pending_events_per_session: u64,
+    max_total_pending_events: u64,
+    early_event_ttl: f64,
 }
 
 impl Connection {
@@ -68,6 +71,9 @@ impl Connection {
         stream_read_buffer_size: u64,
         stream_write_buffer_size: u64,
         flow_control_window_auto_scale: bool,
+        max_pending_events_per_session: u64,
+        max_total_pending_events: u64,
+        early_event_ttl: f64,
     ) -> Self {
         Self {
             id,
@@ -97,6 +103,9 @@ impl Connection {
             max_sessions,
             stream_read_buffer_size,
             stream_write_buffer_size,
+            max_pending_events_per_session,
+            max_total_pending_events,
+            early_event_ttl,
         }
     }
 
@@ -368,7 +377,7 @@ impl Connection {
     }
 
     // Early events pruning.
-    pub(crate) fn prune_early_events(&mut self, now: f64, timeout: f64) -> Vec<Effect> {
+    pub(crate) fn prune_early_events(&mut self, now: f64) -> Vec<Effect> {
         let mut effects = Vec::new();
         let mut streams_to_remove = Vec::new();
         let mut terminated_child_streams = HashSet::new();
@@ -381,7 +390,7 @@ impl Connection {
                 let mut valid_events = Vec::new();
 
                 for (timestamp, evt) in events.drain(..) {
-                    if now - timestamp < timeout {
+                    if now - timestamp < self.early_event_ttl {
                         valid_events.push((timestamp, evt));
                     } else {
                         self.early_event_count -= 1;
@@ -529,7 +538,11 @@ impl Connection {
         }
 
         let event = ProtocolEvent::TransportDatagramFrameReceived { data };
-        self.buffer_early_event(session_id, event, now);
+
+        if !self.buffer_early_event(session_id, event, now) {
+            warn!("Early event buffer full, dropping datagram for session {session_id}");
+        }
+
         Vec::new()
     }
 
@@ -718,7 +731,8 @@ impl Connection {
             let protocol = find_header_str(&headers, ":protocol");
 
             let method_connect = method.as_deref() == Some("CONNECT");
-            let proto_wt = protocol.as_deref() == Some("webtransport");
+            let proto_wt =
+                protocol.as_deref().map(str::as_bytes) == Some(UPGRADE_TOKEN_WEBTRANSPORT);
 
             if !method_connect || !proto_wt {
                 debug!("Rejecting non-WebTransport request on stream {stream_id}");
@@ -832,7 +846,31 @@ impl Connection {
             data,
             end_stream: fin,
         };
-        self.buffer_early_event(session_id, event, now);
+
+        if !self.buffer_early_event(session_id, event, now) {
+            warn!("Early event buffer full, rejecting stream {stream_id} for session {session_id}");
+
+            let mut effects = Vec::new();
+
+            if is_unidirectional_stream(stream_id) {
+                effects.push(Effect::StopQuicStream {
+                    stream_id,
+                    error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
+                });
+            } else {
+                effects.push(Effect::ResetQuicStream {
+                    stream_id,
+                    error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
+                });
+                effects.push(Effect::StopQuicStream {
+                    stream_id,
+                    error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
+                });
+            }
+
+            return effects;
+        }
+
         Vec::new()
     }
 
@@ -1072,13 +1110,27 @@ impl Connection {
         effects
     }
 
-    // Early protocol event buffering.
-    fn buffer_early_event(&mut self, session_id: SessionId, event: ProtocolEvent, now: f64) {
+    // Early protocol event buffering with capacity checks.
+    fn buffer_early_event(
+        &mut self,
+        session_id: SessionId,
+        event: ProtocolEvent,
+        now: f64,
+    ) -> bool {
+        if (self.early_event_count as u64) >= self.max_total_pending_events {
+            return false;
+        }
+
+        let session_buffer = self.early_event_buffer.entry(session_id).or_default();
+
+        if (session_buffer.len() as u64) >= self.max_pending_events_per_session {
+            return false;
+        }
+
+        session_buffer.push((now, event));
         self.early_event_count += 1;
-        self.early_event_buffer
-            .entry(session_id)
-            .or_default()
-            .push((now, event));
+
+        true
     }
 
     // Connection readiness state verification.

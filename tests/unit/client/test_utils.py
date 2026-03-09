@@ -33,8 +33,8 @@ class TestUrlUtils:
     @pytest.mark.parametrize(
         argnames="url, error_msg",
         argvalues=[
-            ("ftp://example.com", "Unsupported scheme 'ftp'"),
-            ("http://example.com", "Unsupported scheme 'http'"),
+            ("ftp://example.com", "Unsupported scheme 'ftp'. Must be 'https'"),
+            ("http://example.com", "Unsupported scheme 'http'. Must be 'https'"),
             ("https://", "Missing hostname in URL"),
         ],
     )

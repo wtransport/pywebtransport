@@ -182,7 +182,7 @@ class WebTransportConnection:
             self._controller.send_user_event(handle=self._handle, event=event)
 
             try:
-                async with asyncio.timeout(delay=5.0):
+                async with asyncio.timeout(delay=self._config.close_timeout):
                     await future
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 pass
@@ -247,7 +247,7 @@ class WebTransportConnection:
         self._controller.send_user_event(handle=self._handle, event=event)
 
         try:
-            async with asyncio.timeout(delay=5.0):
+            async with asyncio.timeout(delay=self._config.close_timeout):
                 await future
         except asyncio.TimeoutError:
             _logger.warning("Timeout waiting for graceful shutdown GOAWAY confirmation.")

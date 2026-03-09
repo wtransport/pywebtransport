@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(No planned changes for the next release yet.)_
 
+## [0.15.1] - 2026-03-09
+
+This release focuses on protocol engine robustness, configuration determinism, and CI strictness. It resolves memory exhaustion vulnerabilities by bounding early event buffers, rectifies hardcoded timeout regressions by externalizing lifecycle configurations across the transport stack, prunes obsolete protocol constants to improve maintainability, and enforces strict zero-regression testing baselines.
+
+### Changed
+
+- **Timeout Externalization**: Replaced hardcoded timing constants across the transport layer with configuration-driven properties, enabling dynamic lifecycle management for early event time-to-live and connection closure operations.
+- **Protocol Token Isolation**: Extracted the literal `b"webtransport"` byte slice into a dedicated `UPGRADE_TOKEN_WEBTRANSPORT` constant to safely isolate future IETF protocol draft variations.
+- **Coverage Enforcement**: Locked Codecov project and patch targets to an absolute 100% baseline with 0% tolerance to permanently secure continuous integration standards against regressions.
+
+### Removed
+
+- **Constant Pruning**: Eliminated unused application-layer HTTP constants from the core transport module to minimize the internal API surface.
+
+### Fixed
+
+- **Buffer Capacity Enforcement**: Implemented `max_pending_events_per_session` and `max_total_pending_events` limits within the connection state machine. Overflowing datagrams are safely discarded, and excess streams are explicitly rejected with `ERR_WT_BUFFERED_STREAM_REJECTED` to mitigate memory exhaustion vulnerabilities.
+
 ## [0.15.0] - 2026-03-07
 
 This release executes an architectural transition by migrating L4 socket multiplexing and L7 I/O operations from the Python `asyncio` event loop into an autonomous threaded reactor within the Rust core. It establishes a lock-free Inter-Process Communication (IPC) boundary, significantly mitigating Global Interpreter Lock (GIL) contention by offloading cryptography and protocol state machine execution to the background thread. The high-level Python API is concurrently updated to utilize asynchronous generators for stream ingestion.
@@ -831,7 +849,8 @@ This is a major release focused on enhancing runtime safety and modernizing the 
 - cryptography (>=45.0.4,<46.0.0) for SSL/TLS operations
 - typing-extensions (>=4.14.0,<5.0.0) for Python <3.10 support
 
-[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.15.1...HEAD
+[0.15.1]: https://github.com/wtransport/pywebtransport/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/wtransport/pywebtransport/compare/v0.14.1...v0.15.0
 [0.14.1]: https://github.com/wtransport/pywebtransport/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/wtransport/pywebtransport/compare/v0.13.1...v0.14.0
