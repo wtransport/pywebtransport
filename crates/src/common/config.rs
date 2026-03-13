@@ -171,6 +171,9 @@ pub struct RustClientConfig {
     /// Initial retry delay.
     pub retry_delay: Duration,
 
+    /// Supported WebTransport application subprotocols.
+    pub subprotocols: Option<Vec<String>>,
+
     /// Core transport configuration.
     pub transport: TransportConfig,
 
@@ -196,6 +199,7 @@ impl Default for RustClientConfig {
             max_retry_delay: Duration::from_secs_f64(constants::DEFAULT_MAX_RETRY_DELAY),
             retry_backoff: constants::DEFAULT_RETRY_BACKOFF,
             retry_delay: Duration::from_secs_f64(constants::DEFAULT_RETRY_DELAY),
+            subprotocols: None,
             transport: TransportConfig::default(),
             user_agent: None,
             verify_server_certificate: true,

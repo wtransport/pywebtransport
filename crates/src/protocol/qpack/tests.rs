@@ -26,10 +26,9 @@ fn test_decoder_blocking_and_resumption_logic() {
         unreachable!("Encoding stream 1 failed");
     };
 
-    let _unused_res = match decoder.feed_encoder(&enc_data_1) {
-        Ok(v) => v,
-        Err(ref e) => unreachable!("Feed encoder stream 1 failed: {e:?}"),
-    };
+    if let Err(e) = decoder.feed_encoder(&enc_data_1) {
+        unreachable!("Feed encoder stream 1 failed: {e:?}");
+    }
 
     let headers_2 = vec![(Bytes::from("x-dynamic"), Bytes::from("value-1"))];
     let Ok((header_block_2, enc_data_2)) = encoder.encode(stream_id_2, &headers_2) else {
@@ -205,10 +204,9 @@ fn test_round_trip_simple_flow() {
         unreachable!("Encoding failed");
     };
 
-    let _unused_unblocked = match decoder.feed_encoder(&enc_data) {
-        Ok(v) => v,
-        Err(ref e) => unreachable!("Feed encoder failed: {e:?}"),
-    };
+    if let Err(e) = decoder.feed_encoder(&enc_data) {
+        unreachable!("Feed encoder failed: {e:?}");
+    }
 
     let Ok((dec_instructions, status)) =
         decoder.decode_header(stream_id, Bytes::from(header_block))

@@ -56,6 +56,34 @@ fn test_can_send_on_stream_permission_check(
 }
 
 #[test]
+fn test_encode_subprotocol_list_empty() {
+    let protocols: Vec<String> = vec![];
+    let result = encode_subprotocol_list(&protocols);
+    assert_eq!(result, Bytes::new());
+}
+
+#[test]
+fn test_encode_subprotocol_list_escapes_and_filters() {
+    let protocols = vec![
+        "h3".to_owned(),
+        "my\\proto\"".to_owned(),
+        "invalid\n\r".to_owned(),
+    ];
+    let result = encode_subprotocol_list(&protocols);
+    assert_eq!(
+        result,
+        Bytes::from_static(b"\"h3\", \"my\\\\proto\\\"\", \"invalid\"")
+    );
+}
+
+#[test]
+fn test_encode_subprotocol_list_multiple() {
+    let protocols = vec!["p1".to_owned(), "p2".to_owned(), "p3".to_owned()];
+    let result = encode_subprotocol_list(&protocols);
+    assert_eq!(result, Bytes::from_static(b"\"p1\", \"p2\", \"p3\""));
+}
+
+#[test]
 fn test_find_header_case_insensitive_match() {
     let headers = vec![
         (Bytes::from("Content-Type"), Bytes::from("application/json")),
@@ -238,6 +266,48 @@ fn test_next_stream_limit_calculation(
     let result = next_stream_limit(current, closed, window, auto_scale, force);
 
     assert_eq!(result, expected);
+}
+
+#[test]
+fn test_parse_subprotocol_list_invalid() {
+    let unclosed = b"\"h3";
+    let bad_escape = b"\"h3\\\"";
+    let invalid_char = b"\"\x01\"";
+    let no_quotes = b"h3";
+
+    assert_eq!(parse_subprotocol_list(unclosed), None);
+    assert_eq!(parse_subprotocol_list(bad_escape), None);
+    assert_eq!(parse_subprotocol_list(invalid_char), None);
+    assert_eq!(parse_subprotocol_list(no_quotes), None);
+}
+
+#[test]
+fn test_parse_subprotocol_list_valid() {
+    let single = b"\"h3\"";
+    let multiple = b"\"h3\", \"p1\"";
+    let multiple_spaces = b"  \"h3\"  , \t \"p1\"  ";
+    let escaped = b"\"my\\\\proto\\\"\"";
+
+    assert_eq!(parse_subprotocol_list(single), Some(vec!["h3".to_owned()]));
+    assert_eq!(
+        parse_subprotocol_list(multiple),
+        Some(vec!["h3".to_owned(), "p1".to_owned()])
+    );
+    assert_eq!(
+        parse_subprotocol_list(multiple_spaces),
+        Some(vec!["h3".to_owned(), "p1".to_owned()])
+    );
+    assert_eq!(
+        parse_subprotocol_list(escaped),
+        Some(vec!["my\\proto\"".to_owned()])
+    );
+}
+
+#[test]
+fn test_parse_subprotocol_string_logic() {
+    assert_eq!(parse_subprotocol_string(b"\"h3\""), Some("h3".to_owned()));
+    assert_eq!(parse_subprotocol_string(b"\"h3\", \"p1\""), None);
+    assert_eq!(parse_subprotocol_string(b"invalid"), None);
 }
 
 #[test]

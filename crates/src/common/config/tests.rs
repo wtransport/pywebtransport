@@ -44,6 +44,7 @@ fn test_rust_client_config_default_values_sanity_check_success() {
     assert!(client_config.ca_certs.is_none());
     assert!(client_config.certfile.is_none());
     assert!(client_config.keyfile.is_none());
+    assert!(client_config.subprotocols.is_none());
     assert!(!client_config.connection_attempt_delay.is_zero());
     assert!(client_config.transport.max_connections > 0);
 }
@@ -53,9 +54,11 @@ fn test_rust_client_config_modification_success() {
     let custom_path = PathBuf::from("/tmp/cert.pem");
     let custom_header = ("User-Agent".to_owned(), "TestClient/1.0".to_owned());
     let custom_delay = Duration::from_millis(150);
+    let custom_subprotocols = Some(vec!["webtransport".to_owned()]);
     let mut config = RustClientConfig {
         certfile: Some(custom_path.clone()),
         connection_attempt_delay: custom_delay,
+        subprotocols: custom_subprotocols.clone(),
         ..Default::default()
     };
 
@@ -66,6 +69,7 @@ fn test_rust_client_config_modification_success() {
     assert_eq!(config.connection_attempt_delay, custom_delay);
     assert_eq!(config.headers.len(), 1);
     assert_eq!(config.headers.first(), Some(&custom_header));
+    assert_eq!(config.subprotocols, custom_subprotocols);
     assert_eq!(config.transport.max_datagram_size, 1500);
 }
 

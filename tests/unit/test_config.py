@@ -52,6 +52,7 @@ class TestClientConfig:
         assert config.max_capsule_size == DEFAULT_MAX_CAPSULE_SIZE
         assert config.alpn_protocols == DEFAULT_ALPN_PROTOCOLS
         assert config.transport_streams_cap == DEFAULT_TRANSPORT_STREAMS_CAP
+        assert config.subprotocols is None
 
     def test_from_dict_method(self) -> None:
         config_dict = {"max_connection_retries": 5, "unknown_field": "should_be_ignored"}
@@ -102,6 +103,11 @@ class TestClientConfig:
 
         config.validate()
 
+    def test_subprotocols_initialization_success(self) -> None:
+        config = ClientConfig(subprotocols=["h3", "dummy"])
+        config.validate()
+        assert config.subprotocols == ["h3", "dummy"]
+
     def test_to_dict_method(self) -> None:
         config = ClientConfig(verify_mode=ssl.CERT_OPTIONAL)
 
@@ -149,6 +155,8 @@ class TestClientConfig:
             ({"max_stream_write_buffer": 0}, "must be positive"),
             ({"max_total_pending_events": 0}, "must be positive"),
             ({"pending_event_ttl": 0}, "Timeout must be positive"),
+            ({"subprotocols": "not_a_list"}, "must be a list of strings"),
+            ({"subprotocols": [1, 2]}, "must be a list of strings"),
             ({"transport_streams_cap": 0}, "must be between 1 and"),
             ({"transport_streams_cap": MAX_PROTOCOL_STREAMS_LIMIT + 1}, "must be between 1 and"),
             ({"verify_mode": "INVALID"}, "unknown SSL verify mode"),

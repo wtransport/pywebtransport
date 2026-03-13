@@ -6,8 +6,8 @@ use bytes::{BufMut, Bytes};
 use tracing::{debug, error, warn};
 
 use crate::common::constants::{
-    ERR_LIB_STREAM_STATE_ERROR, ERR_WT_APPLICATION_ERROR_FIRST, ERR_WT_APPLICATION_ERROR_LAST,
-    ERR_WT_FLOW_CONTROL_ERROR, WT_DATA_BLOCKED_TYPE,
+    ERR_LIB_STREAM_STATE_ERROR, ERR_WT_APPLICATION_ERROR_FIRST, ERR_WT_FLOW_CONTROL_ERROR,
+    WT_DATA_BLOCKED_TYPE,
 };
 use crate::common::types::{
     ErrorCode, ErrorSource, EventType, RequestId, SessionId, StreamDirection, StreamId, StreamState,
@@ -339,18 +339,7 @@ impl Stream {
 
         debug!("Stream {} reset by peer with code {}", self.id, error_code);
 
-        let mut app_error_code = error_code;
-        if (ERR_WT_APPLICATION_ERROR_FIRST..=ERR_WT_APPLICATION_ERROR_LAST).contains(&error_code) {
-            match http_to_wt_error(error_code) {
-                Some(code) => app_error_code = code,
-                None => {
-                    warn!(
-                        "Received reserved H3 error code {:x} on stream {}, using as-is.",
-                        error_code, self.id
-                    );
-                }
-            }
-        }
+        let app_error_code = http_to_wt_error(error_code);
 
         effects.push(Effect::EmitStreamEvent {
             stream_id: self.id,
@@ -358,33 +347,33 @@ impl Stream {
             session_id: None,
             direction: None,
             is_peer_initiated: None,
-            error_code: Some(app_error_code),
+            error_code: app_error_code,
         });
 
         while let Some((req_id, _)) = self.pending_read_requests.pop_front() {
             effects.push(Effect::NotifyRequestFailed {
                 request_id: req_id,
                 source: ErrorSource::Stream,
-                error_code: Some(app_error_code),
+                error_code: app_error_code,
                 reason: format!("Stream {} reset by peer", self.id),
             });
         }
 
         match self.state {
             StreamState::Open | StreamState::HalfClosedLocal => {
-                self.close_code = Some(app_error_code);
+                self.close_code = app_error_code;
                 self.state = StreamState::ResetReceived;
             }
             StreamState::HalfClosedRemote | StreamState::ResetSent => {
                 self.closed_at = Some(now);
-                self.close_code = Some(app_error_code);
+                self.close_code = app_error_code;
                 self.state = StreamState::Closed;
 
                 while let Some((_, req_id, _)) = self.write_buffer.pop_front() {
                     effects.push(Effect::NotifyRequestFailed {
                         request_id: req_id,
                         source: ErrorSource::Stream,
-                        error_code: Some(app_error_code),
+                        error_code: app_error_code,
                         reason: format!("Stream {} fully closed after reset", self.id),
                     });
                 }
@@ -418,18 +407,7 @@ impl Stream {
             self.id, error_code
         );
 
-        let mut app_error_code = error_code;
-        if (ERR_WT_APPLICATION_ERROR_FIRST..=ERR_WT_APPLICATION_ERROR_LAST).contains(&error_code) {
-            match http_to_wt_error(error_code) {
-                Some(code) => app_error_code = code,
-                None => {
-                    warn!(
-                        "Received reserved H3 error code {:x} on stream {}, using as-is.",
-                        error_code, self.id
-                    );
-                }
-            }
-        }
+        let app_error_code = http_to_wt_error(error_code);
 
         effects.push(Effect::EmitStreamEvent {
             stream_id: self.id,
@@ -437,7 +415,7 @@ impl Stream {
             session_id: None,
             direction: None,
             is_peer_initiated: None,
-            error_code: Some(app_error_code),
+            error_code: app_error_code,
         });
 
         effects
@@ -475,7 +453,8 @@ impl Stream {
         self.closed_at = Some(now);
         self.close_code = Some(error_code);
 
-        let http_error_code = wt_to_http_error(error_code).unwrap_or(error_code);
+        let http_error_code =
+            wt_to_http_error(error_code).unwrap_or(ERR_WT_APPLICATION_ERROR_FIRST);
 
         effects.push(Effect::ResetQuicStream {
             stream_id: self.id,
@@ -555,7 +534,8 @@ impl Stream {
         self.closed_at = Some(now);
         self.close_code = Some(error_code);
 
-        let http_error_code = wt_to_http_error(error_code).unwrap_or(error_code);
+        let http_error_code =
+            wt_to_http_error(error_code).unwrap_or(ERR_WT_APPLICATION_ERROR_FIRST);
 
         effects.push(Effect::StopQuicStream {
             stream_id: self.id,

@@ -38,6 +38,27 @@ pub(super) fn can_send_on_stream(stream_id: StreamId, is_client: bool) -> bool {
         || (!is_client && is_server_initiated_stream(stream_id))
 }
 
+// Encodes a list of subprotocols into a Structured Fields String List.
+pub(super) fn encode_subprotocol_list(protocols: &[String]) -> Bytes {
+    let mut buf = BytesMut::new();
+    for (i, p) in protocols.iter().enumerate() {
+        if i > 0 {
+            buf.put_slice(b", ");
+        }
+        buf.put_u8(b'"');
+        for &b in p.as_bytes() {
+            if b == b'\\' || b == b'"' {
+                buf.put_u8(b'\\');
+            }
+            if (0x20..=0x7E).contains(&b) {
+                buf.put_u8(b);
+            }
+        }
+        buf.put_u8(b'"');
+    }
+    buf.freeze()
+}
+
 // Case-insensitive header search.
 pub(super) fn find_header(headers: &Headers, key: &str) -> Option<Bytes> {
     let key_bytes = key.as_bytes();
@@ -147,6 +168,58 @@ pub(super) fn next_stream_limit(
     } else {
         None
     }
+}
+
+// Parses a Structured Fields String List securely.
+pub(super) fn parse_subprotocol_list(header: &[u8]) -> Option<Vec<String>> {
+    let mut result = Vec::new();
+    let mut current = String::new();
+    let mut in_string = false;
+    let mut escaping = false;
+    let mut has_parsed_item = false;
+
+    for &b in header {
+        if escaping {
+            match b {
+                b'"' | b'\\' => {
+                    current.push(b as char);
+                    escaping = false;
+                }
+                _ => return None,
+            }
+        } else if in_string {
+            match b {
+                b'\\' => escaping = true,
+                b'"' => {
+                    in_string = false;
+                    result.push(current.clone());
+                    current.clear();
+                    has_parsed_item = true;
+                }
+                0x20..=0x7E => current.push(b as char),
+                _ => return None,
+            }
+        } else {
+            match b {
+                b' ' | b'\t' => {}
+                b'"' if !has_parsed_item => in_string = true,
+                b',' if has_parsed_item => has_parsed_item = false,
+                _ => return None,
+            }
+        }
+    }
+
+    if in_string || escaping || (!has_parsed_item && !result.is_empty()) || result.is_empty() {
+        return None;
+    }
+
+    Some(result)
+}
+
+// Parses a single Structured Fields String securely.
+pub(super) fn parse_subprotocol_string(header: &[u8]) -> Option<String> {
+    let mut list = parse_subprotocol_list(header)?;
+    if list.len() == 1 { list.pop() } else { None }
 }
 
 // Variable-length integer decoding.

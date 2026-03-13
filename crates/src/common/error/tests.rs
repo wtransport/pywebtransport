@@ -42,6 +42,16 @@ fn test_protocol_error_formatting() {
 }
 
 #[test]
+fn test_stream_error_formatting() {
+    let error = WebTransportError::Stream(12, Some(256), "invalid stream data".to_owned());
+
+    assert_eq!(
+        error.to_string(),
+        "Stream error: invalid stream data (stream: 12, code: Some(256))"
+    );
+}
+
+#[test]
 fn test_unknown_error_formatting() {
     let error = WebTransportError::Unknown(Some(999), "mystery".to_owned());
 

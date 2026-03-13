@@ -11,13 +11,13 @@ use crate::common::constants::{
     ERR_H3_FRAME_ERROR, ERR_H3_FRAME_UNEXPECTED, ERR_H3_ID_ERROR, ERR_H3_INTERNAL_ERROR,
     ERR_H3_MESSAGE_ERROR, ERR_H3_MISSING_SETTINGS, ERR_H3_SETTINGS_ERROR,
     ERR_H3_STREAM_CREATION_ERROR, ERR_LIB_INTERNAL_ERROR, ERR_QPACK_DECOMPRESSION_FAILED,
-    ERR_QPACK_ENCODER_STREAM_ERROR, H3_FRAME_TYPE_CANCEL_PUSH, H3_FRAME_TYPE_DATA,
-    H3_FRAME_TYPE_GOAWAY, H3_FRAME_TYPE_HEADERS, H3_FRAME_TYPE_MAX_PUSH_ID,
+    ERR_QPACK_ENCODER_STREAM_ERROR, ERR_WT_REQUIREMENTS_NOT_MET, H3_FRAME_TYPE_CANCEL_PUSH,
+    H3_FRAME_TYPE_DATA, H3_FRAME_TYPE_GOAWAY, H3_FRAME_TYPE_HEADERS, H3_FRAME_TYPE_MAX_PUSH_ID,
     H3_FRAME_TYPE_PUSH_PROMISE, H3_FRAME_TYPE_SETTINGS, H3_FRAME_TYPE_WEBTRANSPORT_STREAM,
     H3_STREAM_TYPE_CONTROL, H3_STREAM_TYPE_PUSH, H3_STREAM_TYPE_QPACK_DECODER,
     H3_STREAM_TYPE_QPACK_ENCODER, H3_STREAM_TYPE_WEBTRANSPORT, QPACK_DECODER_MAX_BLOCKED_STREAMS,
     QPACK_DECODER_MAX_TABLE_CAPACITY, SETTINGS_ENABLE_CONNECT_PROTOCOL, SETTINGS_H3_DATAGRAM,
-    SETTINGS_QPACK_BLOCKED_STREAMS, SETTINGS_QPACK_MAX_TABLE_CAPACITY,
+    SETTINGS_QPACK_BLOCKED_STREAMS, SETTINGS_QPACK_MAX_TABLE_CAPACITY, SETTINGS_WT_ENABLED,
     SETTINGS_WT_INITIAL_MAX_DATA, SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI,
     SETTINGS_WT_INITIAL_MAX_STREAMS_UNI, UPGRADE_TOKEN_WEBTRANSPORT,
 };
@@ -130,6 +130,7 @@ impl H3 {
             SETTINGS_QPACK_MAX_TABLE_CAPACITY,
             u64::from(self.max_table_capacity),
         );
+        settings.insert(SETTINGS_WT_ENABLED, 1);
         settings.insert(SETTINGS_WT_INITIAL_MAX_DATA, self.config.initial_max_data);
         settings.insert(
             SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI,
@@ -357,20 +358,31 @@ impl H3 {
                 h3_events.extend(new_evts);
                 effects.extend(new_fx);
             }
-            Err(e) => {
-                let (code, reason) = match e {
-                    WebTransportError::Configuration(c, msg)
-                    | WebTransportError::Connection(c, msg)
-                    | WebTransportError::Protocol(c, msg)
-                    | WebTransportError::Unknown(c, msg) => {
-                        (c.unwrap_or(ERR_H3_INTERNAL_ERROR), msg)
-                    }
-                };
-                effects.push(Effect::CloseQuicConnection {
-                    error_code: code,
-                    reason: Some(reason),
-                });
-            }
+            Err(e) => match e {
+                WebTransportError::Stream(stream_id, code, reason) => {
+                    let err_code = code.unwrap_or(ERR_H3_INTERNAL_ERROR);
+                    debug!("Stream {} reset due to local error: {}", stream_id, reason);
+                    effects.push(Effect::ResetQuicStream {
+                        stream_id,
+                        error_code: err_code,
+                    });
+                    effects.push(Effect::StopQuicStream {
+                        stream_id,
+                        error_code: err_code,
+                    });
+                    self.partial_frames.remove(&stream_id);
+                }
+                WebTransportError::Configuration(c, msg)
+                | WebTransportError::Connection(c, msg)
+                | WebTransportError::Protocol(c, msg)
+                | WebTransportError::Unknown(c, msg) => {
+                    let code = c.unwrap_or(ERR_H3_INTERNAL_ERROR);
+                    effects.push(Effect::CloseQuicConnection {
+                        error_code: code,
+                        reason: Some(msg),
+                    });
+                }
+            },
         }
 
         (h3_events, effects)
@@ -483,7 +495,7 @@ impl H3 {
     fn handle_control_frame(
         &mut self,
         frame_type: u64,
-        frame_data: &Bytes,
+        frame_data: &[u8],
         connection: &Connection,
     ) -> Result<(Vec<ProtocolEvent>, Vec<Effect>), WebTransportError> {
         let mut effects = Vec::new();
@@ -593,6 +605,13 @@ impl H3 {
                     let p = self.ensure_partial_frame(stream_id);
                     if p.headers_processed {
                         if !payload.is_empty() {
+                            if !connection.sessions.contains_key(&stream_id) {
+                                return Err(WebTransportError::Stream(
+                                    stream_id,
+                                    Some(ERR_H3_MESSAGE_ERROR),
+                                    "Data received on closed CONNECT stream".to_owned(),
+                                ));
+                            }
                             p.capsule_buffer.extend_from_slice(&payload);
                         }
                         if !p.capsule_buffer.is_empty() {
@@ -618,7 +637,8 @@ impl H3 {
             H3_FRAME_TYPE_HEADERS => {
                 let p_check = self.ensure_partial_frame(stream_id);
                 if p_check.headers_processed {
-                    return Err(WebTransportError::Protocol(
+                    return Err(WebTransportError::Stream(
+                        stream_id,
                         Some(ERR_H3_FRAME_UNEXPECTED),
                         "HEADERS frame received after initial headers".to_owned(),
                     ));
@@ -651,9 +671,9 @@ impl H3 {
                         p_update.blocked = false;
 
                         if self.is_client {
-                            validate_response_headers(&raw_headers)?;
+                            validate_response_headers(stream_id, &raw_headers)?;
                         } else {
-                            validate_request_headers(&raw_headers)?;
+                            validate_request_headers(stream_id, &raw_headers)?;
                         }
 
                         self.ensure_partial_frame(stream_id).headers_processed = true;
@@ -744,8 +764,9 @@ impl H3 {
             };
 
             if capsule_length > max_size {
-                return Err(WebTransportError::Protocol(
-                    Some(ERR_H3_EXCESSIVE_LOAD),
+                return Err(WebTransportError::Stream(
+                    stream_id,
+                    Some(ERR_H3_MESSAGE_ERROR),
                     format!("Capsule length {capsule_length} exceeds limit"),
                 ));
             }
@@ -756,31 +777,35 @@ impl H3 {
             }
 
             let start_val = usize::try_from(buf.position()).map_err(|e| {
-                WebTransportError::Protocol(
-                    Some(ERR_H3_EXCESSIVE_LOAD),
+                WebTransportError::Stream(
+                    stream_id,
+                    Some(ERR_H3_MESSAGE_ERROR),
                     format!("Capsule start position exceeds memory limit: {e}"),
                 )
             })?;
 
             let end_val = start_val
                 + usize::try_from(capsule_length).map_err(|e| {
-                    WebTransportError::Protocol(
-                        Some(ERR_H3_EXCESSIVE_LOAD),
+                    WebTransportError::Stream(
+                        stream_id,
+                        Some(ERR_H3_MESSAGE_ERROR),
                         format!("Capsule length exceeds memory limit: {e}"),
                     )
                 })?;
 
             if end_val > buf.get_ref().len() {
-                return Err(WebTransportError::Protocol(
-                    Some(ERR_H3_INTERNAL_ERROR),
+                return Err(WebTransportError::Stream(
+                    stream_id,
+                    Some(ERR_H3_MESSAGE_ERROR),
                     "Buffer underflow reading capsule".to_owned(),
                 ));
             }
 
             let capsule_value =
                 Bytes::copy_from_slice(buf.get_ref().get(start_val..end_val).ok_or(
-                    WebTransportError::Protocol(
-                        Some(ERR_H3_INTERNAL_ERROR),
+                    WebTransportError::Stream(
+                        stream_id,
+                        Some(ERR_H3_MESSAGE_ERROR),
                         "Buffer underflow reading capsule".to_owned(),
                     ),
                 )?);
@@ -1050,8 +1075,8 @@ impl H3 {
     }
 
     // Datagram frame parsing.
-    fn recv_datagram(data: &Bytes) -> Result<Vec<ProtocolEvent>, WebTransportError> {
-        let mut buf = Cursor::new(&data[..]);
+    fn recv_datagram(data: &[u8]) -> Result<Vec<ProtocolEvent>, WebTransportError> {
+        let mut buf = Cursor::new(data);
 
         let quarter_id = read_varint(&mut buf).map_err(|e| {
             WebTransportError::Protocol(
@@ -1511,9 +1536,9 @@ fn is_control_stream(stream_id: StreamId, connection: &Connection) -> bool {
 }
 
 // SETTINGS payload parsing.
-fn parse_settings(data: &Bytes) -> Result<HashMap<u64, u64>, WebTransportError> {
+fn parse_settings(data: &[u8]) -> Result<HashMap<u64, u64>, WebTransportError> {
     let mut settings = HashMap::new();
-    let mut buf = Cursor::new(&data[..]);
+    let mut buf = Cursor::new(data);
 
     while buf.has_remaining() {
         let id = read_varint(&mut buf).map_err(|e| {
@@ -1546,9 +1571,10 @@ fn parse_settings(data: &Bytes) -> Result<HashMap<u64, u64>, WebTransportError> 
 }
 
 // Header name syntax validation.
-fn validate_header_name(key: &[u8]) -> Result<(), WebTransportError> {
+fn validate_header_name(stream_id: StreamId, key: &[u8]) -> Result<(), WebTransportError> {
     if key.is_empty() {
-        return Err(WebTransportError::Protocol(
+        return Err(WebTransportError::Stream(
+            stream_id,
             Some(ERR_H3_MESSAGE_ERROR),
             "Header name empty".to_owned(),
         ));
@@ -1556,7 +1582,8 @@ fn validate_header_name(key: &[u8]) -> Result<(), WebTransportError> {
     for (i, &b) in key.iter().enumerate() {
         if b == COLON {
             if i != 0 {
-                return Err(WebTransportError::Protocol(
+                return Err(WebTransportError::Stream(
+                    stream_id,
                     Some(ERR_H3_MESSAGE_ERROR),
                     "Non-initial colon".to_owned(),
                 ));
@@ -1586,12 +1613,14 @@ fn validate_header_name(key: &[u8]) -> Result<(), WebTransportError> {
 
         if !is_valid_char {
             if b.is_ascii_uppercase() {
-                return Err(WebTransportError::Protocol(
+                return Err(WebTransportError::Stream(
+                    stream_id,
                     Some(ERR_H3_MESSAGE_ERROR),
                     "Header name contains uppercase".to_owned(),
                 ));
             }
-            return Err(WebTransportError::Protocol(
+            return Err(WebTransportError::Stream(
+                stream_id,
                 Some(ERR_H3_MESSAGE_ERROR),
                 "Header name contains invalid characters".to_owned(),
             ));
@@ -1601,10 +1630,11 @@ fn validate_header_name(key: &[u8]) -> Result<(), WebTransportError> {
 }
 
 // Header value syntax validation.
-fn validate_header_value(value: &[u8]) -> Result<(), WebTransportError> {
+fn validate_header_value(stream_id: StreamId, value: &[u8]) -> Result<(), WebTransportError> {
     if let (Some(first), Some(last)) = (value.first(), value.last()) {
         if WHITESPACE.contains(first) || WHITESPACE.contains(last) {
-            return Err(WebTransportError::Protocol(
+            return Err(WebTransportError::Stream(
+                stream_id,
                 Some(ERR_H3_MESSAGE_ERROR),
                 "Leading/trailing whitespace".to_owned(),
             ));
@@ -1613,7 +1643,8 @@ fn validate_header_value(value: &[u8]) -> Result<(), WebTransportError> {
             if b == HTAB || (SP..=0x7E).contains(&b) {
                 continue;
             }
-            return Err(WebTransportError::Protocol(
+            return Err(WebTransportError::Stream(
+                stream_id,
                 Some(ERR_H3_MESSAGE_ERROR),
                 "Header value contains illegal character".to_owned(),
             ));
@@ -1623,7 +1654,10 @@ fn validate_header_value(value: &[u8]) -> Result<(), WebTransportError> {
 }
 
 // Request header semantic validation.
-fn validate_request_headers(headers: &Headers) -> Result<(), WebTransportError> {
+fn validate_request_headers(
+    stream_id: StreamId,
+    headers: &Headers,
+) -> Result<(), WebTransportError> {
     let mut seen_pseudo = HashSet::new();
     let mut after_pseudo = false;
     let mut scheme: Option<&[u8]> = None;
@@ -1644,24 +1678,27 @@ fn validate_request_headers(headers: &Headers) -> Result<(), WebTransportError> 
         let k_slice = k.as_ref();
         let v_slice = v.as_ref();
 
-        validate_header_name(k_slice)?;
-        validate_header_value(v_slice)?;
+        validate_header_name(stream_id, k_slice)?;
+        validate_header_value(stream_id, v_slice)?;
 
         if k_slice.starts_with(b":") {
             if after_pseudo {
-                return Err(WebTransportError::Protocol(
+                return Err(WebTransportError::Stream(
+                    stream_id,
                     Some(ERR_H3_MESSAGE_ERROR),
                     "Pseudo-header after regular header".to_owned(),
                 ));
             }
             if !allowed.iter().any(|x| x[..] == k_slice[..]) {
-                return Err(WebTransportError::Protocol(
+                return Err(WebTransportError::Stream(
+                    stream_id,
                     Some(ERR_H3_MESSAGE_ERROR),
                     "Unknown pseudo-header".to_owned(),
                 ));
             }
             if seen_pseudo.contains(k_slice) {
-                return Err(WebTransportError::Protocol(
+                return Err(WebTransportError::Stream(
+                    stream_id,
                     Some(ERR_H3_MESSAGE_ERROR),
                     "Duplicate pseudo-header".to_owned(),
                 ));
@@ -1687,7 +1724,8 @@ fn validate_request_headers(headers: &Headers) -> Result<(), WebTransportError> 
 
     for req in required {
         if !seen_pseudo.contains(req) {
-            return Err(WebTransportError::Protocol(
+            return Err(WebTransportError::Stream(
+                stream_id,
                 Some(ERR_H3_MESSAGE_ERROR),
                 "Missing required pseudo-header".to_owned(),
             ));
@@ -1696,13 +1734,15 @@ fn validate_request_headers(headers: &Headers) -> Result<(), WebTransportError> 
 
     if matches!(scheme, Some(b"http" | b"https")) {
         if authority.unwrap_or_default().is_empty() {
-            return Err(WebTransportError::Protocol(
+            return Err(WebTransportError::Stream(
+                stream_id,
                 Some(ERR_H3_MESSAGE_ERROR),
                 ":authority cannot be empty for http/https".to_owned(),
             ));
         }
         if path.unwrap_or_default().is_empty() {
-            return Err(WebTransportError::Protocol(
+            return Err(WebTransportError::Stream(
+                stream_id,
                 Some(ERR_H3_MESSAGE_ERROR),
                 ":path cannot be empty for http/https".to_owned(),
             ));
@@ -1713,30 +1753,36 @@ fn validate_request_headers(headers: &Headers) -> Result<(), WebTransportError> 
 }
 
 // Response header semantic validation.
-fn validate_response_headers(headers: &Headers) -> Result<(), WebTransportError> {
+fn validate_response_headers(
+    stream_id: StreamId,
+    headers: &Headers,
+) -> Result<(), WebTransportError> {
     let mut seen_pseudo = HashSet::new();
     let mut after_pseudo = false;
 
     for (k, v) in headers {
         let k_slice = k.as_ref();
-        validate_header_name(k_slice)?;
-        validate_header_value(v.as_ref())?;
+        validate_header_name(stream_id, k_slice)?;
+        validate_header_value(stream_id, v.as_ref())?;
 
         if k_slice.starts_with(b":") {
             if after_pseudo {
-                return Err(WebTransportError::Protocol(
+                return Err(WebTransportError::Stream(
+                    stream_id,
                     Some(ERR_H3_MESSAGE_ERROR),
                     "Pseudo-header after regular".to_owned(),
                 ));
             }
             if k_slice != b":status" {
-                return Err(WebTransportError::Protocol(
+                return Err(WebTransportError::Stream(
+                    stream_id,
                     Some(ERR_H3_MESSAGE_ERROR),
                     "Invalid response pseudo-header".to_owned(),
                 ));
             }
             if seen_pseudo.contains(k_slice) {
-                return Err(WebTransportError::Protocol(
+                return Err(WebTransportError::Stream(
+                    stream_id,
                     Some(ERR_H3_MESSAGE_ERROR),
                     "Duplicate :status".to_owned(),
                 ));
@@ -1748,7 +1794,8 @@ fn validate_response_headers(headers: &Headers) -> Result<(), WebTransportError>
     }
 
     if !seen_pseudo.contains(b":status".as_slice()) {
-        return Err(WebTransportError::Protocol(
+        return Err(WebTransportError::Stream(
+            stream_id,
             Some(ERR_H3_MESSAGE_ERROR),
             "Missing :status".to_owned(),
         ));
@@ -1779,6 +1826,13 @@ fn validate_settings(
         return Err(WebTransportError::Protocol(
             Some(ERR_H3_SETTINGS_ERROR),
             "H3_DATAGRAM requires max_datagram_frame_size".to_owned(),
+        ));
+    }
+
+    if settings.get(&SETTINGS_WT_ENABLED).unwrap_or(&0) == &0 {
+        return Err(WebTransportError::Protocol(
+            Some(ERR_WT_REQUIREMENTS_NOT_MET),
+            "WT_ENABLED setting must be greater than 0".to_owned(),
         ));
     }
 

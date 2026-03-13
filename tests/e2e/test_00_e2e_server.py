@@ -26,7 +26,8 @@ from pywebtransport import (
 )
 from pywebtransport.constants import DEFAULT_MAX_MESSAGE_SIZE
 from pywebtransport.serializer import JSONSerializer, MsgPackSerializer
-from pywebtransport.types import ConnectionState, EventType, SessionState
+from pywebtransport.server import MiddlewareRejected
+from pywebtransport.types import ConnectionState, EventType, SessionProtocol, SessionState
 from pywebtransport.utils import generate_self_signed_cert, get_timestamp
 
 CERT_HOSTNAME: Final[str] = "localhost"
@@ -72,8 +73,34 @@ class E2EServerApp(ServerApp):
         super().__init__(**kwargs)
         self.server.on(event_type=EventType.CONNECTION_ESTABLISHED, handler=self._on_connection_established)
         self.server.on(event_type=EventType.SESSION_REQUEST, handler=self._on_session_request)
+        self._register_middleware()
         self._register_handlers()
         logger.info("E2E Server initialized with full test support")
+
+    def _register_middleware(self) -> None:
+        """Register custom middleware for testing specific features."""
+
+        @self.middleware
+        async def negotiate_subprotocol(*, session: SessionProtocol) -> None:
+            if session.path == "/subprotocol":
+                offered = session.subprotocols
+                if not offered:
+                    raise MiddlewareRejected(status_code=400)
+
+                if "trigger-missing" in offered:
+                    session.subprotocol = None
+                    return
+
+                if "trigger-mismatch" in offered:
+                    session.subprotocol = "alien-proto"
+                    return
+
+                if "chat-v2" in offered:
+                    session.subprotocol = "chat-v2"
+                elif "chat-v1" in offered:
+                    session.subprotocol = "chat-v1"
+                else:
+                    raise MiddlewareRejected(status_code=403)
 
     async def _diagnostics_handler(self, session: WebTransportSession, **kwargs: Any) -> None:
         """Handle requests for server statistics on the /diagnostics path."""
@@ -92,6 +119,29 @@ class E2EServerApp(ServerApp):
             pass
         except Exception as e:
             logger.error("Diagnostics handler error: %s", e)
+        finally:
+            if not session.is_closed:
+                await session.close()
+
+    async def _export_keying_handler(self, session: WebTransportSession, **kwargs: Any) -> None:
+        """Handle requests for TLS keying material export on the /export-keying-material path."""
+        logger.info("TLS Export request from session %s", session.session_id)
+        try:
+            async with asyncio.timeout(delay=5.0):
+                stream = await session.accept_bidirectional_stream()
+                req_data = await stream.read_all()
+
+            req = json.loads(s=req_data.decode(encoding="utf-8"))
+            label = req["label"]
+            context = bytes.fromhex(req["context_hex"])
+            length = req["length"]
+
+            server_key = await session.export_keying_material(label=label, context=context, length=length)
+
+            await stream.write_all(data=server_key, end_stream=True)
+            logger.info("Successfully exported and sent %d bytes of keying material.", len(server_key))
+        except Exception as e:
+            logger.error("TLS Export handler error: %s", e, exc_info=True)
         finally:
             if not session.is_closed:
                 await session.close()
@@ -137,8 +187,10 @@ class E2EServerApp(ServerApp):
         self.route(path="/echo")(echo_handler)
         self.route(path="/health")(self._health_handler)
         self.route(path="/diagnostics")(self._diagnostics_handler)
+        self.route(path="/export-keying-material")(self._export_keying_handler)
         self.route(path="/structured-echo/json")(structured_echo_json_handler)
         self.route(path="/structured-echo/msgpack")(structured_echo_msgpack_handler)
+        self.route(path="/subprotocol")(echo_handler)
 
 
 MESSAGE_REGISTRY: dict[int, type[Any]] = {1: UserData, 2: StatusUpdate}

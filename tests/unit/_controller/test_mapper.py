@@ -18,19 +18,30 @@ class TestMapper:
                 events.ConnectionClose(request_id=1, error_code=100, reason="closing"),
                 (abi.CONNECTION_CLOSE, (1, 100, "closing")),
             ),
-            (events.UserAcceptSession(request_id=2, session_id=10), (abi.USER_ACCEPT_SESSION, (2, 10))),
+            (
+                events.UserAcceptSession(request_id=2, session_id=10, subprotocol="h3"),
+                (abi.USER_ACCEPT_SESSION, (2, 10, "h3")),
+            ),
             (
                 events.UserCloseSession(request_id=3, session_id=10, error_code=0, reason=None),
                 (abi.USER_CLOSE_SESSION, (3, 10, 0, None)),
             ),
             (events.UserConnectionGracefulClose(request_id=4), (abi.USER_CONNECTION_GRACEFUL_CLOSE, (4,))),
             (
-                events.UserCreateSession(request_id=5, path="/test", headers={b":method": b"CONNECT"}),
-                (abi.USER_CREATE_SESSION, (5, "/test", {b":method": b"CONNECT"})),
+                events.UserCreateSession(
+                    request_id=5, path="/test", headers={b":method": b"CONNECT"}, subprotocols=["h3"]
+                ),
+                (abi.USER_CREATE_SESSION, (5, "/test", {b":method": b"CONNECT"}, ["h3"])),
             ),
             (
                 events.UserCreateStream(request_id=6, session_id=10, is_unidirectional=True),
                 (abi.USER_CREATE_STREAM, (6, 10, True)),
+            ),
+            (
+                events.UserExportKeyingMaterial(
+                    request_id=70, session_id=10, label="EXPORTER-test", context=b"ctx", length=32
+                ),
+                (abi.USER_EXPORT_KEYING_MATERIAL, (70, 10, "EXPORTER-test", b"ctx", 32)),
             ),
             (events.UserGetConnectionDiagnostics(request_id=7), (abi.USER_GET_CONNECTION_DIAGNOSTICS, (7,))),
             (

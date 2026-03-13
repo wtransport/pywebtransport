@@ -96,6 +96,7 @@ fn test_http3_frame_types_match_spec(#[case] frame_type: u64, #[case] expected_v
 #[case(SETTINGS_WT_INITIAL_MAX_DATA, 0x2B61)]
 #[case(SETTINGS_WT_INITIAL_MAX_STREAMS_UNI, 0x2B64)]
 #[case(SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI, 0x2B65)]
+#[case(SETTINGS_WT_ENABLED, 0x2C7C_F000)]
 #[test]
 fn test_http3_settings_identifiers_match_spec(
     #[case] setting_id: u64,
@@ -165,7 +166,7 @@ fn test_max_stream_id_limit() {
 fn test_protocol_identification_values_are_valid() {
     let token = UPGRADE_TOKEN_WEBTRANSPORT;
 
-    assert_eq!(token, b"webtransport");
+    assert_eq!(token, b"webtransport-h3");
 }
 
 #[test]
@@ -282,6 +283,15 @@ fn test_time_configuration_defaults_are_positive(#[case] timeout_value: f64) {
 }
 
 #[test]
+fn test_webtransport_headers_match_spec() {
+    let available_protocols = WT_AVAILABLE_PROTOCOLS;
+    let protocol = WT_PROTOCOL;
+
+    assert_eq!(available_protocols, b"wt-available-protocols");
+    assert_eq!(protocol, b"wt-protocol");
+}
+
+#[test]
 fn test_webtransport_application_error_range() {
     let start = ERR_WT_APPLICATION_ERROR_FIRST;
     let end = ERR_WT_APPLICATION_ERROR_LAST;
@@ -305,7 +315,9 @@ fn test_webtransport_capsule_types() {
 }
 
 #[rstest]
+#[case(ERR_WT_ALPN_ERROR, 0x0817_B3DD)]
 #[case(ERR_WT_FLOW_CONTROL_ERROR, 0x045D_4487)]
+#[case(ERR_WT_REQUIREMENTS_NOT_MET, 0x212C_0D48)]
 #[case(ERR_WT_SESSION_GONE, 0x170D_7B68)]
 #[case(ERR_WT_BUFFERED_STREAM_REJECTED, 0x3994_BD84)]
 #[test]

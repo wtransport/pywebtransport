@@ -75,6 +75,7 @@ fn test_buffer_user_actions_when_connecting(mut fixture_engine_client: WebTransp
         request_id: MOCK_REQUEST_ID,
         path: "/".to_owned(),
         headers: vec![],
+        subprotocols: None,
     };
 
     let effects = fixture_engine_client.handle_event(event, 0.0);
@@ -96,6 +97,7 @@ fn test_buffer_user_actions_when_idle(mut fixture_engine_client: WebTransportEng
         request_id: MOCK_REQUEST_ID,
         path: "/".to_owned(),
         headers: vec![],
+        subprotocols: None,
     };
 
     let effects = fixture_engine_client.handle_event(event, 0.0);
@@ -121,6 +123,7 @@ fn test_client_immediate_actions_when_connected(mut fixture_engine_client: WebTr
         request_id: MOCK_REQUEST_ID,
         path: "/".to_owned(),
         headers: vec![],
+        subprotocols: None,
     };
     let effects = fixture_engine_client.handle_event(session_event, 0.0);
     assert!(fixture_engine_client.pending_user_actions.is_empty());
@@ -191,6 +194,7 @@ fn test_connection_close_event_fails_pending_actions(
         request_id: 2,
         path: "/".to_owned(),
         headers: vec![],
+        subprotocols: None,
     };
     fixture_engine_client.handle_event(create_session_event, 0.0);
     assert_eq!(fixture_engine_client.pending_user_actions.len(), 2);
@@ -244,7 +248,7 @@ fn test_encode_capsule() {
 #[rstest]
 fn test_encode_datagram() {
     let data = Bytes::from_static(b"payload");
-    let res = WebTransportEngine::encode_datagram(0, &data);
+    let res = WebTransportEngine::encode_datagram(0, data);
 
     let effects = match res {
         Ok(e) => e,
@@ -289,7 +293,8 @@ fn test_encode_headers(mut fixture_engine_server: WebTransportEngine) {
         return;
     }
 
-    let res = fixture_engine_server.encode_headers(100, 200, true);
+    let headers = vec![];
+    let res = fixture_engine_server.encode_headers(100, &headers, true);
 
     let effects = match res {
         Ok(e) => e,
@@ -352,6 +357,7 @@ fn test_fail_pending_actions_on_termination(mut fixture_engine_client: WebTransp
         request_id: MOCK_REQUEST_ID,
         path: "/".to_owned(),
         headers: vec![],
+        subprotocols: None,
     };
     fixture_engine_client.handle_event(create_event, 0.0);
 
@@ -506,6 +512,7 @@ fn test_handle_user_passthrough_events(mut fixture_engine_server: WebTransportEn
         ProtocolEvent::UserAcceptSession {
             request_id: 1,
             session_id: 0,
+            subprotocol: None,
         },
         ProtocolEvent::UserCloseSession {
             request_id: 2,
@@ -564,6 +571,13 @@ fn test_handle_user_passthrough_events(mut fixture_engine_server: WebTransportEn
             request_id: 14,
             stream_id: 4,
             max_bytes: 100,
+        },
+        ProtocolEvent::UserExportKeyingMaterial {
+            request_id: 15,
+            session_id: 0,
+            label: "test".to_owned(),
+            context: Bytes::from_static(b"ctx"),
+            length: 32,
         },
     ];
 
@@ -658,6 +672,7 @@ fn test_replay_user_actions_on_handshake(mut fixture_engine_client: WebTransport
         request_id: MOCK_REQUEST_ID,
         path: "/".to_owned(),
         headers: vec![],
+        subprotocols: None,
     };
     fixture_engine_client.handle_event(create_event, 0.0);
     assert_eq!(fixture_engine_client.pending_user_actions.len(), 1);
@@ -693,6 +708,7 @@ fn test_server_immediate_actions(mut fixture_engine_server: WebTransportEngine) 
         request_id: MOCK_REQUEST_ID,
         path: "/".to_owned(),
         headers: vec![],
+        subprotocols: None,
     };
 
     fixture_engine_server.handle_event(event, 0.0);
@@ -735,7 +751,7 @@ fn test_user_stream_operations_success(mut fixture_engine_server: WebTransportEn
         ),
         (
             Bytes::from_static(b":protocol"),
-            Bytes::from_static(b"webtransport"),
+            Bytes::from_static(b"webtransport-h3"),
         ),
         (Bytes::from_static(b":scheme"), Bytes::from_static(b"https")),
         (

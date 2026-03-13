@@ -10,8 +10,10 @@ use quinn_proto::{
     WriteError,
 };
 
+use crate::common::constants::ERR_LIB_INTERNAL_ERROR;
+use crate::common::types::ErrorSource;
 use crate::protocol::engine::WebTransportEngine;
-use crate::protocol::events::{Effect, ProtocolEvent};
+use crate::protocol::events::{Effect, ProtocolEvent, RequestResult};
 use crate::protocol::utils::find_header_str;
 
 // Complete state machine for a single WebTransport connection.
@@ -370,6 +372,34 @@ impl TransportConnection {
                         }
                     }
                 }
+                Effect::ExportTlsKeyingMaterial {
+                    request_id,
+                    label,
+                    context,
+                    length,
+                } => {
+                    let mut buf = vec![0u8; length as usize];
+                    match self.quic.crypto_session().export_keying_material(
+                        &mut buf,
+                        label.as_bytes(),
+                        &context,
+                    ) {
+                        Ok(()) => {
+                            self.pending_effects.push_back(Effect::NotifyRequestDone {
+                                request_id,
+                                result: RequestResult::KeyingMaterial(Bytes::from(buf)),
+                            });
+                        }
+                        Err(e) => {
+                            self.pending_effects.push_back(Effect::NotifyRequestFailed {
+                                request_id,
+                                source: ErrorSource::Session,
+                                error_code: Some(ERR_LIB_INTERNAL_ERROR),
+                                reason: format!("Failed to export TLS keying material: {e:?}"),
+                            });
+                        }
+                    }
+                }
                 Effect::ProcessProtocolEvent { event } => {
                     self.dispatch_protocol_event(*event, now, now_instant);
                 }
@@ -405,7 +435,7 @@ impl TransportConnection {
                     }
                 }
                 Effect::SendH3Datagram { stream_id, data } => {
-                    if let Ok(h3_effects) = WebTransportEngine::encode_datagram(stream_id, &data) {
+                    if let Ok(h3_effects) = WebTransportEngine::encode_datagram(stream_id, data) {
                         self.process_effects(h3_effects, now, now_instant);
                     }
                 }
@@ -416,11 +446,11 @@ impl TransportConnection {
                 }
                 Effect::SendH3Headers {
                     stream_id,
-                    status,
+                    headers,
                     end_stream,
                 } => {
                     if let Ok(h3_effects) =
-                        self.engine.encode_headers(stream_id, status, end_stream)
+                        self.engine.encode_headers(stream_id, &headers, end_stream)
                     {
                         self.process_effects(h3_effects, now, now_instant);
                     }

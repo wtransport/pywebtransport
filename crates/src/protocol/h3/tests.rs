@@ -42,6 +42,29 @@ fn valid_req_headers() -> Headers {
     ]
 }
 
+fn valid_settings_frame() -> Bytes {
+    let mut map = HashMap::new();
+    map.insert(SETTINGS_WT_ENABLED, 1);
+
+    let payload = match encode_settings(&map) {
+        Ok(p) => p,
+        Err(e) => {
+            let msg = format!("{e:?}");
+            assert_eq!(msg, "", "Failed to encode settings payload");
+            unreachable!()
+        }
+    };
+
+    match encode_frame(H3_FRAME_TYPE_SETTINGS, payload) {
+        Ok(f) => f,
+        Err(e) => {
+            let msg = format!("{e:?}");
+            assert_eq!(msg, "", "Failed to encode SETTINGS frame");
+            unreachable!()
+        }
+    }
+}
+
 #[test]
 fn test_cleanup_stream_removes_partial_frame() {
     let mut h3 = create_h3(true);
@@ -285,9 +308,6 @@ fn test_parse_settings_valid() {
 #[test]
 fn test_recv_capsule_too_large() {
     let mut h3 = create_h3(true);
-    let mock = MockConnectionLayout {
-        _padding: [0; 1024],
-    };
     let stream_id = 0;
 
     let mut p = PartialFrameInfo::new(stream_id);
@@ -297,24 +317,17 @@ fn test_recv_capsule_too_large() {
 
     let mut data = BytesMut::new();
     data.extend_from_slice(&[0x00]);
-    data.extend_from_slice(&[0x05]);
-
-    data.extend_from_slice(&[0x00]);
     data.extend_from_slice(&[0x80, 0x00, 0x20, 0x00]);
 
-    let event = ProtocolEvent::TransportStreamDataReceived {
-        stream_id,
-        data: data.freeze(),
-        end_stream: false,
-    };
+    h3.ensure_partial_frame(stream_id)
+        .capsule_buffer
+        .extend_from_slice(&data);
 
-    let (_, effects) = h3.handle_transport_event(&event, mock.as_connection());
-
-    if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
-        assert_eq!(*error_code, ERR_H3_EXCESSIVE_LOAD);
-    } else {
-        assert_eq!(effects.len(), 0, "Expected CloseQuicConnection effect");
-    }
+    let res = h3.parse_capsules(stream_id);
+    assert!(matches!(
+        res,
+        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
+    ));
 }
 
 #[test]
@@ -357,6 +370,7 @@ fn test_recv_control_frame_fragmented() {
         _padding: [0; 1024],
     };
     let stream_id = 3;
+
     h3.handle_transport_event(
         &ProtocolEvent::TransportStreamDataReceived {
             stream_id,
@@ -366,7 +380,12 @@ fn test_recv_control_frame_fragmented() {
         mock.as_connection(),
     );
 
-    let chunk1 = Bytes::from(vec![0x04, 0x02]);
+    let valid_frame = valid_settings_frame();
+    let split_at = valid_frame.len() / 2;
+
+    let chunk1 = valid_frame.slice(0..split_at);
+    let chunk2 = valid_frame.slice(split_at..);
+
     let (events, _) = h3.handle_transport_event(
         &ProtocolEvent::TransportStreamDataReceived {
             stream_id,
@@ -377,7 +396,6 @@ fn test_recv_control_frame_fragmented() {
     );
     assert!(events.is_empty());
 
-    let chunk2 = Bytes::from(vec![0x01, 0x01]);
     let (events_final, _) = h3.handle_transport_event(
         &ProtocolEvent::TransportStreamDataReceived {
             stream_id,
@@ -442,7 +460,7 @@ fn test_recv_control_goaway_success() {
     h3.handle_transport_event(
         &ProtocolEvent::TransportStreamDataReceived {
             stream_id,
-            data: Bytes::from(vec![0x04, 0x00]),
+            data: valid_settings_frame(),
             end_stream: false,
         },
         mock.as_connection(),
@@ -482,7 +500,7 @@ fn test_recv_control_headers_fails() {
     h3.handle_transport_event(
         &ProtocolEvent::TransportStreamDataReceived {
             stream_id,
-            data: Bytes::from(vec![0x04, 0x00]),
+            data: valid_settings_frame(),
             end_stream: false,
         },
         mock.as_connection(),
@@ -522,7 +540,7 @@ fn test_recv_control_settings_twice_fails() {
     h3.handle_transport_event(
         &ProtocolEvent::TransportStreamDataReceived {
             stream_id,
-            data: Bytes::from(vec![0x04, 0x00]),
+            data: valid_settings_frame(),
             end_stream: false,
         },
         mock.as_connection(),
@@ -531,7 +549,7 @@ fn test_recv_control_settings_twice_fails() {
     let (_, effects) = h3.handle_transport_event(
         &ProtocolEvent::TransportStreamDataReceived {
             stream_id,
-            data: Bytes::from(vec![0x04, 0x00]),
+            data: valid_settings_frame(),
             end_stream: false,
         },
         mock.as_connection(),
@@ -541,6 +559,40 @@ fn test_recv_control_settings_twice_fails() {
         assert_eq!(*error_code, ERR_H3_FRAME_UNEXPECTED);
     } else {
         assert_eq!(effects.len(), 0, "Expected error on duplicate settings");
+    }
+}
+
+#[test]
+fn test_recv_data_on_closed_wt_stream() {
+    let mut h3 = create_h3(true);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    let stream_id = 0;
+
+    let mut p = PartialFrameInfo::new(stream_id);
+    p.headers_processed = true;
+    p.is_webtransport_control = true;
+    h3.partial_frames.insert(stream_id, p);
+
+    let mut data = BytesMut::new();
+    data.extend_from_slice(&[0x00]);
+    data.extend_from_slice(&[0x03]);
+    data.extend_from_slice(b"abc");
+
+    let (_, effects) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: data.freeze(),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    if let Some(Effect::ResetQuicStream { error_code, .. }) = effects.first() {
+        assert_eq!(*error_code, ERR_H3_MESSAGE_ERROR);
+    } else {
+        assert_eq!(effects.len(), 0, "Expected ResetQuicStream effect");
     }
 }
 
@@ -600,7 +652,7 @@ fn test_recv_double_headers_error() {
         mock.as_connection(),
     );
 
-    if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
+    if let Some(Effect::ResetQuicStream { error_code, .. }) = effects.first() {
         assert_eq!(*error_code, ERR_H3_FRAME_UNEXPECTED);
     } else {
         assert_eq!(effects.len(), 0, "Expected error on double headers");
@@ -996,7 +1048,7 @@ fn test_recv_uni_stream_data_control_settings_success() {
         mock.as_connection(),
     );
 
-    let settings_frame = Bytes::from(vec![0x04, 0x00]);
+    let settings_frame = valid_settings_frame();
     let (events, _) = h3.handle_transport_event(
         &ProtocolEvent::TransportStreamDataReceived {
             stream_id,
@@ -1229,9 +1281,6 @@ fn test_recv_uni_stream_unknown_type_logging() {
 #[test]
 fn test_recv_wt_capsule_fragmented() {
     let mut h3 = create_h3(true);
-    let mock = MockConnectionLayout {
-        _padding: [0; 1024],
-    };
     let stream_id = 0;
 
     let mut p = PartialFrameInfo::new(stream_id);
@@ -1241,71 +1290,72 @@ fn test_recv_wt_capsule_fragmented() {
 
     let mut chunk1 = BytesMut::new();
     chunk1.extend_from_slice(&[0x00]);
-    chunk1.extend_from_slice(&[0x05]);
-    chunk1.extend_from_slice(&[0x00]);
+    chunk1.extend_from_slice(&[0x03]);
 
-    let (_, effects1) = h3.handle_transport_event(
-        &ProtocolEvent::TransportStreamDataReceived {
-            stream_id,
-            data: chunk1.freeze(),
-            end_stream: false,
-        },
-        mock.as_connection(),
-    );
+    h3.ensure_partial_frame(stream_id)
+        .capsule_buffer
+        .extend_from_slice(&chunk1);
 
-    assert!(
-        !effects1
-            .iter()
-            .any(|e| matches!(e, Effect::CloseQuicConnection { .. }))
-    );
+    let events1 = match h3.parse_capsules(stream_id) {
+        Ok(evts) => evts,
+        Err(e) => {
+            let msg = format!("{e:?}");
+            assert_eq!(msg, "", "parse_capsules failed");
+            unreachable!()
+        }
+    };
+    assert!(events1.is_empty());
 
     let mut chunk2 = BytesMut::new();
-    chunk2.extend_from_slice(&[0x03]);
     chunk2.extend_from_slice(b"ABC");
 
-    let (events, _) = h3.handle_transport_event(
-        &ProtocolEvent::TransportStreamDataReceived {
-            stream_id,
-            data: chunk2.freeze(),
-            end_stream: false,
-        },
-        mock.as_connection(),
-    );
+    h3.ensure_partial_frame(stream_id)
+        .capsule_buffer
+        .extend_from_slice(&chunk2);
 
-    assert_eq!(events.len(), 1);
-    if let Some(ProtocolEvent::CapsuleReceived { capsule_data, .. }) = events.first() {
+    let events2 = match h3.parse_capsules(stream_id) {
+        Ok(evts) => evts,
+        Err(e) => {
+            let msg = format!("{e:?}");
+            assert_eq!(msg, "", "parse_capsules failed");
+            unreachable!()
+        }
+    };
+
+    assert_eq!(events2.len(), 1);
+    if let Some(ProtocolEvent::CapsuleReceived { capsule_data, .. }) = events2.first() {
         assert_eq!(capsule_data.as_ref(), b"ABC");
+    } else {
+        assert_eq!(events2.len(), 0, "Expected CapsuleReceived event");
     }
 }
 
 #[test]
 fn test_recv_wt_control_stream_capsules() {
     let mut h3 = create_h3(false);
-    let mock = MockConnectionLayout {
-        _padding: [0; 1024],
-    };
     let stream_id = 0;
     h3.settings_received = true;
 
-    let p = h3.ensure_partial_frame(stream_id);
+    let mut p = PartialFrameInfo::new(stream_id);
     p.headers_processed = true;
     p.is_webtransport_control = true;
 
     let mut buf = BytesMut::new();
     buf.put_u8(0x00);
-    buf.put_u8(0x05);
-    buf.put_u8(0x00);
     buf.put_u8(0x03);
     buf.put_slice(b"ABC");
 
-    let (events, _) = h3.handle_transport_event(
-        &ProtocolEvent::TransportStreamDataReceived {
-            stream_id,
-            data: buf.freeze(),
-            end_stream: false,
-        },
-        mock.as_connection(),
-    );
+    p.capsule_buffer.extend_from_slice(&buf);
+    h3.partial_frames.insert(stream_id, p);
+
+    let events = match h3.parse_capsules(stream_id) {
+        Ok(evts) => evts,
+        Err(e) => {
+            let msg = format!("{e:?}");
+            assert_eq!(msg, "", "parse_capsules failed");
+            unreachable!()
+        }
+    };
 
     assert!(!events.is_empty());
     if let Some(ProtocolEvent::CapsuleReceived {
@@ -1442,18 +1492,18 @@ fn test_set_local_stream_ids_success() {
 #[case(b"name", true)]
 #[case(b"name:", false)]
 fn test_validate_header_name_cases(#[case] name: &[u8], #[case] is_valid: bool) {
-    let res = validate_header_name(name);
+    let res = validate_header_name(0, name);
     assert_eq!(res.is_ok(), is_valid);
 }
 
 #[test]
 fn test_validate_header_name_chars() {
-    assert!(matches!(validate_header_name(b"valid-name"), Ok(())));
-    assert!(validate_header_name(b"invalid@name").is_err());
-    assert!(validate_header_name(b"invalid name").is_err());
-    assert!(validate_header_name(b"invalid\tname").is_err());
-    assert!(validate_header_name(b"invalid\rname").is_err());
-    assert!(validate_header_name(b"invalid\nname").is_err());
+    assert!(matches!(validate_header_name(0, b"valid-name"), Ok(())));
+    assert!(validate_header_name(0, b"invalid@name").is_err());
+    assert!(validate_header_name(0, b"invalid name").is_err());
+    assert!(validate_header_name(0, b"invalid\tname").is_err());
+    assert!(validate_header_name(0, b"invalid\rname").is_err());
+    assert!(validate_header_name(0, b"invalid\nname").is_err());
 }
 
 #[rstest]
@@ -1464,8 +1514,8 @@ fn test_validate_header_name_chars() {
 #[case::invalid_char_val(b"name", b"val\x7F", false)]
 #[case::invalid_char_name(b"name ", b"value", false)]
 fn test_validate_header_syntax_cases(#[case] k: &[u8], #[case] v: &[u8], #[case] valid: bool) {
-    let res_n = validate_header_name(k);
-    let res_v = validate_header_value(v);
+    let res_n = validate_header_name(0, k);
+    let res_v = validate_header_value(0, v);
 
     let is_valid = res_n.is_ok() && res_v.is_ok();
     assert_eq!(
@@ -1484,7 +1534,7 @@ fn test_validate_header_syntax_cases(#[case] k: &[u8], #[case] v: &[u8], #[case]
 #[case(b"value", true)]
 #[case(b"value ", false)]
 fn test_validate_header_value_cases(#[case] val: &[u8], #[case] is_valid: bool) {
-    let res = validate_header_value(val);
+    let res = validate_header_value(0, val);
     assert_eq!(res.is_ok(), is_valid);
 }
 
@@ -1494,20 +1544,20 @@ fn test_validate_request_headers_duplicate_pseudo() {
         (Bytes::from(":method"), Bytes::from("GET")),
         (Bytes::from(":method"), Bytes::from("POST")),
     ];
-    let res = validate_request_headers(&headers);
+    let res = validate_request_headers(0, &headers);
     assert!(matches!(
         res,
-        Err(WebTransportError::Protocol(Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
     ));
 }
 
 #[test]
 fn test_validate_request_headers_missing_pseudo_failure() {
     let headers = vec![(Bytes::from(":method"), Bytes::from("GET"))];
-    let res = validate_request_headers(&headers);
+    let res = validate_request_headers(0, &headers);
     assert!(matches!(
         res,
-        Err(WebTransportError::Protocol(Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
     ));
 }
 
@@ -1518,10 +1568,10 @@ fn test_validate_request_headers_pseudo_after_regular_failure() {
         (Bytes::from("custom"), Bytes::from("val")),
         (Bytes::from(":scheme"), Bytes::from("https")),
     ];
-    let res = validate_request_headers(&headers);
+    let res = validate_request_headers(0, &headers);
     assert!(matches!(
         res,
-        Err(WebTransportError::Protocol(Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
     ));
 }
 
@@ -1531,30 +1581,30 @@ fn test_validate_request_headers_pseudo_order() {
         (Bytes::from("custom"), Bytes::from("value")),
         (Bytes::from(":method"), Bytes::from("GET")),
     ];
-    let res = validate_request_headers(&headers);
+    let res = validate_request_headers(0, &headers);
     assert!(matches!(
         res,
-        Err(WebTransportError::Protocol(Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
     ));
 }
 
 #[test]
 fn test_validate_request_headers_unknown_pseudo() {
     let headers = vec![(Bytes::from(":unknown"), Bytes::from("val"))];
-    let res = validate_request_headers(&headers);
+    let res = validate_request_headers(0, &headers);
     assert!(matches!(
         res,
-        Err(WebTransportError::Protocol(Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
     ));
 }
 
 #[test]
 fn test_validate_request_headers_unknown_pseudo_failure() {
     let headers = vec![(Bytes::from(":unknown"), Bytes::from("foo"))];
-    let res = validate_request_headers(&headers);
+    let res = validate_request_headers(0, &headers);
     assert!(matches!(
         res,
-        Err(WebTransportError::Protocol(Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
     ));
 }
 
@@ -1564,29 +1614,45 @@ fn test_validate_response_headers_duplicate_status() {
         (Bytes::from(":status"), Bytes::from("200")),
         (Bytes::from(":status"), Bytes::from("404")),
     ];
-    let res = validate_response_headers(&headers);
+    let res = validate_response_headers(0, &headers);
     assert!(matches!(
         res,
-        Err(WebTransportError::Protocol(Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
     ));
 }
 
 #[test]
 fn test_validate_response_headers_missing_status() {
     let headers = vec![(Bytes::from("server"), Bytes::from("nginx"))];
-    let res = validate_response_headers(&headers);
+    let res = validate_response_headers(0, &headers);
     assert!(matches!(
         res,
-        Err(WebTransportError::Protocol(Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
     ));
 }
 
 #[test]
 fn test_validate_response_headers_missing_status_failure() {
     let headers = vec![(Bytes::from("server"), Bytes::from("me"))];
-    let res = validate_response_headers(&headers);
+    let res = validate_response_headers(0, &headers);
     assert!(matches!(
         res,
-        Err(WebTransportError::Protocol(Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
+    ));
+}
+
+#[test]
+fn test_validate_settings_missing_wt_enabled() {
+    let map = HashMap::new();
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    let res = validate_settings(&map, mock.as_connection());
+    assert!(matches!(
+        res,
+        Err(WebTransportError::Protocol(
+            Some(ERR_WT_REQUIREMENTS_NOT_MET),
+            _
+        ))
     ));
 }

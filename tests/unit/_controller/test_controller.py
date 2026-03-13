@@ -119,7 +119,12 @@ class TestEndpointController:
     def test_execute_effects_emit_session_event_full(self, controller: EndpointController) -> None:
         cb = MagicMock()
         controller.register_connection(handle=1, callback=cb)
-        effects = [(abi.EMIT_SESSION_EVENT, (10, "SESSION_OK", "/p", {"k": "v"}, b"d", True, 100, 5, 0.5, 0, "ok"))]
+        effects = [
+            (
+                abi.EMIT_SESSION_EVENT,
+                (10, "SESSION_OK", "/p", {"k": "v"}, ["h3"], "h3", b"d", True, 100, 5, 0.5, 0, "ok"),
+            )
+        ]
 
         controller._execute_effects(handle=1, effects=effects)
 
@@ -129,6 +134,8 @@ class TestEndpointController:
                 "session_id": 10,
                 "path": "/p",
                 "headers": {"k": "v"},
+                "subprotocols": ["h3"],
+                "subprotocol": "h3",
                 "data": b"d",
                 "is_unidirectional": True,
                 "max_data": 100,
@@ -142,14 +149,24 @@ class TestEndpointController:
     def test_execute_effects_emit_session_event_minimal(self, controller: EndpointController) -> None:
         cb = MagicMock()
         controller.register_connection(handle=1, callback=cb)
-        effects = [(abi.EMIT_SESSION_EVENT, (10, "SESSION_MIN", None, None, None, None, None, None, None, None, None))]
+        effects = [
+            (
+                abi.EMIT_SESSION_EVENT,
+                (10, "SESSION_MIN", None, None, None, None, None, None, None, None, None, None, None),
+            )
+        ]
 
         controller._execute_effects(handle=1, effects=effects)
 
         cb.assert_called_once_with("SESSION_MIN", {"session_id": 10})
 
     def test_execute_effects_emit_session_event_no_callback(self, controller: EndpointController) -> None:
-        effects = [(abi.EMIT_SESSION_EVENT, (10, "SESSION_MIN", None, None, None, None, None, None, None, None, None))]
+        effects = [
+            (
+                abi.EMIT_SESSION_EVENT,
+                (10, "SESSION_MIN", None, None, None, None, None, None, None, None, None, None, None),
+            )
+        ]
 
         controller._execute_effects(handle=1, effects=effects)
 

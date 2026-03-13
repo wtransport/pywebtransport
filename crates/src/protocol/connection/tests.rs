@@ -9,6 +9,8 @@ use super::*;
 use crate::common::constants::{
     DRAIN_WEBTRANSPORT_SESSION_TYPE, ERR_H3_REQUEST_REJECTED, ERR_LIB_CONNECTION_STATE_ERROR,
     ERR_LIB_INTERNAL_ERROR, ERR_LIB_SESSION_STATE_ERROR, ERR_WT_BUFFERED_STREAM_REJECTED,
+    SETTINGS_WT_INITIAL_MAX_DATA, SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI,
+    SETTINGS_WT_INITIAL_MAX_STREAMS_UNI,
 };
 use crate::common::types::{ConnectionState, ErrorSource, EventType, Headers, SessionId, StreamId};
 use crate::protocol::events::{Effect, RequestResult};
@@ -42,7 +44,7 @@ fn fixture_headers() -> Headers {
         ),
         (
             Bytes::from_static(b":protocol"),
-            Bytes::from_static(b"webtransport"),
+            Bytes::from_static(b"webtransport-h3"),
         ),
         (Bytes::from_static(b":scheme"), Bytes::from_static(b"https")),
         (Bytes::from_static(b":path"), Bytes::from_static(b"/wt")),
@@ -84,10 +86,10 @@ fn test_accept_session_delegates(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    let _unused =
-        fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
+    fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
 
-    let effects = fixture_server_connection.accept_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, 2.0);
+    let effects =
+        fixture_server_connection.accept_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, None, 2.0);
 
     assert!(
         fixture_server_connection
@@ -103,7 +105,7 @@ fn test_accept_session_delegates(
 
 #[rstest]
 fn test_accept_session_not_found(mut fixture_server_connection: Connection) {
-    let effects = fixture_server_connection.accept_session(999, MOCK_REQUEST_ID, 1.0);
+    let effects = fixture_server_connection.accept_session(999, MOCK_REQUEST_ID, None, 1.0);
     assert!(matches!(
         effects.as_slice(),
         [Effect::NotifyRequestFailed {
@@ -112,6 +114,34 @@ fn test_accept_session_not_found(mut fixture_server_connection: Connection) {
             ..
         }]
     ));
+}
+
+#[rstest]
+fn test_accept_session_with_subprotocol(
+    mut fixture_server_connection: Connection,
+    fixture_headers: Headers,
+) {
+    fixture_server_connection.state = ConnectionState::Connected;
+    fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
+
+    let effects = fixture_server_connection.accept_session(
+        MOCK_SESSION_ID,
+        MOCK_REQUEST_ID,
+        Some("h3".to_owned()),
+        2.0,
+    );
+
+    assert!(
+        fixture_server_connection
+            .sessions
+            .contains_key(&MOCK_SESSION_ID)
+    );
+    if let Some(session) = fixture_server_connection.sessions.get(&MOCK_SESSION_ID) {
+        assert_eq!(session.state, SessionState::Connected);
+        assert_eq!(session.subprotocol, Some("h3".to_owned()));
+    }
+
+    assert!(!effects.is_empty());
 }
 
 #[rstest]
@@ -145,9 +175,8 @@ fn test_bind_stream_updates_map(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    let _unused =
-        fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
-    fixture_server_connection.accept_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, 1.5);
+    fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
+    fixture_server_connection.accept_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, None, 1.5);
 
     let effects = fixture_server_connection.bind_stream(
         MOCK_SESSION_ID,
@@ -171,6 +200,75 @@ fn test_bind_stream_updates_map(
 }
 
 #[rstest]
+fn test_client_create_session_limit_reached(
+    mut fixture_client_connection: Connection,
+    fixture_headers: Headers,
+) {
+    fixture_client_connection.state = ConnectionState::Connected;
+    fixture_client_connection.peer_initial_max_data = 100;
+    fixture_client_connection.max_sessions = 1;
+    fixture_client_connection.create_session(
+        MOCK_REQUEST_ID,
+        "/".to_owned(),
+        fixture_headers.clone(),
+        None,
+        1.0,
+    );
+
+    let effects = fixture_client_connection.create_session(
+        MOCK_REQUEST_ID + 1,
+        "/".to_owned(),
+        fixture_headers,
+        None,
+        1.0,
+    );
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Connection,
+            error_code: Some(ERR_LIB_CONNECTION_STATE_ERROR),
+            ..
+        }]
+    ));
+}
+
+#[rstest]
+fn test_client_create_session_no_flow_control_limit_reached(
+    mut fixture_client_connection: Connection,
+    fixture_headers: Headers,
+) {
+    fixture_client_connection.state = ConnectionState::Connected;
+    fixture_client_connection.peer_initial_max_data = 0;
+    fixture_client_connection.peer_initial_max_streams_bidi = 0;
+    fixture_client_connection.peer_initial_max_streams_uni = 0;
+    fixture_client_connection.create_session(
+        MOCK_REQUEST_ID,
+        "/".to_owned(),
+        fixture_headers.clone(),
+        None,
+        1.0,
+    );
+
+    let effects = fixture_client_connection.create_session(
+        MOCK_REQUEST_ID + 1,
+        "/".to_owned(),
+        fixture_headers,
+        None,
+        1.0,
+    );
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Connection,
+            error_code: Some(ERR_LIB_CONNECTION_STATE_ERROR),
+            ..
+        }]
+    ));
+}
+
+#[rstest]
 fn test_client_create_session_success(
     mut fixture_client_connection: Connection,
     fixture_headers: Headers,
@@ -180,6 +278,33 @@ fn test_client_create_session_success(
         MOCK_REQUEST_ID,
         "/".to_owned(),
         fixture_headers,
+        None,
+        1.0,
+    );
+
+    assert!(
+        fixture_client_connection
+            .pending_session_configs
+            .contains_key(&MOCK_REQUEST_ID)
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CreateH3Session { .. }]
+    ));
+}
+
+#[rstest]
+fn test_client_create_session_with_subprotocols(
+    mut fixture_client_connection: Connection,
+    fixture_headers: Headers,
+) {
+    fixture_client_connection.state = ConnectionState::Connected;
+    let subprotocols = Some(vec!["h3".to_owned()]);
+    let effects = fixture_client_connection.create_session(
+        MOCK_REQUEST_ID,
+        "/".to_owned(),
+        fixture_headers,
+        subprotocols,
         1.0,
     );
 
@@ -196,8 +321,13 @@ fn test_client_create_session_success(
 
 #[rstest]
 fn test_client_create_session_wrong_state(mut fixture_client_connection: Connection) {
-    let effects =
-        fixture_client_connection.create_session(MOCK_REQUEST_ID, "/".to_owned(), vec![], 1.0);
+    let effects = fixture_client_connection.create_session(
+        MOCK_REQUEST_ID,
+        "/".to_owned(),
+        vec![],
+        None,
+        1.0,
+    );
 
     assert!(matches!(
         effects.as_slice(),
@@ -218,10 +348,11 @@ fn test_client_recv_headers_completes_session(
     fixture_client_connection
         .pending_requests
         .insert(MOCK_SESSION_ID, MOCK_REQUEST_ID);
-    let _unused = fixture_client_connection.create_session(
+    fixture_client_connection.create_session(
         MOCK_REQUEST_ID,
         "/".to_owned(),
         fixture_headers,
+        None,
         1.0,
     );
 
@@ -298,10 +429,11 @@ fn test_client_recv_headers_rejects_non_200(
     fixture_client_connection
         .pending_requests
         .insert(MOCK_SESSION_ID, MOCK_REQUEST_ID);
-    let _unused = fixture_client_connection.create_session(
+    fixture_client_connection.create_session(
         MOCK_REQUEST_ID,
         "/".to_owned(),
         fixture_headers,
+        None,
         1.0,
     );
 
@@ -358,8 +490,7 @@ fn test_close_session_delegates(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    let _unused =
-        fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
+    fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
 
     let effects =
         fixture_server_connection.close_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, 0, None, 2.0);
@@ -386,8 +517,13 @@ fn test_connection_initialization(fixture_server_connection: Connection) {
 
 #[rstest]
 fn test_create_session_server_failure(mut fixture_server_connection: Connection) {
-    let effects =
-        fixture_server_connection.create_session(MOCK_REQUEST_ID, "/".to_owned(), vec![], 1.0);
+    let effects = fixture_server_connection.create_session(
+        MOCK_REQUEST_ID,
+        "/".to_owned(),
+        vec![],
+        None,
+        1.0,
+    );
     assert!(matches!(
         effects.as_slice(),
         [Effect::NotifyRequestFailed {
@@ -406,9 +542,8 @@ fn test_create_stream_delegates(
     fixture_server_connection.state = ConnectionState::Connected;
     fixture_server_connection.peer_initial_max_streams_bidi = 100;
 
-    let _unused =
-        fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
-    fixture_server_connection.accept_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, 1.5);
+    fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
+    fixture_server_connection.accept_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, None, 1.5);
 
     let effects =
         fixture_server_connection.create_stream(MOCK_SESSION_ID, MOCK_REQUEST_ID + 1, false);
@@ -449,8 +584,7 @@ fn test_early_buffer_global_limit(mut fixture_server_connection: Connection) {
 
     for sid in 0..10 {
         for _ in 0..10 {
-            let _unused =
-                fixture_server_connection.recv_datagram(sid, Bytes::from_static(b"d"), 1.0);
+            fixture_server_connection.recv_datagram(sid, Bytes::from_static(b"d"), 1.0);
         }
     }
 
@@ -464,10 +598,61 @@ fn test_early_buffer_global_limit(mut fixture_server_connection: Connection) {
 }
 
 #[rstest]
+fn test_export_keying_material_delegates(
+    mut fixture_client_connection: Connection,
+    fixture_headers: Headers,
+) {
+    fixture_client_connection.state = ConnectionState::Connected;
+    fixture_client_connection
+        .pending_requests
+        .insert(MOCK_SESSION_ID, MOCK_REQUEST_ID);
+    fixture_client_connection.create_session(
+        MOCK_REQUEST_ID,
+        "/".to_owned(),
+        fixture_headers,
+        None,
+        1.0,
+    );
+
+    let response_headers = vec![(Bytes::from_static(b":status"), Bytes::from_static(b"200"))];
+    fixture_client_connection.recv_headers(MOCK_SESSION_ID, response_headers, false, 2.0);
+
+    let effects = fixture_client_connection.export_keying_material(
+        MOCK_SESSION_ID,
+        MOCK_REQUEST_ID + 1,
+        "label".to_owned(),
+        &[1, 2, 3],
+        32,
+    );
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::ExportTlsKeyingMaterial { .. }]
+    ));
+}
+
+#[rstest]
+fn test_export_keying_material_not_found(fixture_server_connection: Connection) {
+    let effects = fixture_server_connection.export_keying_material(
+        999,
+        MOCK_REQUEST_ID,
+        "label".to_owned(),
+        &[1, 2, 3],
+        32,
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Session,
+            ..
+        }]
+    ));
+}
+
+#[rstest]
 fn test_fail_session_cleans_pending(mut fixture_client_connection: Connection) {
     fixture_client_connection.state = ConnectionState::Connected;
-    let _unused =
-        fixture_client_connection.create_session(MOCK_REQUEST_ID, "/".to_owned(), vec![], 1.0);
+    fixture_client_connection.create_session(MOCK_REQUEST_ID, "/".to_owned(), vec![], None, 1.0);
 
     let effects = fixture_client_connection.fail_session(MOCK_REQUEST_ID, None, "Error".to_owned());
 
@@ -488,9 +673,8 @@ fn test_fail_session_cleans_pending(mut fixture_client_connection: Connection) {
 #[rstest]
 fn test_fail_stream_delegates(mut fixture_server_connection: Connection, fixture_headers: Headers) {
     fixture_server_connection.state = ConnectionState::Connected;
-    let _unused =
-        fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
-    fixture_server_connection.accept_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, 1.5);
+    fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
+    fixture_server_connection.accept_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, None, 1.5);
 
     let effects = fixture_server_connection.fail_stream(
         MOCK_SESSION_ID,
@@ -540,9 +724,8 @@ fn test_grant_credits_delegate(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    let _unused =
-        fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
-    fixture_server_connection.accept_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, 1.5);
+    fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
+    fixture_server_connection.accept_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, None, 1.5);
 
     let effects_data =
         fixture_server_connection.grant_data_credit(MOCK_SESSION_ID, MOCK_REQUEST_ID + 1, 99999);
@@ -597,17 +780,44 @@ fn test_handshake_completed_transitions_state(mut fixture_server_connection: Con
 }
 
 #[rstest]
+fn test_has_flow_control_with_bidi_streams() {
+    let mut conn = fixture_server_connection();
+    conn.initial_max_streams_bidi = 100;
+    conn.peer_initial_max_streams_bidi = 100;
+
+    assert!(conn.has_flow_control());
+}
+
+#[rstest]
+fn test_has_flow_control_with_data() {
+    let mut conn = fixture_server_connection();
+    conn.initial_max_data = 100;
+    conn.peer_initial_max_data = 100;
+
+    assert!(conn.has_flow_control());
+}
+
+#[rstest]
+fn test_has_flow_control_with_uni_streams() {
+    let mut conn = fixture_server_connection();
+    conn.initial_max_streams_uni = 100;
+    conn.peer_initial_max_streams_uni = 100;
+
+    assert!(conn.has_flow_control());
+}
+
+#[rstest]
 fn test_prune_early_events_deduplicates_child_resets(mut fixture_server_connection: Connection) {
     let child_id: StreamId = 4;
 
-    let _unused = fixture_server_connection.recv_stream_data(
+    fixture_server_connection.recv_stream_data(
         MOCK_SESSION_ID,
         child_id,
         Bytes::from_static(b"chunk1"),
         false,
         1.0,
     );
-    let _unused = fixture_server_connection.recv_stream_data(
+    fixture_server_connection.recv_stream_data(
         MOCK_SESSION_ID,
         child_id,
         Bytes::from_static(b"chunk2"),
@@ -636,8 +846,7 @@ fn test_prune_early_events_timeout(mut fixture_server_connection: Connection) {
     let stream_id: StreamId = 0;
 
     let data = Bytes::from_static(b"data");
-    let _unused =
-        fixture_server_connection.recv_stream_data(MOCK_SESSION_ID, stream_id, data, false, 1.0);
+    fixture_server_connection.recv_stream_data(MOCK_SESSION_ID, stream_id, data, false, 1.0);
 
     let effects = fixture_server_connection.prune_early_events(10.0);
 
@@ -666,8 +875,7 @@ fn test_prune_early_events_timeout_unidirectional(mut fixture_server_connection:
     let stream_id: StreamId = 2;
 
     let data = Bytes::from_static(b"data");
-    let _unused =
-        fixture_server_connection.recv_stream_data(MOCK_SESSION_ID, stream_id, data, false, 1.0);
+    fixture_server_connection.recv_stream_data(MOCK_SESSION_ID, stream_id, data, false, 1.0);
 
     let effects = fixture_server_connection.prune_early_events(10.0);
 
@@ -692,10 +900,9 @@ fn test_prune_resources_removes_closed_sessions(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    let _unused =
-        fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
+    fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
 
-    fixture_server_connection.accept_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, 1.5);
+    fixture_server_connection.accept_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, None, 1.5);
 
     fixture_server_connection.close_session(MOCK_SESSION_ID, MOCK_REQUEST_ID + 1, 0, None, 2.0);
 
@@ -718,8 +925,7 @@ fn test_recv_capsule_delegates(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    let _unused =
-        fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
+    fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
 
     let effects = fixture_server_connection.recv_capsule(MOCK_SESSION_ID, 0, &Bytes::new(), 2.0);
 
@@ -735,8 +941,7 @@ fn test_recv_capsule_not_found(mut fixture_server_connection: Connection) {
 #[rstest]
 fn test_recv_connect_close(mut fixture_server_connection: Connection, fixture_headers: Headers) {
     fixture_server_connection.state = ConnectionState::Connected;
-    let _unused =
-        fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
+    fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
     let effects = fixture_server_connection.recv_connect_close(MOCK_SESSION_ID, 2.0);
     assert!(!effects.is_empty());
 }
@@ -752,8 +957,7 @@ fn test_recv_datagram_early_buffer_full(mut fixture_server_connection: Connectio
     fixture_server_connection.state = ConnectionState::Connected;
 
     for _ in 0..10 {
-        let _unused =
-            fixture_server_connection.recv_datagram(MOCK_SESSION_ID, Bytes::from_static(b"d"), 1.0);
+        fixture_server_connection.recv_datagram(MOCK_SESSION_ID, Bytes::from_static(b"d"), 1.0);
     }
 
     let effects =
@@ -769,9 +973,8 @@ fn test_recv_goaway_drains_sessions(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    let _unused =
-        fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
-    fixture_server_connection.accept_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, 1.5);
+    fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
+    fixture_server_connection.accept_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, None, 1.5);
 
     let effects = fixture_server_connection.recv_goaway(2.0);
 
@@ -786,6 +989,23 @@ fn test_recv_goaway_drains_sessions(
             ..
         }
     )));
+}
+
+#[rstest]
+fn test_recv_settings_parses_values(mut fixture_client_connection: Connection) {
+    fixture_client_connection.state = ConnectionState::Connecting;
+    fixture_client_connection.handshake_complete = true;
+
+    let mut settings = HashMap::new();
+    settings.insert(SETTINGS_WT_INITIAL_MAX_DATA, 1024);
+    settings.insert(SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI, 10);
+    settings.insert(SETTINGS_WT_INITIAL_MAX_STREAMS_UNI, 5);
+
+    fixture_client_connection.recv_settings(&settings, 1.0);
+
+    assert_eq!(fixture_client_connection.peer_initial_max_data, 1024);
+    assert_eq!(fixture_client_connection.peer_initial_max_streams_bidi, 10);
+    assert_eq!(fixture_client_connection.peer_initial_max_streams_uni, 5);
 }
 
 #[rstest]
@@ -813,9 +1033,8 @@ fn test_recv_stop_sending_delegates(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    let _unused =
-        fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
-    fixture_server_connection.accept_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, 1.0);
+    fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
+    fixture_server_connection.accept_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, None, 1.0);
     fixture_server_connection.bind_stream(
         MOCK_SESSION_ID,
         MOCK_STREAM_ID,
@@ -846,7 +1065,7 @@ fn test_recv_stream_data_early_buffer_full_bidi(mut fixture_server_connection: C
     fixture_server_connection.state = ConnectionState::Connected;
 
     for _ in 0..10 {
-        let _unused = fixture_server_connection.recv_stream_data(
+        fixture_server_connection.recv_stream_data(
             MOCK_SESSION_ID,
             4,
             Bytes::from_static(b"data"),
@@ -881,7 +1100,7 @@ fn test_recv_stream_data_early_buffer_full_uni(mut fixture_server_connection: Co
     fixture_server_connection.state = ConnectionState::Connected;
 
     for _ in 0..10 {
-        let _unused = fixture_server_connection.recv_stream_data(
+        fixture_server_connection.recv_stream_data(
             MOCK_SESSION_ID,
             2,
             Bytes::from_static(b"data"),
@@ -934,8 +1153,7 @@ fn test_recv_stream_data_routes_and_buffers(
             .contains_key(&MOCK_SESSION_ID)
     );
 
-    let _unused =
-        fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 2.0);
+    fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 2.0);
     assert_eq!(
         fixture_server_connection.stream_map.get(&MOCK_STREAM_ID),
         Some(&MOCK_SESSION_ID)
@@ -948,9 +1166,8 @@ fn test_recv_stream_reset_delegates(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    let _unused =
-        fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
-    fixture_server_connection.accept_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, 1.5);
+    fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
+    fixture_server_connection.accept_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, None, 1.5);
     fixture_server_connection.bind_stream(
         MOCK_SESSION_ID,
         MOCK_STREAM_ID,
@@ -960,7 +1177,7 @@ fn test_recv_stream_reset_delegates(
     );
 
     let effects = fixture_server_connection.recv_stream_reset(MOCK_STREAM_ID, 0, 3.0);
-    assert!(effects.is_empty() || !effects.is_empty());
+    assert!(!effects.is_empty());
 }
 
 #[rstest]
@@ -985,8 +1202,7 @@ fn test_reject_session_delegates(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    let _unused =
-        fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
+    fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
     let effects =
         fixture_server_connection.reject_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, 403, 2.0);
     assert!(!effects.is_empty());
@@ -1010,9 +1226,8 @@ fn test_reset_stream_delegates(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    let _unused =
-        fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
-    fixture_server_connection.accept_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, 1.0);
+    fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
+    fixture_server_connection.accept_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, None, 1.0);
     fixture_server_connection.bind_stream(MOCK_SESSION_ID, 1, MOCK_REQUEST_ID + 1, false, 2.0);
 
     let effects =
@@ -1040,9 +1255,8 @@ fn test_send_datagram_delegates(
     fixture_server_connection.state = ConnectionState::Connected;
     fixture_server_connection.recv_transport_parameters(1200);
 
-    let _unused =
-        fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
-    fixture_server_connection.accept_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, 1.5);
+    fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
+    fixture_server_connection.accept_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, None, 1.5);
 
     let data = Bytes::from_static(b"dg");
     let effects =
@@ -1134,12 +1348,7 @@ fn test_server_recv_headers_existing_session_ignored(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    let _unused = fixture_server_connection.recv_headers(
-        MOCK_SESSION_ID,
-        fixture_headers.clone(),
-        false,
-        1.0,
-    );
+    fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers.clone(), false, 1.0);
     let effects =
         fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
     assert!(effects.is_empty());
@@ -1151,15 +1360,33 @@ fn test_server_recv_headers_existing_session_ignored_stream_ended(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    let _unused = fixture_server_connection.recv_headers(
-        MOCK_SESSION_ID,
-        fixture_headers.clone(),
-        false,
-        1.0,
-    );
+    fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers.clone(), false, 1.0);
     let effects =
         fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, true, 1.0);
     assert!(!effects.is_empty());
+}
+
+#[rstest]
+fn test_server_recv_headers_no_flow_control_limit_reached(
+    mut fixture_server_connection: Connection,
+    fixture_headers: Headers,
+) {
+    fixture_server_connection.state = ConnectionState::Connected;
+    fixture_server_connection.initial_max_data = 0;
+    fixture_server_connection.initial_max_streams_bidi = 0;
+    fixture_server_connection.initial_max_streams_uni = 0;
+    fixture_server_connection.peer_initial_max_data = 0;
+
+    fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers.clone(), false, 1.0);
+    assert_eq!(fixture_server_connection.sessions.len(), 1);
+
+    let effects =
+        fixture_server_connection.recv_headers(MOCK_SESSION_ID + 1, fixture_headers, false, 1.0);
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::SendH3Headers { .. }, Effect::StopQuicStream { .. }]
+    ));
 }
 
 #[rstest]
@@ -1176,10 +1403,7 @@ fn test_server_recv_headers_rejects_invalid_protocol(mut fixture_server_connecti
     );
     assert!(matches!(
         effects.as_slice(),
-        [
-            Effect::SendH3Headers { status: 400, .. },
-            Effect::StopQuicStream { .. }
-        ]
+        [Effect::SendH3Headers { .. }, Effect::StopQuicStream { .. }]
     ));
 }
 
@@ -1189,14 +1413,10 @@ fn test_server_recv_headers_rejects_max_sessions(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
+    fixture_server_connection.peer_initial_max_data = 100;
     fixture_server_connection.max_sessions = 1;
 
-    let _unused = fixture_server_connection.recv_headers(
-        MOCK_SESSION_ID,
-        fixture_headers.clone(),
-        false,
-        1.0,
-    );
+    fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers.clone(), false, 1.0);
     assert_eq!(fixture_server_connection.sessions.len(), 1);
 
     let effects =
@@ -1204,10 +1424,7 @@ fn test_server_recv_headers_rejects_max_sessions(
 
     assert!(matches!(
         effects.as_slice(),
-        [
-            Effect::SendH3Headers { status: 429, .. },
-            Effect::StopQuicStream { .. }
-        ]
+        [Effect::SendH3Headers { .. }, Effect::StopQuicStream { .. }]
     ));
 }
 
@@ -1221,18 +1438,14 @@ fn test_server_recv_headers_wrong_state_rejects(
         fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
     assert!(matches!(
         effects.as_slice(),
-        [
-            Effect::SendH3Headers { status: 429, .. },
-            Effect::StopQuicStream { .. }
-        ]
+        [Effect::SendH3Headers { .. }, Effect::StopQuicStream { .. }]
     ));
 }
 
 #[rstest]
 fn test_session_diagnostics(mut fixture_server_connection: Connection, fixture_headers: Headers) {
     fixture_server_connection.state = ConnectionState::Connected;
-    let _unused =
-        fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
+    fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
     let effects = fixture_server_connection.session_diagnostics(MOCK_SESSION_ID, MOCK_REQUEST_ID);
     assert!(matches!(
         effects.as_slice(),
@@ -1258,9 +1471,8 @@ fn test_session_diagnostics_not_found(fixture_server_connection: Connection) {
 #[rstest]
 fn test_stop_stream_delegates(mut fixture_server_connection: Connection, fixture_headers: Headers) {
     fixture_server_connection.state = ConnectionState::Connected;
-    let _unused =
-        fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
-    fixture_server_connection.accept_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, 1.0);
+    fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
+    fixture_server_connection.accept_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, None, 1.0);
     fixture_server_connection.bind_stream(
         MOCK_SESSION_ID,
         MOCK_STREAM_ID,
@@ -1293,10 +1505,9 @@ fn test_stop_stream_not_found(mut fixture_server_connection: Connection) {
 #[rstest]
 fn test_stream_diagnostics(mut fixture_server_connection: Connection, fixture_headers: Headers) {
     fixture_server_connection.state = ConnectionState::Connected;
-    let _unused =
-        fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
+    fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
 
-    fixture_server_connection.accept_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, 1.0);
+    fixture_server_connection.accept_session(MOCK_SESSION_ID, MOCK_REQUEST_ID, None, 1.0);
     fixture_server_connection.bind_stream(
         MOCK_SESSION_ID,
         MOCK_STREAM_ID,
@@ -1336,8 +1547,7 @@ fn test_stream_diagnostics_not_found(fixture_server_connection: Connection) {
 #[rstest]
 fn test_stream_read_delegates(mut fixture_server_connection: Connection, fixture_headers: Headers) {
     fixture_server_connection.state = ConnectionState::Connected;
-    let _unused =
-        fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
+    fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
     let effects = fixture_server_connection.stream_read(
         MOCK_SESSION_ID,
         MOCK_STREAM_ID,
@@ -1362,8 +1572,7 @@ fn test_stream_read_not_found(mut fixture_server_connection: Connection) {
 #[rstest]
 fn test_terminated_cleans_up(mut fixture_server_connection: Connection, fixture_headers: Headers) {
     fixture_server_connection.state = ConnectionState::Connected;
-    let _unused =
-        fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
+    fixture_server_connection.recv_headers(MOCK_SESSION_ID, fixture_headers, false, 1.0);
 
     let effects = fixture_server_connection.terminated(0, "Reset".to_owned(), 2.0);
 

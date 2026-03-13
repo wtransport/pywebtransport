@@ -57,6 +57,8 @@ fn test_effect_emit_session_event_optional_fields_none_success(fixture_session_i
         event_type: EventType::SessionClosed,
         path: None,
         headers: None,
+        subprotocols: None,
+        subprotocol: None,
         data: None,
         is_unidirectional: None,
         max_data: None,
@@ -70,12 +72,16 @@ fn test_effect_emit_session_event_optional_fields_none_success(fixture_session_i
 
     if let Effect::EmitSessionEvent {
         headers,
+        subprotocols,
+        subprotocol,
         error_code,
         reason,
         ..
     } = effect
     {
         assert!(headers.is_none());
+        assert!(subprotocols.is_none());
+        assert!(subprotocol.is_none());
         assert!(error_code.is_none());
         assert!(reason.is_none());
     }
@@ -93,6 +99,8 @@ fn test_effect_emit_session_event_optional_fields_some_success(
         event_type: EventType::SessionReady,
         path: Some("/test".to_owned()),
         headers: Some(fixture_headers),
+        subprotocols: Some(vec!["h3".to_owned()]),
+        subprotocol: Some("h3".to_owned()),
         data: Some(fixture_bytes),
         is_unidirectional: Some(true),
         max_data: Some(1024),
@@ -106,12 +114,16 @@ fn test_effect_emit_session_event_optional_fields_some_success(
 
     if let Effect::EmitSessionEvent {
         path,
+        subprotocols,
+        subprotocol,
         max_data,
         ready_at,
         ..
     } = effect
     {
         assert_eq!(path, Some("/test".to_owned()));
+        assert_eq!(subprotocols, Some(vec!["h3".to_owned()]));
+        assert_eq!(subprotocol, Some("h3".to_owned()));
         assert_eq!(max_data, Some(1024));
         assert!(ready_at.is_some());
     }
@@ -146,6 +158,23 @@ fn test_effect_emit_stream_event_full_fields_success(
 }
 
 #[rstest]
+fn test_effect_export_tls_keying_material_success(
+    fixture_request_id: RequestId,
+    fixture_bytes: Bytes,
+) {
+    let effect = Effect::ExportTlsKeyingMaterial {
+        request_id: fixture_request_id,
+        label: "EXPORTER-test".to_owned(),
+        context: fixture_bytes,
+        length: 32,
+    };
+
+    let debug_output = format!("{effect:?}");
+    assert!(debug_output.contains("ExportTlsKeyingMaterial"));
+    assert!(debug_output.contains("EXPORTER-test"));
+}
+
+#[rstest]
 fn test_effect_notify_request_failed_structure_success(
     fixture_request_id: RequestId,
     fixture_error_source: ErrorSource,
@@ -166,10 +195,13 @@ fn test_effect_notify_request_failed_structure_success(
 }
 
 #[rstest]
-fn test_effect_send_h3_headers_lifecycle_success(fixture_stream_id: StreamId) {
+fn test_effect_send_h3_headers_lifecycle_success(
+    fixture_stream_id: StreamId,
+    fixture_headers: Headers,
+) {
     let effect = Effect::SendH3Headers {
         stream_id: fixture_stream_id,
-        status: 200,
+        headers: fixture_headers.clone(),
         end_stream: true,
     };
 
@@ -183,18 +215,18 @@ fn test_effect_send_h3_headers_lifecycle_success(fixture_stream_id: StreamId) {
     if let (
         Effect::SendH3Headers {
             stream_id: s1,
-            status: st1,
+            headers: h1,
             end_stream: e1,
         },
         Effect::SendH3Headers {
             stream_id: s2,
-            status: st2,
+            headers: h2,
             end_stream: e2,
         },
     ) = (effect, cloned)
     {
         assert_eq!(s1, s2);
-        assert_eq!(st1, st2);
+        assert_eq!(h1, h2);
         assert_eq!(e1, e2);
     }
 }
@@ -311,6 +343,58 @@ fn test_protocol_event_transport_stop_sending_received_success(
 }
 
 #[rstest]
+fn test_protocol_event_user_accept_session_success(
+    fixture_request_id: RequestId,
+    fixture_session_id: SessionId,
+) {
+    let event = ProtocolEvent::UserAcceptSession {
+        request_id: fixture_request_id,
+        session_id: fixture_session_id,
+        subprotocol: Some("webtransport".to_owned()),
+    };
+
+    let debug_output = format!("{event:?}");
+    assert!(debug_output.contains("UserAcceptSession"));
+    assert!(debug_output.contains("webtransport"));
+}
+
+#[rstest]
+fn test_protocol_event_user_create_session_success(
+    fixture_request_id: RequestId,
+    fixture_headers: Headers,
+) {
+    let event = ProtocolEvent::UserCreateSession {
+        request_id: fixture_request_id,
+        path: "/path".to_owned(),
+        headers: fixture_headers,
+        subprotocols: Some(vec!["p1".to_owned()]),
+    };
+
+    let debug_output = format!("{event:?}");
+    assert!(debug_output.contains("UserCreateSession"));
+    assert!(debug_output.contains("p1"));
+}
+
+#[rstest]
+fn test_protocol_event_user_export_keying_material_success(
+    fixture_request_id: RequestId,
+    fixture_session_id: SessionId,
+    fixture_bytes: Bytes,
+) {
+    let event = ProtocolEvent::UserExportKeyingMaterial {
+        request_id: fixture_request_id,
+        session_id: fixture_session_id,
+        label: "EXPORTER-test".to_owned(),
+        context: fixture_bytes,
+        length: 32,
+    };
+
+    let debug_output = format!("{event:?}");
+    assert!(debug_output.contains("UserExportKeyingMaterial"));
+    assert!(debug_output.contains("EXPORTER-test"));
+}
+
+#[rstest]
 fn test_protocol_event_user_stop_sending_success(
     fixture_request_id: RequestId,
     fixture_stream_id: StreamId,
@@ -341,6 +425,7 @@ fn test_request_result_read_data_content_success(fixture_bytes: Bytes) {
 #[rstest]
 #[case::none(RequestResult::None)]
 #[case::read_data(RequestResult::ReadData(Bytes::from_static(b"data")))]
+#[case::key_mat(RequestResult::KeyingMaterial(Bytes::from_static(b"key")))]
 #[case::session(RequestResult::SessionId(1))]
 #[case::stream(RequestResult::StreamId(2))]
 #[case::conn_diag(RequestResult::ConnectionDiagnostics(Box::new(ConnectionDiagnostics {
@@ -364,12 +449,13 @@ fn test_request_result_read_data_content_success(fixture_bytes: Bytes) {
     state: SessionState::Connected,
     path: "/".to_owned(),
     headers: vec![],
+    subprotocol: None,
     created_at: 0.0,
     local_max_data: 0,
     local_data_sent: 0,
+    local_data_received: 0,
     local_data_consumed: 0,
     peer_max_data: 0,
-    peer_data_sent: 0,
     local_max_streams_bidi: 0,
     local_streams_bidi_opened: 0,
     peer_max_streams_bidi: 0,

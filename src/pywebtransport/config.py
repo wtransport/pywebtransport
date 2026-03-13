@@ -314,6 +314,7 @@ class ClientConfig(BaseConfig):
     max_sessions: int = DEFAULT_CLIENT_MAX_SESSIONS
     retry_backoff: float = DEFAULT_RETRY_BACKOFF
     retry_delay: float = DEFAULT_RETRY_DELAY
+    subprotocols: list[str] | None = None
     user_agent: str | None = None
     verify_mode: ssl.VerifyMode | None = ssl.CERT_REQUIRED
 
@@ -363,6 +364,14 @@ class ClientConfig(BaseConfig):
                 config_key="retry_delay",
                 config_value=self.retry_delay,
             )
+
+        if self.subprotocols is not None:
+            if not isinstance(self.subprotocols, list) or not all(isinstance(p, str) for p in self.subprotocols):
+                raise ConfigurationError(
+                    message="Invalid value for 'subprotocols': must be a list of strings",
+                    config_key="subprotocols",
+                    config_value=self.subprotocols,
+                )
 
         has_certfile = self.certfile is not None
         has_keyfile = self.keyfile is not None

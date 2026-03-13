@@ -81,14 +81,14 @@ class ClientFleet:
         except* Exception as eg:
             _logger.error("Error closing clients in fleet: %s", eg.exceptions, exc_info=eg)
 
-    async def connect_all(self, *, url: URL) -> list[WebTransportSession]:
+    async def connect_all(self, *, url: URL, subprotocols: list[str] | None = None) -> list[WebTransportSession]:
         """Connect all clients in the fleet to the specified URL."""
         self._check_active()
 
         async def safe_connect(client: WebTransportClient) -> WebTransportSession | None:
             try:
                 async with self._connect_sem:
-                    return await client.connect(url=url)
+                    return await client.connect(url=url, subprotocols=subprotocols)
             except Exception as e:
                 _logger.warning("Client failed to connect: %s", e)
                 return None

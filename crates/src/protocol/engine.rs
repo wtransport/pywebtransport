@@ -104,9 +104,9 @@ impl WebTransportEngine {
     // Datagram encoding to H3 frame.
     pub(crate) fn encode_datagram(
         stream_id: StreamId,
-        data: &Bytes,
+        data: Bytes,
     ) -> Result<Vec<Effect>, WebTransportError> {
-        let payload = H3::encode_datagram(stream_id, data.clone())?;
+        let payload = H3::encode_datagram(stream_id, data)?;
         let total_len = payload.iter().map(Bytes::len).sum();
         let mut merged = BytesMut::with_capacity(total_len);
         for p in payload {
@@ -137,14 +137,10 @@ impl WebTransportEngine {
     pub(crate) fn encode_headers(
         &mut self,
         stream_id: StreamId,
-        status: u16,
+        headers: &Headers,
         end_stream: bool,
     ) -> Result<Vec<Effect>, WebTransportError> {
-        let headers: Headers = vec![(
-            Bytes::from_static(b":status"),
-            Bytes::from(status.to_string()),
-        )];
-        self.h3.encode_headers(stream_id, &headers, end_stream)
+        self.h3.encode_headers(stream_id, headers, end_stream)
     }
 
     // Session establishment CONNECT request encoding.
@@ -387,8 +383,14 @@ impl WebTransportEngine {
                 ProtocolEvent::UserAcceptSession {
                     request_id,
                     session_id,
+                    subprotocol,
                 } => {
-                    new_effects.extend(self.connection.accept_session(session_id, request_id, now));
+                    new_effects.extend(self.connection.accept_session(
+                        session_id,
+                        request_id,
+                        subprotocol,
+                        now,
+                    ));
                 }
                 ProtocolEvent::UserCloseSession {
                     request_id,
@@ -408,6 +410,7 @@ impl WebTransportEngine {
                     request_id,
                     path,
                     headers,
+                    subprotocols,
                 } => {
                     if self.connection.is_client
                         && (self.connection.state == ConnectionState::Idle
@@ -419,12 +422,16 @@ impl WebTransportEngine {
                                 request_id,
                                 path,
                                 headers,
+                                subprotocols,
                             });
                     } else {
-                        new_effects.extend(
-                            self.connection
-                                .create_session(request_id, path, headers, now),
-                        );
+                        new_effects.extend(self.connection.create_session(
+                            request_id,
+                            path,
+                            headers,
+                            subprotocols,
+                            now,
+                        ));
                     }
                 }
                 ProtocolEvent::UserCreateStream {
@@ -450,6 +457,19 @@ impl WebTransportEngine {
                             is_unidirectional,
                         ));
                     }
+                }
+                ProtocolEvent::UserExportKeyingMaterial {
+                    request_id,
+                    session_id,
+                    label,
+                    context,
+                    length,
+                } => {
+                    new_effects.extend(
+                        self.connection.export_keying_material(
+                            session_id, request_id, label, &context, length,
+                        ),
+                    );
                 }
                 ProtocolEvent::UserGetConnectionDiagnostics { request_id } => {
                     new_effects.extend(self.connection.diagnose(request_id));

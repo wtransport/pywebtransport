@@ -452,7 +452,8 @@ fn test_recv_reset_on_closed_stream_idempotency_success(mut fixture_stream: Stre
 fn test_recv_reset_remote_success(mut fixture_stream: Stream) {
     fixture_stream.read(1, 100);
 
-    let effects = fixture_stream.recv_reset(0x100, 1.0);
+    let network_code = wt_to_http_error(0x100).unwrap_or(0);
+    let effects = fixture_stream.recv_reset(network_code, 1.0);
 
     assert_eq!(fixture_stream.state, StreamState::ResetReceived);
     assert_eq!(fixture_stream.close_code, Some(0x100));
@@ -479,12 +480,13 @@ fn test_recv_reset_unknown_error_code_success(mut fixture_stream: Stream) {
     let effects = fixture_stream.recv_reset(unknown_code, 1.0);
 
     assert_eq!(fixture_stream.state, StreamState::ResetReceived);
-    assert_eq!(fixture_stream.close_code, Some(unknown_code));
+    assert_eq!(fixture_stream.close_code, None);
 
     assert!(matches!(
         effects.last(),
         Some(Effect::EmitStreamEvent {
             event_type: EventType::StreamResetReceived,
+            error_code: None,
             ..
         })
     ));
@@ -498,8 +500,8 @@ fn test_recv_reset_with_reserved_error_code(mut fixture_stream: Stream) {
 
 #[rstest]
 fn test_recv_stop_sending_success(mut fixture_stream: Stream) {
-    let error_code = 0x100;
-    let effects = fixture_stream.recv_stop_sending(error_code);
+    let network_code = wt_to_http_error(0x100).unwrap_or(0);
+    let effects = fixture_stream.recv_stop_sending(network_code);
 
     assert!(matches!(
         effects.as_slice(),
@@ -548,6 +550,32 @@ fn test_reset_local_command_success(mut fixture_stream: Stream) {
     ] = effects.as_slice()
     {
         assert_eq!(*code, wt_to_http_error(404).unwrap_or(404));
+    }
+}
+
+#[rstest]
+fn test_reset_local_command_with_invalid_code_fallbacks_to_zero(mut fixture_stream: Stream) {
+    let req_id = 1;
+    let invalid_error_code = u64::MAX;
+
+    let effects = fixture_stream.reset(req_id, invalid_error_code, 1.0);
+
+    assert_eq!(fixture_stream.state, StreamState::ResetSent);
+    assert_eq!(fixture_stream.close_code, Some(invalid_error_code));
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::ResetQuicStream { .. }, ..]
+    ));
+
+    if let [
+        Effect::ResetQuicStream {
+            error_code: code, ..
+        },
+        ..,
+    ] = effects.as_slice()
+    {
+        assert_eq!(*code, ERR_WT_APPLICATION_ERROR_FIRST);
     }
 }
 
@@ -632,6 +660,31 @@ fn test_stop_local_command_success(mut fixture_stream: Stream) {
     ] = effects.as_slice()
     {
         assert_eq!(*code, wt_to_http_error(500).unwrap_or(500));
+    }
+}
+
+#[rstest]
+fn test_stop_local_command_with_invalid_code_fallbacks_to_zero(mut fixture_stream: Stream) {
+    let req_id = 1;
+    let invalid_error_code = u64::MAX;
+
+    let effects = fixture_stream.stop(req_id, invalid_error_code, 1.0);
+
+    assert_eq!(fixture_stream.state, StreamState::ResetReceived);
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::StopQuicStream { .. }, ..]
+    ));
+
+    if let [
+        Effect::StopQuicStream {
+            error_code: code, ..
+        },
+        ..,
+    ] = effects.as_slice()
+    {
+        assert_eq!(*code, ERR_WT_APPLICATION_ERROR_FIRST);
     }
 }
 
@@ -956,11 +1009,4 @@ fn test_write_partial_credit_buffering_success(mut fixture_stream: Stream) {
     if let [_, Effect::SendH3Capsule { capsule_type, .. }] = effects.as_slice() {
         assert_eq!(*capsule_type, WT_DATA_BLOCKED_TYPE);
     }
-}
-
-#[rstest]
-fn test_write_varint_error(mut fixture_stream: Stream) {
-    let (effects, _) = fixture_stream.write(1, Bytes::from_static(b"data"), false, 0, u64::MAX);
-
-    assert!(effects.is_empty());
 }

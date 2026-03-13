@@ -7,9 +7,10 @@ use tracing::{debug, error, warn};
 
 use crate::common::constants::{
     DRAIN_WEBTRANSPORT_SESSION_TYPE, ERR_H3_REQUEST_REJECTED, ERR_LIB_CONNECTION_STATE_ERROR,
-    ERR_LIB_INTERNAL_ERROR, ERR_LIB_SESSION_STATE_ERROR, ERR_WT_BUFFERED_STREAM_REJECTED,
-    SETTINGS_WT_INITIAL_MAX_DATA, SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI,
-    SETTINGS_WT_INITIAL_MAX_STREAMS_UNI, UPGRADE_TOKEN_WEBTRANSPORT,
+    ERR_LIB_INTERNAL_ERROR, ERR_LIB_SESSION_STATE_ERROR, ERR_WT_ALPN_ERROR,
+    ERR_WT_BUFFERED_STREAM_REJECTED, SETTINGS_WT_INITIAL_MAX_DATA,
+    SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI, SETTINGS_WT_INITIAL_MAX_STREAMS_UNI,
+    UPGRADE_TOKEN_WEBTRANSPORT, WT_AVAILABLE_PROTOCOLS, WT_PROTOCOL,
 };
 use crate::common::types::{
     ConnectionId, ConnectionState, ErrorCode, ErrorSource, EventType, Headers, RequestId,
@@ -17,7 +18,10 @@ use crate::common::types::{
 };
 use crate::protocol::events::{Effect, ProtocolEvent, RequestResult};
 use crate::protocol::session::Session;
-use crate::protocol::utils::{find_header_str, is_unidirectional_stream, stream_dir_from_id};
+use crate::protocol::utils::{
+    encode_subprotocol_list, find_header, find_header_str, is_unidirectional_stream,
+    parse_subprotocol_list, parse_subprotocol_string, stream_dir_from_id,
+};
 
 // Representation of a WebTransport connection state machine.
 pub(crate) struct Connection {
@@ -114,10 +118,11 @@ impl Connection {
         &mut self,
         session_id: SessionId,
         request_id: RequestId,
+        subprotocol: Option<String>,
         now: f64,
     ) -> Vec<Effect> {
         if let Some(session) = self.sessions.get_mut(&session_id) {
-            return session.accept(request_id, now);
+            return session.accept(request_id, subprotocol, now);
         }
         vec![Effect::NotifyRequestFailed {
             request_id,
@@ -203,7 +208,8 @@ impl Connection {
         &mut self,
         request_id: RequestId,
         path: String,
-        headers: Headers,
+        mut headers: Headers,
+        subprotocols: Option<Vec<String>>,
         now: f64,
     ) -> Vec<Effect> {
         if !self.is_client {
@@ -227,11 +233,34 @@ impl Connection {
             }];
         }
 
+        let active_limit = if self.has_flow_control() {
+            self.max_sessions
+        } else {
+            1
+        };
+
+        let current_total = (self.sessions.len() + self.pending_session_configs.len()) as u64;
+
+        if active_limit > 0 && current_total >= active_limit {
+            return vec![Effect::NotifyRequestFailed {
+                request_id,
+                source: ErrorSource::Connection,
+                error_code: Some(ERR_LIB_CONNECTION_STATE_ERROR),
+                reason: "Session limit reached".to_owned(),
+            }];
+        }
+
+        if let Some(ref protos) = subprotocols {
+            let encoded = encode_subprotocol_list(protos);
+            headers.push((Bytes::from_static(WT_AVAILABLE_PROTOCOLS), encoded));
+        }
+
         self.pending_session_configs.insert(
             request_id,
             SessionInitData {
                 path: path.clone(),
                 headers: headers.clone(),
+                subprotocols,
                 created_at: now,
             },
         );
@@ -270,6 +299,25 @@ impl Connection {
         }]
     }
 
+    // TLS keying material export handling (delegated).
+    pub(crate) fn export_keying_material(
+        &self,
+        session_id: SessionId,
+        request_id: RequestId,
+        label: String,
+        context: &[u8],
+        length: u32,
+    ) -> Vec<Effect> {
+        if let Some(session) = self.sessions.get(&session_id) {
+            return session.export_keying_material(request_id, label, context, length);
+        }
+        vec![Effect::NotifyRequestFailed {
+            request_id,
+            source: ErrorSource::Session,
+            error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
+            reason: "Session not found".to_owned(),
+        }]
+    }
     // H3 session creation failure handling.
     pub(crate) fn fail_session(
         &mut self,
@@ -374,6 +422,18 @@ impl Connection {
             effects.extend(client_effects);
         }
         effects
+    }
+
+    // Flow control negotiation status verification.
+    pub(crate) fn has_flow_control(&self) -> bool {
+        let local_intent = self.initial_max_data > 0
+            || self.initial_max_streams_bidi > 0
+            || self.initial_max_streams_uni > 0;
+        let peer_intent = self.peer_initial_max_data > 0
+            || self.peer_initial_max_streams_bidi > 0
+            || self.peer_initial_max_streams_uni > 0;
+
+        local_intent && peer_intent
     }
 
     // Early events pruning.
@@ -509,7 +569,7 @@ impl Connection {
         &mut self,
         session_id: SessionId,
         capsule_type: u64,
-        data: &Bytes,
+        data: &[u8],
         now: f64,
     ) -> Vec<Effect> {
         if let Some(session) = self.sessions.get_mut(&session_id) {
@@ -576,6 +636,8 @@ impl Connection {
                     event_type: EventType::SessionDraining,
                     path: None,
                     headers: None,
+                    subprotocols: None,
+                    subprotocol: None,
                     data: None,
                     is_unidirectional: None,
                     max_data: None,
@@ -626,10 +688,53 @@ impl Connection {
             let status_ok = status_str.as_deref() == Some("200");
 
             if status_ok {
+                let subprotocol = std::str::from_utf8(WT_PROTOCOL)
+                    .ok()
+                    .and_then(|key| find_header(&headers, key))
+                    .and_then(|val| parse_subprotocol_string(&val));
+
+                if let Some(ref requested_protos) = init_data.subprotocols {
+                    let is_valid = match subprotocol {
+                        Some(ref negotiated) => requested_protos.contains(negotiated),
+                        None => false,
+                    };
+
+                    if !is_valid {
+                        let reason = match subprotocol {
+                            Some(ref negotiated) => {
+                                format!("Server negotiated unrequested subprotocol: {negotiated}")
+                            }
+                            None => "Server failed to negotiate a required subprotocol".to_owned(),
+                        };
+
+                        error!("{reason}");
+
+                        if stream_ended {
+                            effects.extend(self.recv_connect_close(stream_id, now));
+                        }
+                        effects.push(Effect::NotifyRequestFailed {
+                            request_id,
+                            source: ErrorSource::Session,
+                            error_code: Some(ERR_WT_ALPN_ERROR),
+                            reason,
+                        });
+                        effects.push(Effect::StopQuicStream {
+                            stream_id,
+                            error_code: ERR_WT_ALPN_ERROR,
+                        });
+                        effects.push(Effect::ResetQuicStream {
+                            stream_id,
+                            error_code: ERR_WT_ALPN_ERROR,
+                        });
+                        return effects;
+                    }
+                }
+
                 let session = Session::new(
                     stream_id,
                     init_data.path.clone(),
                     init_data.headers.clone(),
+                    subprotocol.clone(),
                     init_data.created_at,
                     self.config_initial_max_data(),
                     self.config_initial_max_streams_bidi(),
@@ -640,6 +745,7 @@ impl Connection {
                     self.flow_control_window_size,
                     self.stream_read_buffer_size,
                     self.stream_write_buffer_size,
+                    self.has_flow_control(),
                     self.flow_control_window_auto_scale,
                     self.is_client,
                     SessionState::Connected,
@@ -651,6 +757,8 @@ impl Connection {
                     event_type: EventType::SessionReady,
                     path: Some(init_data.path),
                     headers: Some(init_data.headers),
+                    subprotocols: None,
+                    subprotocol,
                     data: None,
                     is_unidirectional: None,
                     max_data: None,
@@ -700,7 +808,7 @@ impl Connection {
                 );
                 effects.push(Effect::SendH3Headers {
                     stream_id,
-                    status: 429,
+                    headers: vec![(Bytes::from_static(b":status"), Bytes::from("429"))],
                     end_stream: true,
                 });
                 effects.push(Effect::StopQuicStream {
@@ -710,14 +818,19 @@ impl Connection {
                 return effects;
             }
 
-            if self.max_sessions > 0 && self.sessions.len() as u64 >= self.max_sessions {
+            let active_limit = if self.has_flow_control() {
+                self.max_sessions
+            } else {
+                1
+            };
+
+            if active_limit > 0 && self.sessions.len() as u64 >= active_limit {
                 warn!(
-                    "Session limit ({}) reached, rejecting new session on stream {stream_id}",
-                    self.max_sessions
+                    "Session limit ({active_limit}) reached, rejecting new session on stream {stream_id}"
                 );
                 effects.push(Effect::SendH3Headers {
                     stream_id,
-                    status: 429,
+                    headers: vec![(Bytes::from_static(b":status"), Bytes::from("429"))],
                     end_stream: true,
                 });
                 effects.push(Effect::StopQuicStream {
@@ -738,7 +851,7 @@ impl Connection {
                 debug!("Rejecting non-WebTransport request on stream {stream_id}");
                 effects.push(Effect::SendH3Headers {
                     stream_id,
-                    status: 400,
+                    headers: vec![(Bytes::from_static(b":status"), Bytes::from("400"))],
                     end_stream: true,
                 });
                 effects.push(Effect::StopQuicStream {
@@ -751,10 +864,16 @@ impl Connection {
             let path_header = find_header_str(&headers, ":path");
             let path = path_header.unwrap_or_else(|| "/".to_owned());
 
+            let subprotocols = std::str::from_utf8(WT_AVAILABLE_PROTOCOLS)
+                .ok()
+                .and_then(|key| find_header(&headers, key))
+                .and_then(|val| parse_subprotocol_list(&val));
+
             let session = Session::new(
                 stream_id,
                 path.clone(),
                 headers.clone(),
+                None,
                 now,
                 self.config_initial_max_data(),
                 self.config_initial_max_streams_bidi(),
@@ -765,6 +884,7 @@ impl Connection {
                 self.flow_control_window_size,
                 self.stream_read_buffer_size,
                 self.stream_write_buffer_size,
+                self.has_flow_control(),
                 self.flow_control_window_auto_scale,
                 self.is_client,
                 SessionState::Connecting,
@@ -776,6 +896,8 @@ impl Connection {
                 event_type: EventType::SessionRequest,
                 path: Some(path),
                 headers: Some(headers),
+                subprotocols,
+                subprotocol: None,
                 data: None,
                 is_unidirectional: None,
                 max_data: None,
@@ -1214,6 +1336,7 @@ pub(crate) struct ConnectionDiagnostics {
 pub(crate) struct SessionInitData {
     pub(crate) path: String,
     pub(crate) headers: Headers,
+    pub(crate) subprotocols: Option<Vec<String>>,
     pub(crate) created_at: f64,
 }
 

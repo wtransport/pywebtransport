@@ -118,14 +118,15 @@ class TestClientFleet:
         self, fleet: ClientFleet, mock_clients: list[Any], caplog: LogCaptureFixture
     ) -> None:
         url = "https://example.com"
+        subprotocols = ["proto1", "proto2"]
         error = ConnectionError(message="Failed to connect")
         cast(AsyncMock, mock_clients[1].connect).side_effect = error
 
-        sessions = await fleet.connect_all(url=url)
+        sessions = await fleet.connect_all(url=url, subprotocols=subprotocols)
 
         assert len(sessions) == 2
-        cast(AsyncMock, mock_clients[0].connect).assert_awaited_once_with(url=url)
-        cast(AsyncMock, mock_clients[2].connect).assert_awaited_once_with(url=url)
+        cast(AsyncMock, mock_clients[0].connect).assert_awaited_once_with(url=url, subprotocols=subprotocols)
+        cast(AsyncMock, mock_clients[2].connect).assert_awaited_once_with(url=url, subprotocols=subprotocols)
         assert f"Client failed to connect: {error}" in caplog.text
 
     def test_get_client_after_close(self, fleet_unactivated: ClientFleet) -> None:

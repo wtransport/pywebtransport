@@ -370,6 +370,7 @@ class TestReconnectingClient:
 
         assert client._url == self.URL
         assert client._client is mock_underlying_client
+        assert client._subprotocols is None
         assert client._closed is False
         assert client._config is mock_underlying_client.config
         assert isinstance(client._connected_event, asyncio.Event)
@@ -379,6 +380,11 @@ class TestReconnectingClient:
         assert client._session is None
         assert client._reconnect_task is None
         assert client._tg is None
+
+    def test_init_with_subprotocols(self, mock_underlying_client: Any) -> None:
+        subprotos = ["p1", "p2"]
+        client = ReconnectingClient(url=self.URL, client=mock_underlying_client, subprotocols=subprotos)
+        assert client._subprotocols == subprotos
 
     @pytest.mark.parametrize(
         argnames="session_state, event_is_set, expected",
@@ -572,9 +578,10 @@ class TestReconnectingClient:
     async def test_reconnect_loop_full_cycle(
         self, mock_underlying_client: Any, mock_session: Any, caplog: LogCaptureFixture, mocker: MockerFixture
     ) -> None:
+        subprotos = ["p1"]
         config = ClientConfig(max_connection_retries=5, retry_delay=0.01)
         mock_underlying_client.config = config
-        client = ReconnectingClient(url=self.URL, client=mock_underlying_client)
+        client = ReconnectingClient(url=self.URL, client=mock_underlying_client, subprotocols=subprotos)
 
         connect_attempts = 0
         attempt_event = asyncio.Event()
@@ -617,6 +624,8 @@ class TestReconnectingClient:
             assert connect_attempts >= 3
             assert "Connection to https://example.com lost, attempting to reconnect..." in caplog.text
             assert any("Connection attempt 1 failed" in r.message for r in caplog.records)
+
+            mock_underlying_client.connect.assert_called_with(url=self.URL, subprotocols=subprotos)
 
             session1_closed.set()
             client._closed = True

@@ -39,12 +39,11 @@ impl<'a> TryFrom<&Bound<'a, PyAny>> for TransportConfig {
         let max_stream_write_buffer: u64 = conf.getattr("max_stream_write_buffer")?.extract()?;
         let max_total_pending_events: u64 = conf.getattr("max_total_pending_events")?.extract()?;
         let pending_event_ttl: f64 = conf.getattr("pending_event_ttl")?.extract()?;
+        let read_timeout: Option<f64> = conf.getattr("read_timeout")?.extract()?;
         let resource_cleanup_interval: f64 =
             conf.getattr("resource_cleanup_interval")?.extract()?;
         let stream_creation_timeout: f64 = conf.getattr("stream_creation_timeout")?.extract()?;
         let transport_streams_cap: u64 = conf.getattr("transport_streams_cap")?.extract()?;
-
-        let read_timeout: Option<f64> = conf.getattr("read_timeout")?.extract()?;
         let write_timeout: Option<f64> = conf.getattr("write_timeout")?.extract()?;
 
         Ok(TransportConfig {
@@ -87,16 +86,20 @@ impl<'a> TryFrom<&Bound<'a, PyAny>> for RustClientConfig {
     fn try_from(conf: &Bound<'a, PyAny>) -> Result<Self, Self::Error> {
         let transport = TransportConfig::try_from(conf)?;
 
+        let ca_certs: Option<String> = conf.getattr("ca_certs")?.extract()?;
+        let certfile: Option<String> = conf.getattr("certfile")?.extract()?;
         let connect_timeout: f64 = conf.getattr("connect_timeout")?.extract()?;
         let connection_attempt_delay: f64 = conf.getattr("connection_attempt_delay")?.extract()?;
+
+        let headers_map: HashMap<String, String> = conf.getattr("headers")?.extract()?;
+        let headers = headers_map.into_iter().collect();
+
+        let keyfile: Option<String> = conf.getattr("keyfile")?.extract()?;
         let max_connection_retries: u64 = conf.getattr("max_connection_retries")?.extract()?;
         let max_retry_delay: f64 = conf.getattr("max_retry_delay")?.extract()?;
         let retry_backoff: f64 = conf.getattr("retry_backoff")?.extract()?;
         let retry_delay: f64 = conf.getattr("retry_delay")?.extract()?;
-
-        let ca_certs: Option<String> = conf.getattr("ca_certs")?.extract()?;
-        let certfile: Option<String> = conf.getattr("certfile")?.extract()?;
-        let keyfile: Option<String> = conf.getattr("keyfile")?.extract()?;
+        let subprotocols: Option<Vec<String>> = conf.getattr("subprotocols")?.extract()?;
         let user_agent: Option<String> = conf.getattr("user_agent")?.extract()?;
 
         let verify_mode_obj = conf.getattr("verify_mode")?;
@@ -106,9 +109,6 @@ impl<'a> TryFrom<&Bound<'a, PyAny>> for RustClientConfig {
             let mode_val: i32 = verify_mode_obj.extract()?;
             mode_val != 0
         };
-
-        let headers_map: HashMap<String, String> = conf.getattr("headers")?.extract()?;
-        let headers = headers_map.into_iter().collect();
 
         Ok(RustClientConfig {
             ca_certs: ca_certs.map(PathBuf::from),
@@ -121,6 +121,7 @@ impl<'a> TryFrom<&Bound<'a, PyAny>> for RustClientConfig {
             max_retry_delay: Duration::from_secs_f64(max_retry_delay),
             retry_backoff,
             retry_delay: Duration::from_secs_f64(retry_delay),
+            subprotocols,
             transport,
             user_agent,
             verify_server_certificate,

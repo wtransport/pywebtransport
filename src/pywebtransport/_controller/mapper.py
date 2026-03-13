@@ -16,15 +16,23 @@ def pack_user_event(*, event: events.ProtocolEvent) -> tuple[int, tuple[Any, ...
         case events.ConnectionClose():
             return abi.CONNECTION_CLOSE, (event.request_id, event.error_code, event.reason)
         case events.UserAcceptSession():
-            return abi.USER_ACCEPT_SESSION, (event.request_id, event.session_id)
+            return abi.USER_ACCEPT_SESSION, (event.request_id, event.session_id, event.subprotocol)
         case events.UserCloseSession():
             return abi.USER_CLOSE_SESSION, (event.request_id, event.session_id, event.error_code, event.reason)
         case events.UserConnectionGracefulClose():
             return abi.USER_CONNECTION_GRACEFUL_CLOSE, (event.request_id,)
         case events.UserCreateSession():
-            return abi.USER_CREATE_SESSION, (event.request_id, event.path, event.headers)
+            return abi.USER_CREATE_SESSION, (event.request_id, event.path, event.headers, event.subprotocols)
         case events.UserCreateStream():
             return abi.USER_CREATE_STREAM, (event.request_id, event.session_id, event.is_unidirectional)
+        case events.UserExportKeyingMaterial():
+            return abi.USER_EXPORT_KEYING_MATERIAL, (
+                event.request_id,
+                event.session_id,
+                event.label,
+                event.context,
+                event.length,
+            )
         case events.UserGetConnectionDiagnostics():
             return abi.USER_GET_CONNECTION_DIAGNOSTICS, (event.request_id,)
         case events.UserGetSessionDiagnostics():

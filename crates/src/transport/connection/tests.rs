@@ -245,6 +245,27 @@ fn test_process_effects_create_quic_stream_unconnected_dispatches_fail() {
 }
 
 #[test]
+fn test_process_effects_export_tls_keying_material_processes_safely() {
+    let mut connection = create_test_connection();
+    let effects = vec![Effect::ExportTlsKeyingMaterial {
+        request_id: 1,
+        label: "label".to_owned(),
+        context: Bytes::from_static(b"ctx"),
+        length: 32,
+    }];
+
+    connection.process_effects(effects, 0.0, Instant::now());
+
+    let has_done_or_fail = connection.pending_effects.iter().any(|e| {
+        matches!(
+            e,
+            Effect::NotifyRequestDone { .. } | Effect::NotifyRequestFailed { .. }
+        )
+    });
+    assert!(has_done_or_fail);
+}
+
+#[test]
 fn test_process_effects_send_h3_datagram_processes_safely() {
     let mut connection = create_test_connection();
     let effects = vec![Effect::SendH3Datagram {
@@ -261,6 +282,20 @@ fn test_process_effects_send_h3_datagram_processes_safely() {
 fn test_process_effects_send_h3_goaway_processes_safely() {
     let mut connection = create_test_connection();
     let effects = vec![Effect::SendH3Goaway];
+
+    connection.process_effects(effects, 0.0, Instant::now());
+
+    assert!(connection.pending_effects.is_empty());
+}
+
+#[test]
+fn test_process_effects_send_h3_headers_processes_safely() {
+    let mut connection = create_test_connection();
+    let effects = vec![Effect::SendH3Headers {
+        stream_id: 1,
+        headers: vec![(Bytes::from_static(b":status"), Bytes::from_static(b"200"))],
+        end_stream: false,
+    }];
 
     connection.process_effects(effects, 0.0, Instant::now());
 

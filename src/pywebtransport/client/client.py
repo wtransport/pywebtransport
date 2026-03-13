@@ -153,7 +153,12 @@ class WebTransportClient(EventEmitter):
         await self._close_task
 
     async def connect(
-        self, *, url: URL, timeout: float | None = None, headers: Headers | None = None
+        self,
+        *,
+        url: URL,
+        timeout: float | None = None,
+        headers: Headers | None = None,
+        subprotocols: list[str] | None = None,
     ) -> WebTransportSession:
         """Establish a WebTransport session."""
         if self._closed:
@@ -211,7 +216,9 @@ class WebTransportClient(EventEmitter):
                 await self._connection_manager.add_connection(connection=connection)
 
                 _logger.debug("Initiating session creation...")
-                session = await connection.create_session(path=path, headers=normalized_headers)
+                session = await connection.create_session(
+                    path=path, headers=normalized_headers, subprotocols=subprotocols
+                )
                 _logger.debug("Session creation successful: %s", session.session_id)
 
                 elapsed = get_timestamp() - start_time

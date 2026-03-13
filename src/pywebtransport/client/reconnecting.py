@@ -21,7 +21,7 @@ _logger = get_logger(name=__name__)
 class ReconnectingClient(EventEmitter):
     """Manage automatic reconnection logic for a WebTransport client."""
 
-    def __init__(self, *, url: URL, client: WebTransportClient) -> None:
+    def __init__(self, *, url: URL, client: WebTransportClient, subprotocols: list[str] | None = None) -> None:
         """Initialize the instance."""
         effective_config = client.config
 
@@ -33,6 +33,7 @@ class ReconnectingClient(EventEmitter):
 
         self._url = url
         self._client = client
+        self._subprotocols = subprotocols
 
         self._closed = False
         self._config = effective_config
@@ -150,7 +151,7 @@ class ReconnectingClient(EventEmitter):
         try:
             while not self._closed:
                 try:
-                    self._session = await self._client.connect(url=self._url)
+                    self._session = await self._client.connect(url=self._url, subprotocols=self._subprotocols)
                     _logger.info("Successfully connected to %s", self._url)
 
                     self._connected_event.set()

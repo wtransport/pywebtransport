@@ -2,7 +2,7 @@
 
 use thiserror::Error;
 
-use crate::common::types::ErrorCode;
+use crate::common::types::{ErrorCode, StreamId};
 
 /// Enumeration of WebTransport protocol errors.
 #[derive(Debug, Error)]
@@ -11,13 +11,17 @@ pub enum WebTransportError {
     #[error("Configuration error: {1} (code: {0:?})")]
     Configuration(Option<ErrorCode>, String),
 
-    /// Connection establishment and state failure.
+    /// Connection lifecycle state failure.
     #[error("Connection error: {1} (code: {0:?})")]
     Connection(Option<ErrorCode>, String),
 
     /// Violation of protocol specifications.
     #[error("Protocol error: {1} (code: {0:?})")]
     Protocol(Option<ErrorCode>, String),
+
+    /// Isolated stream execution failure.
+    #[error("Stream error: {2} (stream: {0}, code: {1:?})")]
+    Stream(StreamId, Option<ErrorCode>, String),
 
     /// Uncategorized internal implementation failure.
     #[error("Unknown error: {1} (code: {0:?})")]

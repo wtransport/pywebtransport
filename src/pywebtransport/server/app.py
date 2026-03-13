@@ -9,10 +9,8 @@ from collections.abc import Callable
 from types import TracebackType
 from typing import Any, Self
 
-from pywebtransport._protocol.events import UserAcceptSession, UserCloseSession, UserRejectSession
 from pywebtransport.config import ServerConfig
 from pywebtransport.connection import WebTransportConnection
-from pywebtransport.constants import ErrorCodes
 from pywebtransport.events import Event
 from pywebtransport.exceptions import ConnectionError, ServerError
 from pywebtransport.server.middleware import (
@@ -176,12 +174,6 @@ class ServerApp:
         """Find the route handler and create a background task to run it."""
         route_result = self._router.route_request(session=session)
 
-        connection = session._connection()
-
-        if connection is None:
-            _logger.error("Cannot dispatch handler, connection is missing.")
-            return
-
         if route_result is None:
             _logger.warning(
                 "No route found for session %s (path: %s). Rejecting with %s.",
@@ -189,22 +181,14 @@ class ServerApp:
                 session.path,
                 http.HTTPStatus.NOT_FOUND,
             )
-            request_id, future = connection._controller._pending_manager.create_request()
-            event = UserRejectSession(
-                request_id=request_id, session_id=session.session_id, status_code=http.HTTPStatus.NOT_FOUND
-            )
-            connection._controller.send_user_event(handle=connection._handle, event=event)
-            await future
+            await session.reject(status_code=http.HTTPStatus.NOT_FOUND)
             return
 
         handler, params = route_result
         _logger.info("Routing session request for path '%s' to handler '%s'", session.path, handler.__name__)
 
         try:
-            accept_req_id, accept_fut = connection._controller._pending_manager.create_request()
-            accept_event = UserAcceptSession(request_id=accept_req_id, session_id=session.session_id)
-            connection._controller.send_user_event(handle=connection._handle, event=accept_event)
-            await accept_fut
+            await session.accept()
         except Exception as e:
             _logger.error("Failed to accept session %s: %s", session.session_id, e, exc_info=True)
             return
@@ -234,14 +218,6 @@ class ServerApp:
             _logger.warning("Invalid 'connection' object in session request")
             return None
 
-        session_conn = session._connection()
-
-        if session_conn is not connection:
-            _logger.error(
-                "Session handle %s does not belong to connection %s", session.session_id, connection.connection_id
-            )
-            return None
-
         if not connection.is_connected:
             _logger.warning("Connection %s is not in connected state", connection.connection_id)
             return None
@@ -262,8 +238,6 @@ class ServerApp:
         """Process an incoming session request event."""
         session: WebTransportSession | None = None
         event_data = event.data if isinstance(event.data, dict) else {}
-
-        connection: WebTransportConnection | None = event_data.get("connection")
         session_id_from_data: int | None = event_data.get("session_id")
 
         try:
@@ -281,33 +255,22 @@ class ServerApp:
                 session.path if session is not None else "unknown",
                 e,
             )
-            sid = session.session_id if session is not None else session_id_from_data
-            if connection is not None and sid is not None:
-                request_id, future = connection._controller._pending_manager.create_request()
-                reject_event = UserRejectSession(request_id=request_id, session_id=sid, status_code=e.status_code)
-                connection._controller.send_user_event(handle=connection._handle, event=reject_event)
-                await future
-            if session is not None and not session.is_closed:
-                await session.close()
+            if session is not None:
+                try:
+                    await session.reject(status_code=e.status_code)
+                except Exception as reject_error:
+                    _logger.debug("Failed to reject session during middleware rejection: %s", reject_error)
 
         except Exception as e:
             sid = session.session_id if session is not None else session_id_from_data
             _logger.error("Error handling session request for session %s: %s", sid, e, exc_info=True)
-            try:
-                if connection is not None and sid is not None:
-                    request_id, future = connection._controller._pending_manager.create_request()
-                    close_event = UserCloseSession(
-                        request_id=request_id,
-                        session_id=sid,
-                        error_code=ErrorCodes.INTERNAL_ERROR,
-                        reason="Internal server error handling request",
+            if session is not None:
+                try:
+                    await session.reject(status_code=http.HTTPStatus.INTERNAL_SERVER_ERROR)
+                except Exception as cleanup_error:
+                    _logger.error(
+                        "Error during session request error cleanup: %s", cleanup_error, exc_info=cleanup_error
                     )
-                    connection._controller.send_user_event(handle=connection._handle, event=close_event)
-                    await future
-                if session is not None and not session.is_closed:
-                    await session.close()
-            except Exception as cleanup_error:
-                _logger.error("Error during session request error cleanup: %s", cleanup_error, exc_info=cleanup_error)
 
     async def _run_handler_safely(
         self, *, handler: SessionHandler, session: WebTransportSession, params: dict[str, Any]

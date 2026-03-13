@@ -196,13 +196,20 @@ class WebTransportConnection:
         finally:
             _logger.info("Connection %s close process finished.", self.connection_id)
 
-    async def create_session(self, *, path: str, headers: Headers | None = None) -> WebTransportSession:
+    async def create_session(
+        self, *, path: str, headers: Headers | None = None, subprotocols: list[str] | None = None
+    ) -> WebTransportSession:
         """Initiate a new WebTransport session."""
         if not self.is_client:
             raise ConnectionError("Sessions can only be created by the client.")
 
         request_id, future = self._controller._pending_manager.create_request()
-        event = UserCreateSession(request_id=request_id, path=path, headers=headers if headers is not None else {})
+        event = UserCreateSession(
+            request_id=request_id,
+            path=path,
+            headers=headers if headers is not None else {},
+            subprotocols=subprotocols,
+        )
         self._controller.send_user_event(handle=self._handle, event=event)
 
         try:
@@ -269,9 +276,18 @@ class WebTransportConnection:
         if create_handle and session_id not in self._session_handles:
             path = data.get("path")
             headers = data.get("headers")
+            subprotocols = data.get("subprotocols")
+            subprotocol = data.get("subprotocol")
 
             if path is not None and headers is not None:
-                session = WebTransportSession(connection=self, session_id=session_id, path=path, headers=headers)
+                session = WebTransportSession(
+                    connection=self,
+                    session_id=session_id,
+                    path=path,
+                    headers=headers,
+                    subprotocols=subprotocols,
+                    subprotocol=subprotocol,
+                )
                 self._session_handles[session_id] = session
                 _logger.debug("Created session handle for %s", session_id)
                 data["session"] = session

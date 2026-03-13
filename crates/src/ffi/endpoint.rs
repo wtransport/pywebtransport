@@ -2,9 +2,7 @@
 
 use std::fmt;
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -12,9 +10,7 @@ use pyo3::types::{PyList, PyTuple};
 use quinn_proto::Endpoint as QuinnEndpoint;
 use tracing::error;
 
-use crate::common::config::{
-    RustClientConfig, RustServerConfig, TransportConfig as WtTransportConfig,
-};
+use crate::common::config::{RustClientConfig, RustServerConfig};
 use crate::ffi::abi;
 use crate::ffi::waker::PyWaker;
 use crate::protocol::events::ProtocolEvent;
@@ -45,7 +41,7 @@ impl PyEndpoint {
     #[pyo3(signature = (is_client, config, waker))]
     fn new(is_client: bool, config: &Bound<'_, PyAny>, waker: &PyWaker) -> PyResult<Self> {
         let (endpoint, std_sockets) = if is_client {
-            let rust_config = extract_client_config(config)?;
+            let rust_config = RustClientConfig::try_from(config)?;
             let quic_crypto = build_client_config(&rust_config)?;
             let endpoint_config = Arc::new(quinn_proto::EndpointConfig::default());
             let quinn_endpoint = QuinnEndpoint::new(endpoint_config, None, false, None);
@@ -73,7 +69,7 @@ impl PyEndpoint {
 
             (transport_endpoint, sockets)
         } else {
-            let rust_config = extract_server_config(config)?;
+            let rust_config = RustServerConfig::try_from(config)?;
             let bind_addr_tuple = (rust_config.bind_host.clone(), rust_config.bind_port);
             let server_crypto = build_server_config(&rust_config)?;
             let endpoint_config = Arc::new(build_endpoint_config(&rust_config));
@@ -408,91 +404,6 @@ impl fmt::Debug for PyEndpoint {
     }
 }
 
-// Extracts and constructs the client configuration.
-fn extract_client_config(config: &Bound<'_, PyAny>) -> PyResult<RustClientConfig> {
-    let ca_certs = config
-        .getattr("ca_certs")
-        .ok()
-        .and_then(|v| v.extract::<String>().ok())
-        .map(PathBuf::from);
-    let certfile = config
-        .getattr("certfile")
-        .ok()
-        .and_then(|v| v.extract::<String>().ok())
-        .map(PathBuf::from);
-    let connect_timeout_f64: f64 = config.getattr("connect_timeout")?.extract()?;
-    let connection_attempt_delay_f64: f64 =
-        config.getattr("connection_attempt_delay")?.extract()?;
-    let headers_attr = config.getattr("headers")?;
-    let keyfile = config
-        .getattr("keyfile")
-        .ok()
-        .and_then(|v| v.extract::<String>().ok())
-        .map(PathBuf::from);
-    let max_connection_retries: u64 = config.getattr("max_connection_retries")?.extract()?;
-    let max_retry_delay_f64: f64 = config.getattr("max_retry_delay")?.extract()?;
-    let retry_backoff: f64 = config.getattr("retry_backoff")?.extract()?;
-    let retry_delay_f64: f64 = config.getattr("retry_delay")?.extract()?;
-    let transport = extract_transport_config(config)?;
-    let user_agent = config
-        .getattr("user_agent")
-        .ok()
-        .and_then(|v| v.extract::<String>().ok());
-    let verify_mode_attr = config.getattr("verify_mode")?;
-
-    let headers =
-        if let Ok(hash_map) = headers_attr.extract::<std::collections::HashMap<String, String>>() {
-            hash_map.into_iter().collect()
-        } else {
-            headers_attr
-                .extract::<Vec<(String, String)>>()
-                .unwrap_or_default()
-        };
-    let verify_server_certificate = extract_verify_mode(&verify_mode_attr, true)?;
-
-    Ok(RustClientConfig {
-        ca_certs,
-        certfile,
-        connect_timeout: Duration::from_secs_f64(connect_timeout_f64.max(0.0)),
-        connection_attempt_delay: Duration::from_secs_f64(connection_attempt_delay_f64.max(0.0)),
-        headers,
-        keyfile,
-        max_connection_retries,
-        max_retry_delay: Duration::from_secs_f64(max_retry_delay_f64.max(0.0)),
-        retry_backoff,
-        retry_delay: Duration::from_secs_f64(retry_delay_f64.max(0.0)),
-        transport,
-        user_agent,
-        verify_server_certificate,
-    })
-}
-
-// Extracts and constructs the server configuration.
-fn extract_server_config(config: &Bound<'_, PyAny>) -> PyResult<RustServerConfig> {
-    let bind_host: String = config.getattr("bind_host")?.extract()?;
-    let bind_port: u16 = config.getattr("bind_port")?.extract()?;
-    let certfile_str: String = config.getattr("certfile")?.extract()?;
-    let keyfile_str: String = config.getattr("keyfile")?.extract()?;
-    let transport = extract_transport_config(config)?;
-    let verify_mode_attr = config.getattr("verify_mode")?;
-
-    let enable_stateless_retry = config
-        .getattr("enable_stateless_retry")
-        .and_then(|v| v.extract::<bool>())
-        .unwrap_or(true);
-    let require_client_auth = extract_verify_mode(&verify_mode_attr, false)?;
-
-    Ok(RustServerConfig {
-        bind_host,
-        bind_port,
-        certfile: PathBuf::from(certfile_str),
-        enable_stateless_retry,
-        keyfile: PathBuf::from(keyfile_str),
-        require_client_auth,
-        transport,
-    })
-}
-
 // Extracts a network address tuple into a socket address.
 fn extract_socket_addr(ob: &Bound<'_, PyAny>) -> PyResult<SocketAddr> {
     if let Ok((ip_str, port, flowinfo, scope_id)) = ob.extract::<(String, u16, u32, u32)>() {
@@ -513,103 +424,5 @@ fn extract_socket_addr(ob: &Bound<'_, PyAny>) -> PyResult<SocketAddr> {
         Err(PyValueError::new_err(
             "Expected a tuple of (ip_str, port) or (ip_str, port, flowinfo, scope_id) for network address",
         ))
-    }
-}
-
-// Extracts the nested transport sub-configuration.
-fn extract_transport_config(config: &Bound<'_, PyAny>) -> PyResult<WtTransportConfig> {
-    let t_opt = config.getattr("transport").ok();
-    let source = if let Some(tr) = &t_opt { tr } else { config };
-
-    let alpn_protocols: Vec<String> = source.getattr("alpn_protocols")?.extract()?;
-    let close_timeout_f64: f64 = source.getattr("close_timeout")?.extract()?;
-    let congestion_control_algorithm: String =
-        source.getattr("congestion_control_algorithm")?.extract()?;
-    let connection_idle_timeout_f64: f64 = source.getattr("connection_idle_timeout")?.extract()?;
-    let flow_control_window_auto_scale: bool = source
-        .getattr("flow_control_window_auto_scale")?
-        .extract()?;
-    let flow_control_window_size: u64 = source.getattr("flow_control_window_size")?.extract()?;
-    let initial_max_data: u64 = source.getattr("initial_max_data")?.extract()?;
-    let initial_max_streams_bidi: u64 = source.getattr("initial_max_streams_bidi")?.extract()?;
-    let initial_max_streams_uni: u64 = source.getattr("initial_max_streams_uni")?.extract()?;
-    let keep_alive_opt: Option<f64> = source.getattr("keep_alive")?.extract()?;
-    let max_capsule_size: u64 = source.getattr("max_capsule_size")?.extract()?;
-    let max_connections: u64 = source.getattr("max_connections")?.extract()?;
-    let max_datagram_size: u64 = source.getattr("max_datagram_size")?.extract()?;
-    let max_event_history_size: u64 = source.getattr("max_event_history_size")?.extract()?;
-    let max_event_listeners: u64 = source.getattr("max_event_listeners")?.extract()?;
-    let max_event_queue_size: u64 = source.getattr("max_event_queue_size")?.extract()?;
-    let max_message_size: u64 = source.getattr("max_message_size")?.extract()?;
-    let max_pending_events_per_session: u64 = source
-        .getattr("max_pending_events_per_session")?
-        .extract()?;
-    let max_sessions: u64 = source.getattr("max_sessions")?.extract()?;
-    let max_stream_read_buffer: u64 = source.getattr("max_stream_read_buffer")?.extract()?;
-    let max_stream_write_buffer: u64 = source.getattr("max_stream_write_buffer")?.extract()?;
-    let max_total_pending_events: u64 = source.getattr("max_total_pending_events")?.extract()?;
-    let pending_event_ttl_f64: f64 = source.getattr("pending_event_ttl")?.extract()?;
-    let read_timeout_attr = source.getattr("read_timeout")?;
-    let resource_cleanup_interval_f64: f64 =
-        source.getattr("resource_cleanup_interval")?.extract()?;
-    let stream_creation_timeout_f64: f64 = source.getattr("stream_creation_timeout")?.extract()?;
-    let transport_streams_cap: u64 = source.getattr("transport_streams_cap")?.extract()?;
-    let write_timeout_attr = source.getattr("write_timeout")?;
-
-    let read_timeout_opt = if read_timeout_attr.is_none() {
-        None
-    } else {
-        Some(read_timeout_attr.extract::<f64>()?)
-    };
-    let write_timeout_opt = if write_timeout_attr.is_none() {
-        None
-    } else {
-        Some(write_timeout_attr.extract::<f64>()?)
-    };
-
-    Ok(WtTransportConfig {
-        alpn_protocols,
-        close_timeout: Duration::from_secs_f64(close_timeout_f64.max(0.0)),
-        congestion_control_algorithm,
-        connection_idle_timeout: Duration::from_secs_f64(connection_idle_timeout_f64.max(0.0)),
-        flow_control_window_auto_scale,
-        flow_control_window_size,
-        initial_max_data,
-        initial_max_streams_bidi,
-        initial_max_streams_uni,
-        keep_alive: keep_alive_opt.map(|f| Duration::from_secs_f64(f.max(0.0))),
-        max_capsule_size,
-        max_connections,
-        max_datagram_size,
-        max_event_history_size,
-        max_event_listeners,
-        max_event_queue_size,
-        max_message_size,
-        max_pending_events_per_session,
-        max_sessions,
-        max_stream_read_buffer,
-        max_stream_write_buffer,
-        max_total_pending_events,
-        pending_event_ttl: Duration::from_secs_f64(pending_event_ttl_f64.max(0.0)),
-        read_timeout: read_timeout_opt.map(|f| Duration::from_secs_f64(f.max(0.0))),
-        resource_cleanup_interval: Duration::from_secs_f64(resource_cleanup_interval_f64.max(0.0)),
-        stream_creation_timeout: Duration::from_secs_f64(stream_creation_timeout_f64.max(0.0)),
-        transport_streams_cap,
-        write_timeout: write_timeout_opt.map(|f| Duration::from_secs_f64(f.max(0.0))),
-    })
-}
-
-// Extracts the certificate verification mode.
-fn extract_verify_mode(attr: &Bound<'_, PyAny>, default_val: bool) -> PyResult<bool> {
-    if attr.is_none() {
-        Ok(default_val)
-    } else {
-        let mode_int = attr.extract::<i32>().map_err(|e| {
-            PyValueError::new_err(format!(
-                "verify_mode must be an integer (e.g. ssl.CERT_NONE): {e}"
-            ))
-        })?;
-
-        Ok(mode_int != 0)
     }
 }

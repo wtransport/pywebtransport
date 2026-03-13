@@ -2,17 +2,18 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Cursor;
+use std::slice;
 
 use bytes::{Bytes, BytesMut};
 use tracing::{debug, error, info, warn};
 
 use crate::common::constants::{
-    CLOSE_WEBTRANSPORT_SESSION_TYPE, DRAIN_WEBTRANSPORT_SESSION_TYPE, ERR_FLOW_CONTROL_ERROR,
+    CLOSE_WEBTRANSPORT_SESSION_TYPE, DRAIN_WEBTRANSPORT_SESSION_TYPE, ERR_H3_DATAGRAM_ERROR,
     ERR_H3_FRAME_UNEXPECTED, ERR_H3_GENERAL_PROTOCOL_ERROR, ERR_LIB_INTERNAL_ERROR,
-    ERR_LIB_SESSION_STATE_ERROR, ERR_LIB_STREAM_STATE_ERROR, MAX_CLOSE_REASON_BYTES,
-    MAX_PROTOCOL_STREAMS_LIMIT, WT_DATA_BLOCKED_TYPE, WT_MAX_DATA_TYPE, WT_MAX_STREAM_DATA_TYPE,
-    WT_MAX_STREAMS_BIDI_TYPE, WT_MAX_STREAMS_UNI_TYPE, WT_STREAM_DATA_BLOCKED_TYPE,
-    WT_STREAMS_BLOCKED_BIDI_TYPE, WT_STREAMS_BLOCKED_UNI_TYPE,
+    ERR_LIB_SESSION_STATE_ERROR, ERR_LIB_STREAM_STATE_ERROR, ERR_WT_FLOW_CONTROL_ERROR,
+    MAX_CLOSE_REASON_BYTES, MAX_PROTOCOL_STREAMS_LIMIT, WT_DATA_BLOCKED_TYPE, WT_MAX_DATA_TYPE,
+    WT_MAX_STREAM_DATA_TYPE, WT_MAX_STREAMS_BIDI_TYPE, WT_MAX_STREAMS_UNI_TYPE, WT_PROTOCOL,
+    WT_STREAM_DATA_BLOCKED_TYPE, WT_STREAMS_BLOCKED_BIDI_TYPE, WT_STREAMS_BLOCKED_UNI_TYPE,
 };
 use crate::common::types::{
     ErrorCode, ErrorSource, EventType, Headers, RequestId, SessionId, SessionState,
@@ -21,8 +22,8 @@ use crate::common::types::{
 use crate::protocol::events::{Effect, RequestResult};
 use crate::protocol::stream::Stream;
 use crate::protocol::utils::{
-    is_peer_initiated_stream, is_unidirectional_stream, next_data_limit, next_stream_limit,
-    read_varint, stream_dir_from_id, write_varint,
+    encode_subprotocol_list, is_peer_initiated_stream, is_unidirectional_stream, next_data_limit,
+    next_stream_limit, read_varint, stream_dir_from_id, write_varint,
 };
 
 // Representation of a WebTransport session.
@@ -31,12 +32,13 @@ pub(crate) struct Session {
     pub(crate) state: SessionState,
     pub(crate) path: String,
     pub(crate) headers: Headers,
+    pub(crate) subprotocol: Option<String>,
     pub(crate) created_at: f64,
     pub(crate) local_max_data: u64,
     pub(crate) local_data_sent: u64,
+    pub(crate) local_data_received: u64,
     pub(crate) local_data_consumed: u64,
     pub(crate) peer_max_data: u64,
-    pub(crate) peer_data_sent: u64,
     pub(crate) local_max_streams_bidi: u64,
     pub(crate) local_streams_bidi_opened: u64,
     pub(crate) peer_max_streams_bidi: u64,
@@ -60,6 +62,7 @@ pub(crate) struct Session {
     pub(crate) closed_at: Option<f64>,
     pub(crate) ready_at: Option<f64>,
     blocked_streams_queue: VecDeque<StreamId>,
+    flow_control_negotiated: bool,
     flow_control_window_auto_scale: bool,
     initial_max_streams_bidi: u64,
     initial_max_streams_uni: u64,
@@ -80,6 +83,7 @@ impl Session {
         id: SessionId,
         path: String,
         headers: Headers,
+        subprotocol: Option<String>,
         created_at: f64,
         initial_max_data: u64,
         initial_max_streams_bidi: u64,
@@ -90,6 +94,7 @@ impl Session {
         flow_control_window_size: u64,
         stream_read_buffer_size: u64,
         stream_write_buffer_size: u64,
+        flow_control_negotiated: bool,
         flow_control_window_auto_scale: bool,
         is_client: bool,
         state: SessionState,
@@ -99,12 +104,13 @@ impl Session {
             state,
             path,
             headers,
+            subprotocol,
             created_at,
             local_max_data: initial_max_data,
             local_data_sent: 0,
+            local_data_received: 0,
             local_data_consumed: 0,
             peer_max_data,
-            peer_data_sent: 0,
             local_max_streams_bidi: initial_max_streams_bidi,
             local_streams_bidi_opened: 0,
             peer_max_streams_bidi,
@@ -128,6 +134,7 @@ impl Session {
             closed_at: None,
             ready_at: None,
             blocked_streams_queue: VecDeque::new(),
+            flow_control_negotiated,
             flow_control_window_auto_scale,
             initial_max_streams_bidi,
             initial_max_streams_uni,
@@ -140,7 +147,12 @@ impl Session {
     }
 
     // User session acceptance handling.
-    pub(crate) fn accept(&mut self, request_id: RequestId, now: f64) -> Vec<Effect> {
+    pub(crate) fn accept(
+        &mut self,
+        request_id: RequestId,
+        subprotocol: Option<String>,
+        now: f64,
+    ) -> Vec<Effect> {
         let mut effects = Vec::new();
 
         if self.is_client {
@@ -168,10 +180,19 @@ impl Session {
         debug!("Session {} accepted", self.id);
         self.state = SessionState::Connected;
         self.ready_at = Some(now);
+        self.subprotocol.clone_from(&subprotocol);
+
+        let mut response_headers: Headers =
+            vec![(Bytes::from_static(b":status"), Bytes::from("200"))];
+
+        if let Some(ref proto) = subprotocol {
+            let encoded = encode_subprotocol_list(slice::from_ref(proto));
+            response_headers.push((Bytes::from_static(WT_PROTOCOL), encoded));
+        }
 
         effects.push(Effect::SendH3Headers {
             stream_id: self.id,
-            status: 200,
+            headers: response_headers,
             end_stream: false,
         });
         effects.push(Effect::EmitSessionEvent {
@@ -179,6 +200,8 @@ impl Session {
             event_type: EventType::SessionReady,
             path: None,
             headers: None,
+            subprotocols: None,
+            subprotocol,
             data: None,
             is_unidirectional: None,
             max_data: None,
@@ -311,6 +334,8 @@ impl Session {
             event_type: EventType::SessionClosed,
             path: None,
             headers: None,
+            subprotocols: None,
+            subprotocol: None,
             data: None,
             is_unidirectional: None,
             max_data: None,
@@ -417,6 +442,35 @@ impl Session {
         vec![Effect::NotifyRequestDone {
             request_id,
             result: RequestResult::SessionDiagnostics(Box::new(diag)),
+        }]
+    }
+
+    // TLS keying material export handling.
+    pub(crate) fn export_keying_material(
+        &self,
+        request_id: RequestId,
+        label: String,
+        context: &[u8],
+        length: u32,
+    ) -> Vec<Effect> {
+        if !matches!(self.state, SessionState::Connected | SessionState::Draining) {
+            return vec![Effect::NotifyRequestFailed {
+                request_id,
+                source: ErrorSource::Session,
+                error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
+                reason: format!("Session {} is not connected or draining", self.id),
+            }];
+        }
+
+        let mut exporter_context = BytesMut::with_capacity(8 + context.len());
+        exporter_context.extend_from_slice(&self.id.to_be_bytes());
+        exporter_context.extend_from_slice(context);
+
+        vec![Effect::ExportTlsKeyingMaterial {
+            request_id,
+            label,
+            context: exporter_context.freeze(),
+            length,
         }]
     }
 
@@ -585,14 +639,28 @@ impl Session {
     }
 
     // Capsule reception handling.
-    pub(crate) fn recv_capsule(
-        &mut self,
-        capsule_type: u64,
-        data: &Bytes,
-        now: f64,
-    ) -> Vec<Effect> {
+    pub(crate) fn recv_capsule(&mut self, capsule_type: u64, data: &[u8], now: f64) -> Vec<Effect> {
         let mut effects = Vec::new();
-        let mut cur = Cursor::new(&data[..]);
+
+        if !self.flow_control_negotiated
+            && matches!(
+                capsule_type,
+                WT_MAX_DATA_TYPE
+                    | WT_MAX_STREAMS_BIDI_TYPE
+                    | WT_MAX_STREAMS_UNI_TYPE
+                    | WT_DATA_BLOCKED_TYPE
+                    | WT_STREAMS_BLOCKED_BIDI_TYPE
+                    | WT_STREAMS_BLOCKED_UNI_TYPE
+            )
+        {
+            debug!(
+                "Session {} ignoring flow control capsule {capsule_type:#x} (negotiation fallback)",
+                self.id
+            );
+            return effects;
+        }
+
+        let mut cur = Cursor::new(data);
 
         match capsule_type {
             WT_MAX_DATA_TYPE => {
@@ -608,6 +676,8 @@ impl Session {
                             event_type: EventType::SessionMaxDataUpdated,
                             path: None,
                             headers: None,
+                            subprotocols: None,
+                            subprotocol: None,
                             data: None,
                             is_unidirectional: None,
                             max_data: Some(new_max),
@@ -619,7 +689,7 @@ impl Session {
                         effects.extend(self.flush_blocked_writes());
                     } else if new_max < self.peer_max_data {
                         return self.abort(
-                            ERR_FLOW_CONTROL_ERROR,
+                            ERR_WT_FLOW_CONTROL_ERROR,
                             "Flow control limit decreased for MAX_DATA".to_owned(),
                             now,
                         );
@@ -640,7 +710,7 @@ impl Session {
                 if let Ok(new_max) = read_varint(&mut cur) {
                     if new_max > MAX_PROTOCOL_STREAMS_LIMIT {
                         return self.abort(
-                            ERR_FLOW_CONTROL_ERROR,
+                            ERR_H3_DATAGRAM_ERROR,
                             format!("MAX_STREAMS_BIDI limit exceeds protocol maximum ({new_max})"),
                             now,
                         );
@@ -652,6 +722,8 @@ impl Session {
                             event_type: EventType::SessionMaxStreamsBidiUpdated,
                             path: None,
                             headers: None,
+                            subprotocols: None,
+                            subprotocol: None,
                             data: None,
                             is_unidirectional: None,
                             max_data: None,
@@ -675,7 +747,7 @@ impl Session {
                         }
                     } else if new_max < self.peer_max_streams_bidi {
                         return self.abort(
-                            ERR_FLOW_CONTROL_ERROR,
+                            ERR_WT_FLOW_CONTROL_ERROR,
                             "Flow control limit decreased for MAX_STREAMS_BIDI".to_owned(),
                             now,
                         );
@@ -696,7 +768,7 @@ impl Session {
                 if let Ok(new_max) = read_varint(&mut cur) {
                     if new_max > MAX_PROTOCOL_STREAMS_LIMIT {
                         return self.abort(
-                            ERR_FLOW_CONTROL_ERROR,
+                            ERR_H3_DATAGRAM_ERROR,
                             format!("MAX_STREAMS_UNI limit exceeds protocol maximum ({new_max})"),
                             now,
                         );
@@ -708,6 +780,8 @@ impl Session {
                             event_type: EventType::SessionMaxStreamsUniUpdated,
                             path: None,
                             headers: None,
+                            subprotocols: None,
+                            subprotocol: None,
                             data: None,
                             is_unidirectional: None,
                             max_data: None,
@@ -731,7 +805,7 @@ impl Session {
                         }
                     } else if new_max < self.peer_max_streams_uni {
                         return self.abort(
-                            ERR_FLOW_CONTROL_ERROR,
+                            ERR_WT_FLOW_CONTROL_ERROR,
                             "Flow control limit decreased for MAX_STREAMS_UNI".to_owned(),
                             now,
                         );
@@ -755,6 +829,8 @@ impl Session {
                         event_type: EventType::SessionDataBlocked,
                         path: None,
                         headers: None,
+                        subprotocols: None,
+                        subprotocol: None,
                         data: None,
                         is_unidirectional: None,
                         max_data: None,
@@ -779,6 +855,8 @@ impl Session {
                         event_type: EventType::SessionStreamsBlocked,
                         path: None,
                         headers: None,
+                        subprotocols: None,
+                        subprotocol: None,
                         data: None,
                         is_unidirectional: Some(is_uni),
                         max_data: None,
@@ -810,6 +888,8 @@ impl Session {
                     event_type: EventType::SessionClosed,
                     path: None,
                     headers: None,
+                    subprotocols: None,
+                    subprotocol: None,
                     data: None,
                     is_unidirectional: None,
                     max_data: None,
@@ -829,6 +909,8 @@ impl Session {
                         event_type: EventType::SessionDraining,
                         path: None,
                         headers: None,
+                        subprotocols: None,
+                        subprotocol: None,
                         data: None,
                         is_unidirectional: None,
                         max_data: None,
@@ -880,6 +962,8 @@ impl Session {
             event_type: EventType::SessionClosed,
             path: None,
             headers: None,
+            subprotocols: None,
+            subprotocol: None,
             data: None,
             is_unidirectional: None,
             max_data: None,
@@ -903,6 +987,8 @@ impl Session {
                 event_type: EventType::DatagramReceived,
                 path: None,
                 headers: None,
+                subprotocols: None,
+                subprotocol: None,
                 data: Some(data),
                 is_unidirectional: None,
                 max_data: None,
@@ -946,21 +1032,21 @@ impl Session {
                 }
                 StreamDirection::ReceiveOnly => {
                     if self.peer_streams_uni_opened >= self.local_max_streams_uni {
-                        warn!(
-                            "Stream limit reached (uni): {} >= {}, ignoring stream {stream_id}",
-                            self.peer_streams_uni_opened, self.local_max_streams_uni
+                        return self.abort(
+                            ERR_WT_FLOW_CONTROL_ERROR,
+                            "Stream limit reached (uni)".to_owned(),
+                            now,
                         );
-                        return effects;
                     }
                     self.peer_streams_uni_opened += 1;
                 }
                 StreamDirection::Bidirectional => {
                     if self.peer_streams_bidi_opened >= self.local_max_streams_bidi {
-                        warn!(
-                            "Stream limit reached (bidi): {} >= {}, ignoring stream {stream_id}",
-                            self.peer_streams_bidi_opened, self.local_max_streams_bidi
+                        return self.abort(
+                            ERR_WT_FLOW_CONTROL_ERROR,
+                            "Stream limit reached (bidi)".to_owned(),
+                            now,
                         );
-                        return effects;
                     }
                     self.peer_streams_bidi_opened += 1;
                 }
@@ -996,6 +1082,15 @@ impl Session {
         let Some(stream) = self.streams.get_mut(&stream_id) else {
             return effects;
         };
+
+        self.local_data_received += data.len() as u64;
+        if self.local_data_received > self.local_max_data {
+            return self.abort(
+                ERR_WT_FLOW_CONTROL_ERROR,
+                "Session data limit exceeded".to_owned(),
+                now,
+            );
+        }
 
         let (stream_effects, consumed) = stream.recv_data(data, end_stream, now);
         let is_closed = stream.state == StreamState::Closed;
@@ -1088,7 +1183,10 @@ impl Session {
 
         effects.push(Effect::SendH3Headers {
             stream_id: self.id,
-            status: status_code,
+            headers: vec![(
+                Bytes::from_static(b":status"),
+                Bytes::from(status_code.to_string()),
+            )],
             end_stream: true,
         });
         effects.push(Effect::EmitSessionEvent {
@@ -1096,6 +1194,8 @@ impl Session {
             event_type: EventType::SessionClosed,
             path: None,
             headers: None,
+            subprotocols: None,
+            subprotocol: None,
             data: None,
             is_unidirectional: None,
             max_data: None,
@@ -1349,6 +1449,8 @@ impl Session {
                 event_type: EventType::SessionClosed,
                 path: None,
                 headers: None,
+                subprotocols: None,
+                subprotocol: None,
                 data: None,
                 is_unidirectional: None,
                 max_data: None,
@@ -1369,12 +1471,13 @@ impl Session {
             state: self.state,
             path: self.path.clone(),
             headers: self.headers.clone(),
+            subprotocol: self.subprotocol.clone(),
             created_at: self.created_at,
             local_max_data: self.local_max_data,
             local_data_sent: self.local_data_sent,
+            local_data_received: self.local_data_received,
             local_data_consumed: self.local_data_consumed,
             peer_max_data: self.peer_max_data,
-            peer_data_sent: self.peer_data_sent,
             local_max_streams_bidi: self.local_max_streams_bidi,
             local_streams_bidi_opened: self.local_streams_bidi_opened,
             peer_max_streams_bidi: self.peer_max_streams_bidi,
@@ -1628,12 +1731,13 @@ pub(crate) struct SessionDiagnostics {
     pub(crate) state: SessionState,
     pub(crate) path: String,
     pub(crate) headers: Headers,
+    pub(crate) subprotocol: Option<String>,
     pub(crate) created_at: f64,
     pub(crate) local_max_data: u64,
     pub(crate) local_data_sent: u64,
+    pub(crate) local_data_received: u64,
     pub(crate) local_data_consumed: u64,
     pub(crate) peer_max_data: u64,
-    pub(crate) peer_data_sent: u64,
     pub(crate) local_max_streams_bidi: u64,
     pub(crate) local_streams_bidi_opened: u64,
     pub(crate) peer_max_streams_bidi: u64,

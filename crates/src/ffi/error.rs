@@ -35,6 +35,7 @@ impl From<WebTransportError> for PyErr {
                 WebTransportError::Configuration(c, r) => ("ConfigurationError", *c, r.clone()),
                 WebTransportError::Connection(c, r) => ("ConnectionError", *c, r.clone()),
                 WebTransportError::Protocol(c, r) => ("ProtocolError", *c, r.clone()),
+                WebTransportError::Stream(_, c, r) => ("StreamError", *c, r.clone()),
                 WebTransportError::Unknown(c, r) => ("WebTransportError", *c, r.clone()),
             };
 

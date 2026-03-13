@@ -277,7 +277,7 @@ class TestWebTransportConnection:
         connection._session_handles[1] = session_mock
         fut.set_result(1)
 
-        session = await connection.create_session(path="/", headers={"a": "b"})
+        session = await connection.create_session(path="/", headers={"a": "b"}, subprotocols=["h3"])
 
         assert session is session_mock
         mock_controller.send_user_event.assert_called_once()
@@ -289,6 +289,7 @@ class TestWebTransportConnection:
         assert event.request_id == 100
         assert event.path == "/"
         assert event.headers == {"a": "b"}
+        assert event.subprotocols == ["h3"]
 
     @pytest.mark.asyncio
     async def test_create_session_timeout(self, connection: WebTransportConnection, mock_controller: MagicMock) -> None:
@@ -395,13 +396,16 @@ class TestWebTransportConnection:
     def test_handle_session_event_client_ready(
         self, connection: WebTransportConnection, mock_session_cls: MagicMock
     ) -> None:
-        data = {"session_id": 1, "path": "/", "headers": {}}
+        data = {"session_id": 1, "path": "/", "headers": {}, "subprotocols": ["h3"], "subprotocol": "h3"}
 
         connection._notify_owner(event_type=EventType.SESSION_READY, data=data)
 
         assert 1 in connection._session_handles
         assert connection._session_handles[1] == mock_session_cls.return_value
         assert data["session"] == mock_session_cls.return_value
+        mock_session_cls.assert_called_once_with(
+            connection=connection, session_id=1, path="/", headers={}, subprotocols=["h3"], subprotocol="h3"
+        )
 
     def test_handle_session_event_handle_exists(
         self, connection: WebTransportConnection, mocker: MockerFixture

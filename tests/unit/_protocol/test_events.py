@@ -12,6 +12,7 @@ from pywebtransport._protocol.events import (
     UserCreateSession,
     UserCreateStream,
     UserEvent,
+    UserExportKeyingMaterial,
     UserGetConnectionDiagnostics,
     UserGetSessionDiagnostics,
     UserGetStreamDiagnostics,
@@ -36,7 +37,16 @@ class TestUserEvents:
                 {"request_id": 1, "error_code": 100, "reason": "closing"},
                 {"request_id": 1, "error_code": 100, "reason": "closing"},
             ),
-            (UserAcceptSession, {"request_id": 1, "session_id": 1}, {"request_id": 1, "session_id": 1}),
+            (
+                UserAcceptSession,
+                {"request_id": 1, "session_id": 1},
+                {"request_id": 1, "session_id": 1, "subprotocol": None},
+            ),
+            (
+                UserAcceptSession,
+                {"request_id": 1, "session_id": 1, "subprotocol": "h3"},
+                {"request_id": 1, "session_id": 1, "subprotocol": "h3"},
+            ),
             (
                 UserCloseSession,
                 {"request_id": 1, "session_id": 1, "error_code": 100, "reason": "test"},
@@ -46,12 +56,22 @@ class TestUserEvents:
             (
                 UserCreateSession,
                 {"request_id": 1, "path": "/test", "headers": {b":path": b"/test"}},
-                {"request_id": 1, "path": "/test", "headers": {b":path": b"/test"}},
+                {"request_id": 1, "path": "/test", "headers": {b":path": b"/test"}, "subprotocols": None},
+            ),
+            (
+                UserCreateSession,
+                {"request_id": 1, "path": "/test", "headers": {}, "subprotocols": ["p1", "p2"]},
+                {"request_id": 1, "path": "/test", "headers": {}, "subprotocols": ["p1", "p2"]},
             ),
             (
                 UserCreateStream,
                 {"request_id": 1, "session_id": 1, "is_unidirectional": True},
                 {"request_id": 1, "session_id": 1, "is_unidirectional": True},
+            ),
+            (
+                UserExportKeyingMaterial,
+                {"request_id": 1, "session_id": 10, "label": "test", "context": b"ctx", "length": 32},
+                {"request_id": 1, "session_id": 10, "label": "test", "context": b"ctx", "length": 32},
             ),
             (UserGetConnectionDiagnostics, {"request_id": 1}, {"request_id": 1}),
             (UserGetSessionDiagnostics, {"request_id": 1, "session_id": 1}, {"request_id": 1, "session_id": 1}),

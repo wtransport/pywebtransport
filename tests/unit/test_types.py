@@ -135,6 +135,9 @@ class TestRuntimeCheckableProtocols:
 
     def test_session_protocol_conformance(self) -> None:
         class GoodSession:
+            def __init__(self) -> None:
+                self._subproto: str | None = None
+
             async def close(self, *, error_code: int = 0, reason: str | None = None) -> None:
                 pass
 
@@ -157,6 +160,18 @@ class TestRuntimeCheckableProtocols:
             @property
             def state(self) -> SessionState:
                 return SessionState.CONNECTED
+
+            @property
+            def subprotocol(self) -> str | None:
+                return self._subproto
+
+            @subprotocol.setter
+            def subprotocol(self, value: str | None) -> None:
+                self._subproto = value
+
+            @property
+            def subprotocols(self) -> list[str] | None:
+                return None
 
         assert isinstance(GoodSession(), SessionProtocol)
 

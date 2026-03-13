@@ -130,7 +130,7 @@ class EndpointController:
                                 event_data["reason"] = reason
                             cb(ev_type, event_data)
                     case abi.EMIT_SESSION_EVENT:
-                        sid, ev_type, path, hdrs, data, uni, md, ms, rdy, err, rsn = effect_payload
+                        sid, ev_type, path, hdrs, subprotos, subproto, data, uni, md, ms, rdy, err, rsn = effect_payload
                         cb = self._connection_callbacks.get(handle)
                         if cb is not None:
                             event_data = {"session_id": sid}
@@ -138,6 +138,10 @@ class EndpointController:
                                 event_data["path"] = path
                             if hdrs is not None:
                                 event_data["headers"] = hdrs
+                            if subprotos is not None:
+                                event_data["subprotocols"] = subprotos
+                            if subproto is not None:
+                                event_data["subprotocol"] = subproto
                             if data is not None:
                                 event_data["data"] = data
                             if uni is not None:

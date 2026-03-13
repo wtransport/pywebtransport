@@ -35,6 +35,7 @@ class UserAcceptSession(UserEvent[None]):
     """User command to accept a pending session."""
 
     session_id: SessionId
+    subprotocol: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -57,6 +58,7 @@ class UserCreateSession(UserEvent[SessionId]):
 
     path: str
     headers: Headers
+    subprotocols: list[str] | None = None
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -65,6 +67,16 @@ class UserCreateStream(UserEvent[StreamId]):
 
     session_id: SessionId
     is_unidirectional: bool
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class UserExportKeyingMaterial(UserEvent[bytes]):
+    """User command to export TLS keying material for a session."""
+
+    session_id: SessionId
+    label: str
+    context: Buffer
+    length: int
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

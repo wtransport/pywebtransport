@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(No planned changes for the next release yet.)_
 
+## [0.16.0] - 2026-03-13
+
+This release marks a definitive alignment with the `draft-ietf-webtrans-http3-15` specification, introducing foundational protocol features including Application Protocol Negotiation (ALPN) and TLS Keying Material Exporters. It comprehensively hardens the internal state machine against resource exhaustion and protocol semantic violations by establishing strict flow control boundaries and isolating stream-level errors, alongside zero-cost memory optimizations across the FFI layer.
+
+### Added
+
+- **Application Protocol Negotiation**: Implemented WebTransport ALPN capabilities utilizing zero-allocation HTTP Structured Fields (RFC 9651) for the `WT-Available-Protocols` and `WT-Protocol` headers. The client strictly aborts the session with `WT_ALPN_ERROR` (0x0817B3DD) if protocol negotiation criteria are unsatisfied (Draft-15, Sec. 3.3).
+- **TLS Keying Material Exporters**: Integrated support for TLS exporters (RFC 8446) scoped to individual WebTransport sessions. Cryptographic context derivation correctly prefixes the application-supplied context with the mandatory 64-bit big-endian Session ID (Draft-15, Sec. 4.8).
+- **Protocol Constants Alignment**: Standardized the upgrade token to `webtransport-h3` and registered core capability constants including `SETTINGS_WT_ENABLED` (0x2c7cf000), `WT_REQUIREMENTS_NOT_MET` (0x212c0d48), and `WT_ALPN_ERROR` (Draft-15, Sec. 9).
+
+### Changed
+
+- **Session Lifecycle Abstraction**: Elevated session admission control directly to `WebTransportSession.accept()` and `WebTransportSession.reject()`, encapsulating HTTP/3 frame orchestration. The `ServerApp` routing layer now utilizes `reject()` natively to emit HTTP status codes (e.g., 404, 403) and dynamically inject negotiated subprotocols (Draft-15, Sec. 3.2).
+- **Protocol Error Isolation**: Architected `WebTransportError::Stream` to decouple localized semantic violations from fatal connection drops. Parsing failures for HTTP headers or HTTP capsules now strictly map to stream-level `H3_MESSAGE_ERROR` closures rather than collapsing the entire connection multiplexer (RFC 9114, Sec. 4.1.2 & 8; RFC 9297, Sec. 3.3).
+- **Resource Exhaustion Limits**: Implemented strict, immediate abort mechanisms (`WT_FLOW_CONTROL_ERROR`) against peers attempting to bypass advertised `local_max_data` bounds, exceed concurrency limits (`local_max_streams_uni` / `local_max_streams_bidi`), or illegally reduce previously granted flow control limits (Draft-15, Sec. 5.4 & 5.6).
+- **Flow Control Negotiation Fallback**: Enforced a strict fallback concurrency limit (maximum 1 session) when peers fail to negotiate bidirectional flow control intent via `SETTINGS`. Flow-control-specific capsules received in this state are explicitly dropped to prevent state corruption (Draft-15, Sec. 5.1).
+- **Zero-Cost Hot Path Parsing**: Refactored high-frequency internal HTTP/3 parsers to consume raw `&[u8]` slices instead of reference-counted `&Bytes`, neutralizing Atomic Reference Counting (ARC) overhead. Additionally optimized datagram encoding to consume payload `Bytes` by value, eliminating redundant reference cloning.
+
+### Fixed
+
+- **Application Error Masking**: Eliminated internal transport error leakage during `RESET_STREAM` and `STOP_SENDING` events. The engine now enforces strict bounds checks on incoming HTTP/3 error codes, safely masking out-of-bounds variants to preserve cleanly isolated application semantics (Draft-15, Sec. 4.4).
+- **Zombie Stream Mitigation**: Enforced rigorous frame gating on closed or draining `CONNECT` streams. Any arbitrary `DATA` frames injected into these inactive control channels are summarily rejected via `H3_MESSAGE_ERROR` resets (Draft-15, Sec. 6).
+- **Capsule Boundary Enforcement**: Fixed boundary validation by explicitly mapping `Maximum Streams` capsule values exceeding the protocol-defined upper bound of 2^60 to an `H3_DATAGRAM_ERROR` connection closure (Draft-15, Sec. 5.6.2).
+
 ## [0.15.1] - 2026-03-09
 
 This release focuses on protocol engine robustness, configuration determinism, and CI strictness. It resolves memory exhaustion vulnerabilities by bounding early event buffers, rectifies hardcoded timeout regressions by externalizing lifecycle configurations across the transport stack, prunes obsolete protocol constants to improve maintainability, and enforces strict zero-regression testing baselines.
@@ -849,7 +873,8 @@ This is a major release focused on enhancing runtime safety and modernizing the 
 - cryptography (>=45.0.4,<46.0.0) for SSL/TLS operations
 - typing-extensions (>=4.14.0,<5.0.0) for Python <3.10 support
 
-[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.15.1...HEAD
+[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/wtransport/pywebtransport/compare/v0.15.1...v0.16.0
 [0.15.1]: https://github.com/wtransport/pywebtransport/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/wtransport/pywebtransport/compare/v0.14.1...v0.15.0
 [0.14.1]: https://github.com/wtransport/pywebtransport/compare/v0.14.0...v0.14.1

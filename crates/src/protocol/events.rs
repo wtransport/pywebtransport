@@ -96,6 +96,7 @@ pub(crate) enum ProtocolEvent {
     UserAcceptSession {
         request_id: RequestId,
         session_id: SessionId,
+        subprotocol: Option<String>,
     },
     UserCloseSession {
         request_id: RequestId,
@@ -110,11 +111,19 @@ pub(crate) enum ProtocolEvent {
         request_id: RequestId,
         path: String,
         headers: Headers,
+        subprotocols: Option<Vec<String>>,
     },
     UserCreateStream {
         request_id: RequestId,
         session_id: SessionId,
         is_unidirectional: bool,
+    },
+    UserExportKeyingMaterial {
+        request_id: RequestId,
+        session_id: SessionId,
+        label: String,
+        context: Bytes,
+        length: u32,
     },
     UserGetConnectionDiagnostics {
         request_id: RequestId,
@@ -202,6 +211,8 @@ pub(crate) enum Effect {
         event_type: EventType,
         path: Option<String>,
         headers: Option<Headers>,
+        subprotocols: Option<Vec<String>>,
+        subprotocol: Option<String>,
         data: Option<Bytes>,
         is_unidirectional: Option<bool>,
         max_data: Option<u64>,
@@ -217,6 +228,12 @@ pub(crate) enum Effect {
         direction: Option<StreamDirection>,
         is_peer_initiated: Option<bool>,
         error_code: Option<ErrorCode>,
+    },
+    ExportTlsKeyingMaterial {
+        request_id: RequestId,
+        label: String,
+        context: Bytes,
+        length: u32,
     },
     NotifyRequestDone {
         request_id: RequestId,
@@ -248,7 +265,7 @@ pub(crate) enum Effect {
     SendH3Goaway,
     SendH3Headers {
         stream_id: StreamId,
-        status: u16,
+        headers: Headers,
         end_stream: bool,
     },
     SendQuicData {
@@ -276,6 +293,7 @@ pub(crate) enum RequestResult {
     SessionId(SessionId),
     StreamId(StreamId),
     ReadData(Bytes),
+    KeyingMaterial(Bytes),
     ConnectionDiagnostics(Box<ConnectionDiagnostics>),
     SessionDiagnostics(Box<SessionDiagnostics>),
     StreamDiagnostics(Box<StreamDiagnostics>),

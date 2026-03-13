@@ -150,6 +150,21 @@ class SessionProtocol(Protocol):
         """Return the current session state."""
         ...
 
+    @property
+    def subprotocol(self) -> str | None:
+        """Return the negotiated subprotocol."""
+        ...
+
+    @subprotocol.setter
+    def subprotocol(self, value: str | None) -> None:
+        """Set the negotiated subprotocol."""
+        ...
+
+    @property
+    def subprotocols(self) -> list[str] | None:
+        """Return the requested subprotocols."""
+        ...
+
     async def close(self, *, error_code: int = 0, reason: str | None = None) -> None:
         """Terminate the session."""
         ...

@@ -263,6 +263,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         "ERR_TRANSPORT_PARAMETER_ERROR",
         constants::ERR_TRANSPORT_PARAMETER_ERROR,
     )?;
+    m.add("ERR_WT_ALPN_ERROR", constants::ERR_WT_ALPN_ERROR)?;
     m.add(
         "ERR_WT_APPLICATION_ERROR_FIRST",
         constants::ERR_WT_APPLICATION_ERROR_FIRST,
@@ -278,6 +279,10 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add(
         "ERR_WT_FLOW_CONTROL_ERROR",
         constants::ERR_WT_FLOW_CONTROL_ERROR,
+    )?;
+    m.add(
+        "ERR_WT_REQUIREMENTS_NOT_MET",
+        constants::ERR_WT_REQUIREMENTS_NOT_MET,
     )?;
     m.add("ERR_WT_SESSION_GONE", constants::ERR_WT_SESSION_GONE)?;
     m.add("MAX_DATAGRAM_SIZE", constants::MAX_DATAGRAM_SIZE)?;

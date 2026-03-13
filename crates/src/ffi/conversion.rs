@@ -62,6 +62,8 @@ impl<'py> IntoPyObject<'py> for Effect {
                 event_type,
                 path,
                 headers,
+                subprotocols,
+                subprotocol,
                 data,
                 is_unidirectional,
                 max_data,
@@ -70,12 +72,12 @@ impl<'py> IntoPyObject<'py> for Effect {
                 error_code,
                 reason,
             } => {
-                let py_headers = match headers {
+                let headers = match headers {
                     Some(h) => headers_to_py(py, &h)?.into_any(),
                     None => py.None().into_bound(py).into_any(),
                 };
 
-                let py_data = match data {
+                let data = match data {
                     Some(d) => PyBytes::new(py, &d).into_any(),
                     None => py.None().into_bound(py).into_any(),
                 };
@@ -86,8 +88,10 @@ impl<'py> IntoPyObject<'py> for Effect {
                         session_id.into_pyobject(py)?.into_any(),
                         event_type.into_pyobject(py)?.into_any(),
                         path.into_pyobject(py)?.into_any(),
-                        py_headers,
-                        py_data,
+                        headers,
+                        subprotocols.into_pyobject(py)?.into_any(),
+                        subprotocol.into_pyobject(py)?.into_any(),
+                        data,
                         is_unidirectional.into_pyobject(py)?.into_any(),
                         max_data.into_pyobject(py)?.into_any(),
                         max_streams.into_pyobject(py)?.into_any(),
@@ -135,13 +139,44 @@ impl<'py> IntoPyObject<'py> for Effect {
                 )?
                 .into_any())
             }
+            Effect::ExportTlsKeyingMaterial {
+                request_id,
+                label,
+                context,
+                length,
+            } => {
+                let context = PyBytes::new(py, &context).into_any();
+
+                let payload = PyTuple::new(
+                    py,
+                    &[
+                        request_id.into_pyobject(py)?.into_any(),
+                        label.into_pyobject(py)?.into_any(),
+                        context,
+                        length.into_pyobject(py)?.into_any(),
+                    ],
+                )?;
+
+                Ok(PyTuple::new(
+                    py,
+                    &[
+                        abi::EXPORT_TLS_KEYING_MATERIAL
+                            .into_pyobject(py)?
+                            .into_any(),
+                        payload.into_any(),
+                    ],
+                )?
+                .into_any())
+            }
             Effect::NotifyRequestDone { request_id, result } => {
-                let py_result = match result {
+                let result = match result {
                     RequestResult::None => py.None().into_bound(py).into_any(),
                     RequestResult::SessionId(sid) | RequestResult::StreamId(sid) => {
                         sid.into_pyobject(py)?.into_any()
                     }
-                    RequestResult::ReadData(bytes) => PyBytes::new(py, &bytes).into_any(),
+                    RequestResult::ReadData(bytes) | RequestResult::KeyingMaterial(bytes) => {
+                        PyBytes::new(py, &bytes).into_any()
+                    }
                     RequestResult::ConnectionDiagnostics(diag) => {
                         connection_diagnostics_to_py(py, &diag)?
                     }
@@ -152,7 +187,7 @@ impl<'py> IntoPyObject<'py> for Effect {
                 };
 
                 let payload =
-                    PyTuple::new(py, &[request_id.into_pyobject(py)?.into_any(), py_result])?;
+                    PyTuple::new(py, &[request_id.into_pyobject(py)?.into_any(), result])?;
 
                 Ok(PyTuple::new(
                     py,
@@ -227,6 +262,7 @@ impl<'a, 'py> FromPyObject<'a, 'py> for ProtocolEvent {
             abi::USER_ACCEPT_SESSION => Ok(ProtocolEvent::UserAcceptSession {
                 request_id: payload.get_item(0)?.extract()?,
                 session_id: payload.get_item(1)?.extract()?,
+                subprotocol: payload.get_item(2)?.extract()?,
             }),
             abi::USER_CLOSE_SESSION => Ok(ProtocolEvent::UserCloseSession {
                 request_id: payload.get_item(0)?.extract()?,
@@ -241,11 +277,19 @@ impl<'a, 'py> FromPyObject<'a, 'py> for ProtocolEvent {
                 request_id: payload.get_item(0)?.extract()?,
                 path: payload.get_item(1)?.extract()?,
                 headers: extract_headers(&payload.get_item(2)?)?,
+                subprotocols: payload.get_item(3)?.extract()?,
             }),
             abi::USER_CREATE_STREAM => Ok(ProtocolEvent::UserCreateStream {
                 request_id: payload.get_item(0)?.extract()?,
                 session_id: payload.get_item(1)?.extract()?,
                 is_unidirectional: payload.get_item(2)?.extract()?,
+            }),
+            abi::USER_EXPORT_KEYING_MATERIAL => Ok(ProtocolEvent::UserExportKeyingMaterial {
+                request_id: payload.get_item(0)?.extract()?,
+                session_id: payload.get_item(1)?.extract()?,
+                label: payload.get_item(2)?.extract()?,
+                context: extract_bytes_at_index(3)?,
+                length: payload.get_item(4)?.extract()?,
             }),
             abi::USER_GET_CONNECTION_DIAGNOSTICS => {
                 Ok(ProtocolEvent::UserGetConnectionDiagnostics {
@@ -424,12 +468,13 @@ fn session_diagnostics_to_py<'py>(
     dict.set_item("state", diag.state)?;
     dict.set_item("path", &diag.path)?;
     dict.set_item("headers", headers_to_py(py, &diag.headers)?)?;
+    dict.set_item("subprotocol", &diag.subprotocol)?;
     dict.set_item("created_at", diag.created_at)?;
     dict.set_item("local_max_data", diag.local_max_data)?;
     dict.set_item("local_data_sent", diag.local_data_sent)?;
+    dict.set_item("local_data_received", diag.local_data_received)?;
     dict.set_item("local_data_consumed", diag.local_data_consumed)?;
     dict.set_item("peer_max_data", diag.peer_max_data)?;
-    dict.set_item("peer_data_sent", diag.peer_data_sent)?;
     dict.set_item("local_max_streams_bidi", diag.local_max_streams_bidi)?;
     dict.set_item("local_streams_bidi_opened", diag.local_streams_bidi_opened)?;
     dict.set_item("peer_max_streams_bidi", diag.peer_max_streams_bidi)?;

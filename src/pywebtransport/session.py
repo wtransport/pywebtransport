@@ -7,14 +7,17 @@ import weakref
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Self, cast
 
 from pywebtransport._protocol.events import (
+    UserAcceptSession,
     UserCloseSession,
     UserCreateStream,
+    UserExportKeyingMaterial,
     UserGetSessionDiagnostics,
     UserGrantDataCredit,
     UserGrantStreamsCredit,
+    UserRejectSession,
     UserSendDatagram,
 )
 from pywebtransport.constants import ErrorCodes
@@ -40,12 +43,14 @@ class SessionDiagnostics:
     state: SessionState
     path: str
     headers: Headers
+    subprotocols: list[str] | None
+    subprotocol: str | None
     created_at: float
     local_max_data: int
     local_data_sent: int
+    local_data_received: int
     local_data_consumed: int
     peer_max_data: int
-    peer_data_sent: int
     local_max_streams_bidi: int
     local_streams_bidi_opened: int
     peer_max_streams_bidi: int
@@ -78,6 +83,8 @@ class WebTransportSession:
         "_session_id",
         "_path",
         "_headers",
+        "_subprotocols",
+        "_subprotocol",
         "_cached_state",
         "_incoming_bidi_streams",
         "_incoming_uni_streams",
@@ -86,13 +93,22 @@ class WebTransportSession:
     )
 
     def __init__(
-        self, *, connection: WebTransportConnection, session_id: SessionId, path: str, headers: Headers
+        self,
+        *,
+        connection: WebTransportConnection,
+        session_id: SessionId,
+        path: str,
+        headers: Headers,
+        subprotocols: list[str] | None = None,
+        subprotocol: str | None = None,
     ) -> None:
         """Initialize the instance."""
         self._connection = weakref.ref(connection)
         self._session_id = session_id
         self._path = path
         self._headers = headers
+        self._subprotocols = subprotocols
+        self._subprotocol = subprotocol
 
         self._cached_state = SessionState.CONNECTING
         self._incoming_bidi_streams: asyncio.Queue[WebTransportStream | None] = asyncio.Queue()
@@ -152,6 +168,33 @@ class WebTransportSession:
     def state(self) -> SessionState:
         """Return the current state of the session."""
         return self._cached_state
+
+    @property
+    def subprotocol(self) -> str | None:
+        """Return the negotiated subprotocol for this session."""
+        return self._subprotocol
+
+    @subprotocol.setter
+    def subprotocol(self, value: str | None) -> None:
+        """Set the subprotocol for this session before accepting."""
+        self._subprotocol = value
+
+    @property
+    def subprotocols(self) -> list[str] | None:
+        """Return the subprotocols requested by the client."""
+        return self._subprotocols
+
+    async def accept(self) -> None:
+        """Accept the incoming WebTransport session request."""
+        connection = self._connection()
+        if connection is None:
+            raise ConnectionError("Connection is gone.")
+
+        request_id, future = connection._controller._pending_manager.create_request()
+        event = UserAcceptSession(request_id=request_id, session_id=self.session_id, subprotocol=self.subprotocol)
+        connection._controller.send_user_event(handle=connection._handle, event=event)
+        await future
+        self._cached_state = SessionState.CONNECTED
 
     async def accept_bidirectional_stream(self) -> WebTransportStream:
         """Accept the next incoming bidirectional stream."""
@@ -214,9 +257,27 @@ class WebTransportSession:
         try:
             connection._controller.send_user_event(handle=connection._handle, event=event)
             diag_data: dict[str, Any] = await future
+            diag_data["subprotocols"] = self._subprotocols
             return SessionDiagnostics(**diag_data)
         except ConnectionError as e:
             raise SessionError(f"Connection is closed, cannot get diagnostics: {e}") from e
+
+    async def export_keying_material(self, *, label: str, context: Buffer, length: int) -> bytes:
+        """Export TLS keying material for this session."""
+        connection = self._connection()
+        if connection is None:
+            raise ConnectionError("Connection is gone.")
+
+        request_id, future = connection._controller._pending_manager.create_request()
+        event = UserExportKeyingMaterial(
+            request_id=request_id,
+            session_id=self.session_id,
+            label=label,
+            context=context,
+            length=length,
+        )
+        connection._controller.send_user_event(handle=connection._handle, event=event)
+        return cast(bytes, await future)
 
     async def grant_data_credit(self, *, max_data: int) -> None:
         """Allocate data flow control credit to the peer."""
@@ -260,6 +321,20 @@ class WebTransportSession:
                 yield await self.accept_unidirectional_stream()
         except SessionClosedError:
             pass
+
+    async def reject(self, *, status_code: int = 403) -> None:
+        """Reject the incoming WebTransport session request."""
+        connection = self._connection()
+        if connection is None:
+            raise ConnectionError("Connection is gone.")
+
+        request_id, future = connection._controller._pending_manager.create_request()
+        event = UserRejectSession(request_id=request_id, session_id=self.session_id, status_code=status_code)
+        connection._controller.send_user_event(handle=connection._handle, event=event)
+        await future
+        self._cached_state = SessionState.CLOSED
+        self._incoming_bidi_streams.put_nowait(None)
+        self._incoming_uni_streams.put_nowait(None)
 
     async def send_datagram(self, *, data: Buffer) -> None:
         """Transmit an unreliable datagram."""
@@ -324,6 +399,10 @@ class WebTransportSession:
     def _on_session_ready(self, event: Event) -> None:
         """Handle the session ready event."""
         self._cached_state = SessionState.CONNECTED
+        if isinstance(event.data, dict):
+            new_subprotocol = event.data.get("subprotocol")
+            if new_subprotocol is not None:
+                self._subprotocol = new_subprotocol
 
     def __repr__(self) -> str:
         """Return the string representation."""

@@ -764,6 +764,7 @@ class TestWebTransportClient:
 
         _, session_kwargs = mock_webtransport_connection.create_session.call_args
         assert session_kwargs["path"] == "/"
+        assert session_kwargs["subprotocols"] is None
 
         headers = session_kwargs["headers"]
         if isinstance(headers, dict):
@@ -775,6 +776,28 @@ class TestWebTransportClient:
         stats = client._stats
         assert stats.connections_successful == 1
         assert stats.total_connect_time == pytest.approx(expected=1.23)
+
+    @pytest.mark.asyncio
+    async def test_connect_success_with_subprotocols(
+        self,
+        client: WebTransportClient,
+        mock_controller_cls: Any,
+        mock_connection_cls: Any,
+        mock_controller: Any,
+        mock_connection_manager: Any,
+        mock_webtransport_connection: Any,
+        mock_session: Any,
+        mocker: MockerFixture,
+    ) -> None:
+        mocker.patch(target="pywebtransport.client.client.get_timestamp", side_effect=[2000.0, 2001.23])
+
+        session = await client.connect(url="https://example.com", subprotocols=["h3", "dummy"])
+
+        assert session is mock_session
+        mock_webtransport_connection.create_session.assert_awaited_once()
+
+        _, session_kwargs = mock_webtransport_connection.create_session.call_args
+        assert session_kwargs["subprotocols"] == ["h3", "dummy"]
 
     @pytest.mark.asyncio
     async def test_connect_ua_from_config(
