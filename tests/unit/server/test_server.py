@@ -16,29 +16,20 @@ from pywebtransport.types import ConnectionState, EventType, SessionState
 class TestServerDiagnostics:
 
     @pytest.mark.parametrize(
-        argnames="diag_kwargs, path_exists_side_effect, expected_issue_part",
+        argnames="diag_kwargs, expected_issue_part",
         argvalues=[
-            ({"is_serving": False}, [True, True], "Server is not currently serving."),
+            ({"is_serving": False}, "Server is not currently serving."),
             (
                 {"stats": ServerStats(connections_accepted=89, connections_rejected=11)},
-                [True, True],
                 "High connection rejection rate",
             ),
-            ({"connection_states": {ConnectionState.CONNECTED: 95}}, [True, True], "High connection usage"),
-            (
-                {"certfile_path": "/nonexistent/cert.pem", "cert_file_exists": False},
-                [False, True],
-                "Certificate file not found",
-            ),
-            ({"keyfile_path": "/nonexistent/key.pem", "key_file_exists": False}, [True, False], "Key file not found"),
-            ({}, [True, True], None),
+            ({"connection_states": {ConnectionState.CONNECTED: 95}}, "High connection usage"),
+            ({}, None),
         ],
     )
     def test_issues_property(
         self,
-        mocker: MockerFixture,
         diag_kwargs: dict[str, Any],
-        path_exists_side_effect: list[bool],
         expected_issue_part: str | None,
     ) -> None:
         defaults = {
@@ -47,16 +38,10 @@ class TestServerDiagnostics:
             "connection_states": {},
             "max_connections": 100,
             "session_states": {},
-            "certfile_path": "cert.pem",
-            "cert_file_exists": True,
-            "keyfile_path": "key.pem",
-            "key_file_exists": True,
         }
         for k, v in defaults.items():
             if k not in diag_kwargs:
                 diag_kwargs[k] = v
-
-        mocker.patch(target="pathlib.Path.exists", side_effect=path_exists_side_effect)
 
         diagnostics = ServerDiagnostics(**diag_kwargs)
         issues = diagnostics.issues
@@ -119,7 +104,6 @@ class TestWebTransportServer:
     @pytest.fixture(autouse=True)
     def setup_common_mocks(self, mocker: MockerFixture) -> None:
         mocker.patch(target="pywebtransport.server.server.get_timestamp", side_effect=[1000.0, 1005.0])
-        mocker.patch(target="pathlib.Path.exists", return_value=True)
 
     @pytest.mark.asyncio
     async def test_async_context_manager(
@@ -295,10 +279,6 @@ class TestWebTransportServer:
         assert diagnostics.connection_states == {ConnectionState.CONNECTED: 1}
         assert diagnostics.session_states == {SessionState.CONNECTED: 1}
         assert diagnostics.is_serving is True
-        assert diagnostics.certfile_path == "cert.pem"
-        assert diagnostics.keyfile_path == "key.pem"
-        assert diagnostics.cert_file_exists is True
-        assert diagnostics.key_file_exists is True
 
     @pytest.mark.asyncio
     async def test_diagnostics_before_listen(self, server: WebTransportServer) -> None:
@@ -308,21 +288,6 @@ class TestWebTransportServer:
 
     def test_init_with_custom_config(self, server: WebTransportServer, mock_server_config: ServerConfig) -> None:
         assert server.config is mock_server_config
-
-    def test_init_with_default_config(self, mocker: MockerFixture) -> None:
-        mock_config_class = mocker.patch(target="pywebtransport.server.server.ServerConfig", autospec=True)
-        mock_config_instance = mock_config_class.return_value
-        mock_config_instance.max_connections = 100
-        mock_config_instance.connection_idle_timeout = 60.0
-        mock_config_instance.max_sessions = 100
-        mock_config_instance.max_event_queue_size = 100
-        mock_config_instance.max_event_listeners = 100
-        mock_config_instance.max_event_history_size = 100
-
-        WebTransportServer(config=None)
-
-        mock_config_class.assert_called_once_with()
-        mock_config_instance.validate.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_initialize_and_register_connection_event_forwarding(
@@ -456,7 +421,7 @@ class TestWebTransportServer:
     ) -> None:
         mock_endpoint_controller_class.side_effect = FileNotFoundError("Cert missing")
 
-        with pytest.raises(expected_exception=ServerError, match="Certificate/Key file error"):
+        with pytest.raises(expected_exception=ServerError, match="CA/Certificate/Key file error"):
             await server.listen()
 
     @pytest.mark.asyncio

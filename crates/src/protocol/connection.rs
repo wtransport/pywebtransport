@@ -24,26 +24,26 @@ use crate::protocol::utils::{
 };
 
 // Representation of a WebTransport connection state machine.
-pub(crate) struct Connection {
-    pub(crate) id: String,
-    pub(crate) is_client: bool,
-    pub(crate) state: ConnectionState,
-    pub(crate) max_datagram_size: u64,
-    pub(crate) remote_max_datagram_frame_size: Option<u64>,
-    pub(crate) handshake_complete: bool,
-    pub(crate) peer_settings_received: bool,
-    pub(crate) local_goaway_sent: bool,
-    pub(crate) sessions: HashMap<SessionId, Session>,
-    pub(crate) stream_map: HashMap<StreamId, SessionId>,
-    pub(crate) pending_requests: HashMap<StreamId, RequestId>,
-    pub(crate) pending_session_configs: HashMap<RequestId, SessionInitData>,
-    pub(crate) early_event_buffer: HashMap<StreamId, Vec<(f64, ProtocolEvent)>>,
-    pub(crate) early_event_count: usize,
-    pub(crate) peer_initial_max_data: u64,
-    pub(crate) peer_initial_max_streams_bidi: u64,
-    pub(crate) peer_initial_max_streams_uni: u64,
-    pub(crate) connected_at: Option<f64>,
-    pub(crate) closed_at: Option<f64>,
+pub(super) struct Connection {
+    pub(super) id: String,
+    pub(super) is_client: bool,
+    pub(super) state: ConnectionState,
+    pub(super) max_datagram_size: u64,
+    pub(super) remote_max_datagram_frame_size: Option<u64>,
+    pub(super) handshake_complete: bool,
+    pub(super) peer_settings_received: bool,
+    pub(super) local_goaway_sent: bool,
+    pub(super) sessions: HashMap<SessionId, Session>,
+    pub(super) stream_map: HashMap<StreamId, SessionId>,
+    pub(super) pending_requests: HashMap<StreamId, RequestId>,
+    pub(super) pending_session_configs: HashMap<RequestId, SessionInitData>,
+    pub(super) early_event_buffer: HashMap<StreamId, Vec<(f64, ProtocolEvent)>>,
+    pub(super) early_event_count: usize,
+    pub(super) peer_initial_max_data: u64,
+    pub(super) peer_initial_max_streams_bidi: u64,
+    pub(super) peer_initial_max_streams_uni: u64,
+    pub(super) connected_at: Option<f64>,
+    pub(super) closed_at: Option<f64>,
     flow_control_window_auto_scale: bool,
     initial_max_data: u64,
     initial_max_streams_bidi: u64,
@@ -63,7 +63,7 @@ impl Connection {
         clippy::too_many_arguments,
         reason = "Complex internal state initialization."
     )]
-    pub(crate) fn new(
+    pub(super) fn new(
         id: ConnectionId,
         is_client: bool,
         max_datagram_size: u64,
@@ -114,7 +114,7 @@ impl Connection {
     }
 
     // User session acceptance handling (delegated).
-    pub(crate) fn accept_session(
+    pub(super) fn accept_session(
         &mut self,
         session_id: SessionId,
         request_id: RequestId,
@@ -133,7 +133,7 @@ impl Connection {
     }
 
     // H3 session binding.
-    pub(crate) fn bind_session(
+    pub(super) fn bind_session(
         &mut self,
         stream_id: StreamId,
         request_id: RequestId,
@@ -143,7 +143,7 @@ impl Connection {
     }
 
     // QUIC stream binding (delegated).
-    pub(crate) fn bind_stream(
+    pub(super) fn bind_stream(
         &mut self,
         session_id: SessionId,
         stream_id: StreamId,
@@ -165,7 +165,7 @@ impl Connection {
     }
 
     // Connection closure handling.
-    pub(crate) fn close(
+    pub(super) fn close(
         &mut self,
         request_id: RequestId,
         error_code: ErrorCode,
@@ -186,7 +186,7 @@ impl Connection {
     }
 
     // User session closure handling (delegated).
-    pub(crate) fn close_session(
+    pub(super) fn close_session(
         &mut self,
         session_id: SessionId,
         request_id: RequestId,
@@ -204,7 +204,7 @@ impl Connection {
     }
 
     // User session creation request handling.
-    pub(crate) fn create_session(
+    pub(super) fn create_session(
         &mut self,
         request_id: RequestId,
         path: String,
@@ -273,7 +273,7 @@ impl Connection {
     }
 
     // User stream creation request handling (delegated).
-    pub(crate) fn create_stream(
+    pub(super) fn create_stream(
         &mut self,
         session_id: SessionId,
         request_id: RequestId,
@@ -291,7 +291,7 @@ impl Connection {
     }
 
     // Connection diagnostics event handling.
-    pub(crate) fn diagnose(&self, request_id: RequestId) -> Vec<Effect> {
+    pub(super) fn diagnose(&self, request_id: RequestId) -> Vec<Effect> {
         let diag = self.diagnostics_snapshot();
         vec![Effect::NotifyRequestDone {
             request_id,
@@ -300,7 +300,7 @@ impl Connection {
     }
 
     // TLS keying material export handling (delegated).
-    pub(crate) fn export_keying_material(
+    pub(super) fn export_keying_material(
         &self,
         session_id: SessionId,
         request_id: RequestId,
@@ -318,8 +318,9 @@ impl Connection {
             reason: "Session not found".to_owned(),
         }]
     }
+
     // H3 session creation failure handling.
-    pub(crate) fn fail_session(
+    pub(super) fn fail_session(
         &mut self,
         request_id: RequestId,
         error_code: Option<ErrorCode>,
@@ -336,7 +337,7 @@ impl Connection {
     }
 
     // QUIC stream creation failure handling (delegated).
-    pub(crate) fn fail_stream(
+    pub(super) fn fail_stream(
         &mut self,
         session_id: SessionId,
         request_id: RequestId,
@@ -356,7 +357,7 @@ impl Connection {
     }
 
     // Graceful connection shutdown handling.
-    pub(crate) fn graceful_close(&mut self, request_id: RequestId, now: f64) -> Vec<Effect> {
+    pub(super) fn graceful_close(&mut self, request_id: RequestId, now: f64) -> Vec<Effect> {
         let mut effects = Vec::new();
 
         if !self.local_goaway_sent {
@@ -377,7 +378,7 @@ impl Connection {
     }
 
     // Manual data credit grant handling (delegated).
-    pub(crate) fn grant_data_credit(
+    pub(super) fn grant_data_credit(
         &mut self,
         session_id: SessionId,
         request_id: RequestId,
@@ -395,7 +396,7 @@ impl Connection {
     }
 
     // Manual streams credit grant handling (delegated).
-    pub(crate) fn grant_streams_credit(
+    pub(super) fn grant_streams_credit(
         &mut self,
         session_id: SessionId,
         request_id: RequestId,
@@ -414,7 +415,7 @@ impl Connection {
     }
 
     // Handshake completion handling.
-    pub(crate) fn handshake_completed(&mut self, now: f64) -> Vec<Effect> {
+    pub(super) fn handshake_completed(&mut self, now: f64) -> Vec<Effect> {
         let mut effects = Vec::new();
         self.handshake_complete = true;
 
@@ -425,7 +426,7 @@ impl Connection {
     }
 
     // Flow control negotiation status verification.
-    pub(crate) fn has_flow_control(&self) -> bool {
+    pub(super) fn has_flow_control(&self) -> bool {
         let local_intent = self.initial_max_data > 0
             || self.initial_max_streams_bidi > 0
             || self.initial_max_streams_uni > 0;
@@ -437,7 +438,7 @@ impl Connection {
     }
 
     // Early events pruning.
-    pub(crate) fn prune_early_events(&mut self, now: f64) -> Vec<Effect> {
+    pub(super) fn prune_early_events(&mut self, now: f64) -> Vec<Effect> {
         let mut effects = Vec::new();
         let mut streams_to_remove = Vec::new();
         let mut terminated_child_streams = HashSet::new();
@@ -522,7 +523,7 @@ impl Connection {
     }
 
     // Closed resources pruning.
-    pub(crate) fn prune_resources(&mut self) -> Vec<Effect> {
+    pub(super) fn prune_resources(&mut self) -> Vec<Effect> {
         let mut effects = Vec::new();
 
         let mut closed_session_ids: Vec<SessionId> = self
@@ -565,7 +566,7 @@ impl Connection {
     }
 
     // Capsule reception handling (delegated).
-    pub(crate) fn recv_capsule(
+    pub(super) fn recv_capsule(
         &mut self,
         session_id: SessionId,
         capsule_type: u64,
@@ -579,7 +580,7 @@ impl Connection {
     }
 
     // CONNECT stream closure reception handling (delegated).
-    pub(crate) fn recv_connect_close(&mut self, session_id: SessionId, now: f64) -> Vec<Effect> {
+    pub(super) fn recv_connect_close(&mut self, session_id: SessionId, now: f64) -> Vec<Effect> {
         if let Some(session) = self.sessions.get_mut(&session_id) {
             return session.recv_connect_close(now);
         }
@@ -587,7 +588,7 @@ impl Connection {
     }
 
     // Datagram reception handling (delegated).
-    pub(crate) fn recv_datagram(
+    pub(super) fn recv_datagram(
         &mut self,
         session_id: SessionId,
         data: Bytes,
@@ -607,7 +608,7 @@ impl Connection {
     }
 
     // GOAWAY frame reception handling.
-    pub(crate) fn recv_goaway(&mut self, now: f64) -> Vec<Effect> {
+    pub(super) fn recv_goaway(&mut self, now: f64) -> Vec<Effect> {
         let mut effects = Vec::new();
 
         if self.state != ConnectionState::Closing && self.state != ConnectionState::Closed {
@@ -652,7 +653,7 @@ impl Connection {
     }
 
     // HEADERS frame reception handling.
-    pub(crate) fn recv_headers(
+    pub(super) fn recv_headers(
         &mut self,
         stream_id: StreamId,
         headers: Headers,
@@ -927,7 +928,7 @@ impl Connection {
     }
 
     // SETTINGS frame reception handling.
-    pub(crate) fn recv_settings(&mut self, settings: &HashMap<u64, u64>, now: f64) -> Vec<Effect> {
+    pub(super) fn recv_settings(&mut self, settings: &HashMap<u64, u64>, now: f64) -> Vec<Effect> {
         let mut effects = Vec::new();
         self.peer_settings_received = true;
 
@@ -949,7 +950,7 @@ impl Connection {
     }
 
     // Stream data reception handling (delegated).
-    pub(crate) fn recv_stream_data(
+    pub(super) fn recv_stream_data(
         &mut self,
         session_id: SessionId,
         stream_id: StreamId,
@@ -997,7 +998,7 @@ impl Connection {
     }
 
     // Transport stream reset reception handling (delegated).
-    pub(crate) fn recv_stream_reset(
+    pub(super) fn recv_stream_reset(
         &mut self,
         stream_id: StreamId,
         error_code: ErrorCode,
@@ -1014,7 +1015,7 @@ impl Connection {
     }
 
     // Transport stream stop_sending reception handling (delegated).
-    pub(crate) fn recv_stop_sending(
+    pub(super) fn recv_stop_sending(
         &mut self,
         stream_id: StreamId,
         error_code: ErrorCode,
@@ -1030,7 +1031,7 @@ impl Connection {
     }
 
     // Transport parameters reception handling.
-    pub(crate) fn recv_transport_parameters(
+    pub(super) fn recv_transport_parameters(
         &mut self,
         remote_max_datagram_frame_size: u64,
     ) -> Vec<Effect> {
@@ -1042,7 +1043,7 @@ impl Connection {
     }
 
     // User session rejection handling (delegated).
-    pub(crate) fn reject_session(
+    pub(super) fn reject_session(
         &mut self,
         session_id: SessionId,
         request_id: RequestId,
@@ -1061,7 +1062,7 @@ impl Connection {
     }
 
     // User stream reset command handling (delegated).
-    pub(crate) fn reset_stream(
+    pub(super) fn reset_stream(
         &mut self,
         session_id: SessionId,
         stream_id: StreamId,
@@ -1081,7 +1082,7 @@ impl Connection {
     }
 
     // User datagram send command handling (delegated).
-    pub(crate) fn send_datagram(
+    pub(super) fn send_datagram(
         &mut self,
         session_id: SessionId,
         request_id: RequestId,
@@ -1100,7 +1101,7 @@ impl Connection {
     }
 
     // User stream data send handling (delegated).
-    pub(crate) fn send_stream_data(
+    pub(super) fn send_stream_data(
         &mut self,
         session_id: SessionId,
         stream_id: StreamId,
@@ -1120,7 +1121,7 @@ impl Connection {
     }
 
     // Session diagnostics delegation.
-    pub(crate) fn session_diagnostics(
+    pub(super) fn session_diagnostics(
         &self,
         session_id: SessionId,
         request_id: RequestId,
@@ -1137,7 +1138,7 @@ impl Connection {
     }
 
     // User stream stop command handling (delegated).
-    pub(crate) fn stop_stream(
+    pub(super) fn stop_stream(
         &mut self,
         session_id: SessionId,
         stream_id: StreamId,
@@ -1157,7 +1158,7 @@ impl Connection {
     }
 
     // Stream diagnostics delegation.
-    pub(crate) fn stream_diagnostics(
+    pub(super) fn stream_diagnostics(
         &self,
         session_id: SessionId,
         stream_id: StreamId,
@@ -1175,7 +1176,7 @@ impl Connection {
     }
 
     // User stream read request handling (delegated).
-    pub(crate) fn stream_read(
+    pub(super) fn stream_read(
         &mut self,
         session_id: SessionId,
         stream_id: StreamId,
@@ -1194,7 +1195,7 @@ impl Connection {
     }
 
     // Connection termination handling.
-    pub(crate) fn terminated(
+    pub(super) fn terminated(
         &mut self,
         error_code: ErrorCode,
         reason_phrase: String,
@@ -1333,11 +1334,11 @@ pub(crate) struct ConnectionDiagnostics {
 
 // Data required to initialize a pending session.
 #[derive(Clone, Debug)]
-pub(crate) struct SessionInitData {
-    pub(crate) path: String,
-    pub(crate) headers: Headers,
-    pub(crate) subprotocols: Option<Vec<String>>,
-    pub(crate) created_at: f64,
+pub(super) struct SessionInitData {
+    pub(super) path: String,
+    pub(super) headers: Headers,
+    pub(super) subprotocols: Option<Vec<String>>,
+    pub(super) created_at: f64,
 }
 
 #[cfg(test)]

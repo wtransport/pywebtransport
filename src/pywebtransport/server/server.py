@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from collections import Counter
 from dataclasses import asdict, dataclass
-from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
 
@@ -33,10 +32,6 @@ class ServerDiagnostics:
     connection_states: dict[ConnectionState, int]
     max_connections: int
     session_states: dict[SessionState, int]
-    certfile_path: str
-    cert_file_exists: bool
-    keyfile_path: str
-    key_file_exists: bool
 
     @property
     def issues(self) -> list[str]:
@@ -57,11 +52,6 @@ class ServerDiagnostics:
         active_connections = self.connection_states.get(ConnectionState.CONNECTED, 0)
         if self.max_connections > 0 and (active_connections / max(1, self.max_connections)) > 0.9:
             issues.append(f"High connection usage: {active_connections / self.max_connections:.1%}")
-
-        if self.certfile_path and not self.cert_file_exists:
-            issues.append(f"Certificate file not found: {self.certfile_path}")
-        if self.keyfile_path and not self.key_file_exists:
-            issues.append(f"Key file not found: {self.keyfile_path}")
 
         return issues
 
@@ -101,26 +91,25 @@ class ServerStats:
 class WebTransportServer(EventEmitter):
     """Manage the lifecycle and connections for the WebTransport server."""
 
-    def __init__(self, *, config: ServerConfig | None = None) -> None:
+    def __init__(self, *, config: ServerConfig) -> None:
         """Initialize the instance."""
-        effective_config = config if config is not None else ServerConfig()
-        effective_config.validate()
+        config.validate()
 
         super().__init__(
-            max_queue_size=effective_config.max_event_queue_size,
-            max_listeners=effective_config.max_event_listeners,
-            max_history=effective_config.max_event_history_size,
+            max_queue_size=config.max_event_queue_size,
+            max_listeners=config.max_event_listeners,
+            max_history=config.max_event_history_size,
         )
 
-        self._config = effective_config
+        self._config = config
 
         self._closing = False
         self._serving = False
         self._shutdown_event = asyncio.Event()
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._close_task: asyncio.Task[None] | None = None
-        self._connection_manager = ConnectionManager(max_connections=effective_config.max_connections)
-        self._session_manager = SessionManager(max_sessions=effective_config.max_sessions)
+        self._connection_manager = ConnectionManager(max_connections=config.max_connections)
+        self._session_manager = SessionManager(max_sessions=config.max_sessions)
 
         self._controller: EndpointController | None = None
         self._stats = ServerStats()
@@ -189,27 +178,12 @@ class WebTransportServer(EventEmitter):
         connection_states = Counter(conn.state for conn in connections)
         session_states = Counter(sess.state for sess in sessions)
 
-        cert_path = self.config.certfile
-        key_path = self.config.keyfile
-
-        def check_files() -> tuple[bool, bool]:
-            c_exists = Path(cert_path).exists() if cert_path is not None and cert_path else False
-            k_exists = Path(key_path).exists() if key_path is not None and key_path else False
-            return c_exists, k_exists
-
-        loop = asyncio.get_running_loop()
-        cert_exists, key_exists = await loop.run_in_executor(None, check_files)
-
         return ServerDiagnostics(
             is_serving=self.is_serving,
             stats=self._stats,
             connection_states=dict(connection_states),
             max_connections=self.config.max_connections,
             session_states=dict(session_states),
-            certfile_path=cert_path if cert_path is not None else "",
-            cert_file_exists=cert_exists,
-            keyfile_path=key_path if key_path is not None else "",
-            key_file_exists=key_exists,
         )
 
     async def listen(self, *, host: str | None = None, port: int | None = None) -> None:
@@ -243,8 +217,8 @@ class WebTransportServer(EventEmitter):
                 _logger.info("WebTransport server listening but no addresses acquired.")
 
         except FileNotFoundError as e:
-            _logger.critical("Certificate/Key file error: %s", e)
-            raise ServerError(message=f"Certificate/Key file error: {e}") from e
+            _logger.critical("CA/Certificate/Key file error: %s", e)
+            raise ServerError(message=f"CA/Certificate/Key file error: {e}") from e
         except Exception as e:
             _logger.critical("Failed to start server: %s", e, exc_info=True)
             raise ServerError(message=f"Failed to start server: {e}") from e

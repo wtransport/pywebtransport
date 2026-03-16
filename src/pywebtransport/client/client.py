@@ -99,6 +99,7 @@ class WebTransportClient(EventEmitter):
     def __init__(self, *, config: ClientConfig | None = None) -> None:
         """Initialize the instance."""
         effective_config = config if config is not None else ClientConfig()
+        effective_config.validate()
 
         super().__init__(
             max_queue_size=effective_config.max_event_queue_size,
@@ -175,8 +176,9 @@ class WebTransportClient(EventEmitter):
 
         try:
             async with asyncio.timeout(delay=connect_timeout):
-                merged_headers = merge_headers(base=self._default_headers, update=headers)
-                normalized_headers = normalize_headers(headers=merged_headers)
+                base_headers = merge_headers(base=self._config.headers or [], update=self._default_headers)
+                final_headers = merge_headers(base=base_headers, update=headers or [])
+                normalized_headers = normalize_headers(headers=final_headers)
 
                 has_ua = False
                 if isinstance(normalized_headers, dict):
@@ -185,17 +187,13 @@ class WebTransportClient(EventEmitter):
                     has_ua = any(key == "user-agent" for key, _ in normalized_headers)
 
                 if not has_ua:
-                    default_ua = (
-                        self._config.user_agent
-                        if self._config.user_agent is not None
-                        else f"PyWebTransport/{__version__}"
-                    )
+                    default_ua = self._config.user_agent or f"PyWebTransport/{__version__}"
                     if isinstance(normalized_headers, dict):
                         normalized_headers["user-agent"] = default_ua
                     else:
                         normalized_headers.append(("user-agent", default_ua))
 
-                conn_config = self._config.update(headers=normalized_headers)
+                effective_subprotocols = subprotocols if subprotocols is not None else self._config.subprotocols
 
                 if self._controller is None:
                     async with self._init_lock:
@@ -210,14 +208,14 @@ class WebTransportClient(EventEmitter):
                 resolved_ips = await resolve_host(host=host, port=port)
 
                 connection = await self._race_addresses(
-                    addresses=resolved_ips, port=port, host=host, conn_config=conn_config
+                    addresses=resolved_ips, port=port, host=host, conn_config=self._config
                 )
 
                 await self._connection_manager.add_connection(connection=connection)
 
                 _logger.debug("Initiating session creation...")
                 session = await connection.create_session(
-                    path=path, headers=normalized_headers, subprotocols=subprotocols
+                    path=path, headers=normalized_headers, subprotocols=effective_subprotocols
                 )
                 _logger.debug("Session creation successful: %s", session.session_id)
 

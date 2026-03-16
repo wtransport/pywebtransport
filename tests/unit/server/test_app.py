@@ -19,7 +19,8 @@ class TestServerApp:
 
     @pytest.fixture
     def app(self, mock_server: Any, mock_router: Any, mock_middleware_manager: Any) -> ServerApp:
-        return ServerApp()
+        config = ServerConfig(certfile="dummy.crt", keyfile="dummy.key")
+        return ServerApp(config=config)
 
     @asyncio_fixture
     async def mock_connection(self, mocker: MockerFixture) -> Any:
@@ -49,7 +50,9 @@ class TestServerApp:
         server_instance = mocker.create_autospec(spec=WebTransportServer, instance=True)
         server_instance.session_manager = mocker.MagicMock()
         server_instance.session_manager.add_session = mocker.AsyncMock()
-        server_instance.config = ServerConfig(bind_host="0.0.0.0", bind_port=4433)
+        server_instance.config = ServerConfig(
+            bind_host="0.0.0.0", bind_port=4433, certfile="dummy.crt", keyfile="dummy.key"
+        )
         server_instance.close = mocker.AsyncMock()
         mocker.patch(target="pywebtransport.server.app.WebTransportServer", return_value=server_instance)
 

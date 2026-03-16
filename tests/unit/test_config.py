@@ -11,7 +11,6 @@ from pywebtransport.constants import (
     DEFAULT_ALPN_PROTOCOLS,
     DEFAULT_CONNECT_TIMEOUT,
     DEFAULT_CONNECTION_ATTEMPT_DELAY,
-    DEFAULT_ENABLE_STATELESS_RETRY,
     DEFAULT_FLOW_CONTROL_WINDOW_SIZE,
     DEFAULT_INITIAL_MAX_DATA,
     DEFAULT_KEEP_ALIVE,
@@ -26,7 +25,7 @@ from pywebtransport.constants import (
 class TestClientConfig:
 
     def test_copy_method(self) -> None:
-        config1 = ClientConfig(alpn_protocols=["h3"])
+        config1 = ClientConfig(alpn_protocols=["h3"], ca_certs="dummy.pem")
 
         config2 = config1.copy()
         config2.max_connection_retries = 99
@@ -85,8 +84,15 @@ class TestClientConfig:
 
             assert config.max_connections == 5
 
+    def test_from_dict_optional_field_resolution(self) -> None:
+        config_dict = {"ca_certs": "dummy.pem", "max_connection_retries": 5}
+
+        config = ClientConfig.from_dict(config_dict=config_dict)
+
+        assert config.ca_certs == "dummy.pem"
+
     def test_headers_remain_as_provided(self) -> None:
-        headers: Headers = {"X-Custom": "Value", "User-Agent": "Custom/1.0"}
+        headers: Headers = {"User-Agent": "Custom/1.0", "X-Custom": "Value"}
 
         config = ClientConfig(headers=headers)
 
@@ -96,7 +102,7 @@ class TestClientConfig:
         assert config.user_agent is None
 
     def test_initialization_with_none_timeout(self) -> None:
-        config = ClientConfig(read_timeout=None, keep_alive=None)
+        config = ClientConfig(ca_certs="dummy.pem", keep_alive=None, read_timeout=None)
 
         assert config.read_timeout is None
         assert config.keep_alive is None
@@ -104,19 +110,19 @@ class TestClientConfig:
         config.validate()
 
     def test_subprotocols_initialization_success(self) -> None:
-        config = ClientConfig(subprotocols=["h3", "dummy"])
+        config = ClientConfig(ca_certs="dummy.pem", subprotocols=["dummy", "h3"])
         config.validate()
-        assert config.subprotocols == ["h3", "dummy"]
+        assert config.subprotocols == ["dummy", "h3"]
 
     def test_to_dict_method(self) -> None:
-        config = ClientConfig(verify_mode=ssl.CERT_OPTIONAL)
+        config = ClientConfig(ca_certs="dummy.pem", verify_mode=ssl.CERT_OPTIONAL)
 
         data = config.to_dict()
 
         assert data["verify_mode"] == "CERT_OPTIONAL"
 
     def test_update_method(self) -> None:
-        config = ClientConfig()
+        config = ClientConfig(ca_certs="dummy.pem")
 
         new_config = config.update(connect_timeout=15.0)
 
@@ -164,6 +170,7 @@ class TestClientConfig:
     )
     def test_validation_failures(self, invalid_attrs: dict[str, Any], error_match: str) -> None:
         base_config = ClientConfig().to_dict()
+        base_config["ca_certs"] = "dummy.pem"
         base_config["verify_mode"] = ssl.CERT_REQUIRED
         test_config = {**base_config, **invalid_attrs}
 
@@ -183,6 +190,7 @@ class TestClientConfig:
     )
     def test_validation_failures_retry_logic(self, invalid_attrs: dict[str, Any], error_match: str) -> None:
         base_config = ClientConfig().to_dict()
+        base_config["ca_certs"] = "dummy.pem"
         base_config["verify_mode"] = ssl.CERT_REQUIRED
         test_config = {**base_config, **invalid_attrs}
 
@@ -198,7 +206,6 @@ class TestServerConfig:
         config = ServerConfig(certfile="dummy.crt", keyfile="dummy.key")
 
         assert config.bind_host == "::"
-        assert config.enable_stateless_retry == DEFAULT_ENABLE_STATELESS_RETRY
         assert config.max_connections == DEFAULT_SERVER_MAX_CONNECTIONS
         assert config.congestion_control_algorithm == "cubic"
         assert config.flow_control_window_size == DEFAULT_FLOW_CONTROL_WINDOW_SIZE
@@ -235,10 +242,10 @@ class TestServerConfig:
 
     def test_from_dict_filtering_extra_keys(self) -> None:
         config_dict = {
-            "max_connections": 500,
-            "unknown_field": "should_be_ignored",
             "certfile": "dummy.crt",
             "keyfile": "dummy.key",
+            "max_connections": 500,
+            "unknown_field": "should_be_ignored",
         }
 
         config = ServerConfig.from_dict(config_dict=config_dict)
@@ -257,19 +264,19 @@ class TestServerConfig:
     def test_from_dict_union_enum_resolution(self) -> None:
         def mock_get_type_hints(obj: Any) -> dict[str, Any]:
             hints = get_type_hints(obj)
-            hints["verify_mode"] = Union[ssl.VerifyMode, str]
             hints["bind_host"] = Union[int, str]
             hints["keyfile"] = Union[int, ssl.VerifyMode]
+            hints["verify_mode"] = Union[ssl.VerifyMode, str]
             return hints
 
         with patch(target="pywebtransport.config.get_type_hints", side_effect=mock_get_type_hints):
-            config1 = ServerConfig.from_dict(config_dict={"verify_mode": "CERT_NONE", "certfile": "c", "keyfile": "k"})
+            config1 = ServerConfig.from_dict(config_dict={"certfile": "c", "keyfile": "k", "verify_mode": "CERT_NONE"})
             assert config1.verify_mode == ssl.CERT_NONE
 
             config2 = ServerConfig.from_dict(config_dict={"bind_host": "localhost", "certfile": "c", "keyfile": "k"})
             assert config2.bind_host == "localhost"
 
-            config3 = ServerConfig.from_dict(config_dict={"keyfile": "CERT_OPTIONAL", "certfile": "c"})
+            config3 = ServerConfig.from_dict(config_dict={"certfile": "c", "keyfile": "CERT_OPTIONAL"})
             assert config3.keyfile == ssl.CERT_OPTIONAL  # type: ignore[comparison-overlap]
 
     def test_initialization_fails_without_bind_host(self) -> None:
@@ -279,7 +286,7 @@ class TestServerConfig:
             config.validate()
 
     def test_initialization_fails_without_certs(self) -> None:
-        config = ServerConfig(certfile=None, keyfile=None)
+        config = ServerConfig(certfile=None, keyfile=None)  # type: ignore[arg-type]
 
         with pytest.raises(
             expected_exception=ConfigurationError, match="Server requires both certificate and key files"
@@ -287,7 +294,7 @@ class TestServerConfig:
             config.validate()
 
     def test_to_dict_method(self) -> None:
-        config = ServerConfig(verify_mode=ssl.CERT_REQUIRED, certfile="d.crt", keyfile="d.key")
+        config = ServerConfig(certfile="d.crt", keyfile="d.key", verify_mode=ssl.CERT_REQUIRED)
 
         data = config.to_dict()
 
@@ -315,6 +322,7 @@ class TestServerConfig:
             ({"bind_host": ""}, "cannot be empty"),
             ({"bind_port": 0}, "must be an integer"),
             ({"bind_port": "invalid"}, "must be an integer"),
+            ({"ca_certs": None, "verify_mode": ssl.CERT_REQUIRED}, "Server requires 'ca_certs' for mTLS"),
             ({"congestion_control_algorithm": "invalid_algo"}, "must be one of"),
             ({"flow_control_window_size": 0}, "must be positive"),
             ({"keep_alive": -1}, "Timeout must be positive"),

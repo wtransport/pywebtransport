@@ -12,7 +12,6 @@ impl<'py> IntoPyObject<'py> for ConnectionState {
     type Output = Bound<'py, PyString>;
     type Error = PyErr;
 
-    // ConnectionState to Python string conversion.
     fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
         let s = match self {
             Self::Idle => "idle",
@@ -24,7 +23,7 @@ impl<'py> IntoPyObject<'py> for ConnectionState {
             Self::Failed => "failed",
         };
 
-        Ok(PyString::new(py, s))
+        Ok(PyString::intern(py, s))
     }
 }
 
@@ -33,7 +32,6 @@ impl<'py> IntoPyObject<'py> for EventType {
     type Output = Bound<'py, PyString>;
     type Error = PyErr;
 
-    // EventType to Python string conversion.
     fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
         let s = match self {
             Self::CapsuleReceived => "capsule_received",
@@ -64,7 +62,7 @@ impl<'py> IntoPyObject<'py> for EventType {
             Self::TimeoutError => "timeout_error",
         };
 
-        Ok(PyString::new(py, s))
+        Ok(PyString::intern(py, s))
     }
 }
 
@@ -73,7 +71,6 @@ impl<'py> IntoPyObject<'py> for SessionState {
     type Output = Bound<'py, PyString>;
     type Error = PyErr;
 
-    // SessionState to Python string conversion.
     fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
         let s = match self {
             Self::Connecting => "connecting",
@@ -83,7 +80,7 @@ impl<'py> IntoPyObject<'py> for SessionState {
             Self::Closed => "closed",
         };
 
-        Ok(PyString::new(py, s))
+        Ok(PyString::intern(py, s))
     }
 }
 
@@ -92,7 +89,6 @@ impl<'py> IntoPyObject<'py> for StreamDirection {
     type Output = Bound<'py, PyString>;
     type Error = PyErr;
 
-    // StreamDirection to Python string conversion.
     fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
         let s = match self {
             Self::Bidirectional => "bidirectional",
@@ -100,7 +96,7 @@ impl<'py> IntoPyObject<'py> for StreamDirection {
             Self::ReceiveOnly => "receive_only",
         };
 
-        Ok(PyString::new(py, s))
+        Ok(PyString::intern(py, s))
     }
 }
 
@@ -109,7 +105,6 @@ impl<'py> IntoPyObject<'py> for StreamState {
     type Output = Bound<'py, PyString>;
     type Error = PyErr;
 
-    // StreamState to Python string conversion.
     fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
         let s = match self {
             Self::Open => "open",
@@ -120,6 +115,6 @@ impl<'py> IntoPyObject<'py> for StreamState {
             Self::Closed => "closed",
         };
 
-        Ok(PyString::new(py, s))
+        Ok(PyString::intern(py, s))
     }
 }

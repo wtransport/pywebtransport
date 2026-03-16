@@ -19,24 +19,44 @@ use crate::tls::certificate::{NoCertificateVerification, load_certs, load_privat
 pub(crate) fn build_client_config(
     config: &RustClientConfig,
 ) -> Result<ClientConfig, WebTransportError> {
-    let mut root_store = RootCertStore::empty();
-    let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let builder = rustls::ClientConfig::builder_with_provider(Arc::clone(&provider))
-        .with_protocol_versions(&[&TLS13])
-        .map_err(|e| WebTransportError::Configuration(None, e.to_string()))?;
-
-    if let Some(ca_path) = &config.ca_certs {
+    let root_store = if let Some(ca_path) = &config.ca_certs {
+        let mut store = RootCertStore::empty();
         let certs = load_certs(ca_path)
             .map_err(|e| WebTransportError::Configuration(None, e.to_string()))?;
 
         for cert in certs {
-            root_store
+            store
                 .add(cert)
                 .map_err(|e| WebTransportError::Configuration(None, e.to_string()))?;
         }
-    }
 
-    let builder = builder.with_root_certificates(root_store);
+        store
+    } else {
+        let mut store = RootCertStore::empty();
+        let native_certs = rustls_native_certs::load_native_certs();
+        let mut valid_count = 0;
+
+        for cert in native_certs.certs {
+            if let Err(e) = store.add(cert) {
+                tracing::trace!("ignored invalid native certificate: {e}");
+            } else {
+                valid_count += 1;
+            }
+        }
+
+        if valid_count == 0 {
+            store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        }
+
+        store
+    };
+
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let builder = rustls::ClientConfig::builder_with_provider(Arc::clone(&provider))
+        .with_protocol_versions(&[&TLS13])
+        .map_err(|e| WebTransportError::Configuration(None, e.to_string()))?
+        .with_root_certificates(root_store);
+
     let mut crypto = if let (Some(cert_path), Some(key_path)) = (&config.certfile, &config.keyfile)
     {
         let certs = load_certs(cert_path)
@@ -87,13 +107,26 @@ pub(crate) fn build_server_config(
         .map_err(|e| WebTransportError::Configuration(None, e.to_string()))?;
     let key = load_private_key(&config.keyfile)
         .map_err(|e| WebTransportError::Configuration(None, e.to_string()))?;
+
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let builder = rustls::ServerConfig::builder_with_provider(Arc::clone(&provider))
         .with_protocol_versions(&[&TLS13])
         .map_err(|e| WebTransportError::Configuration(None, e.to_string()))?;
 
     let mut crypto = if config.require_client_auth {
-        let root_store = RootCertStore::empty();
+        let mut root_store = RootCertStore::empty();
+
+        if let Some(ca_path) = &config.ca_certs {
+            let ca_certs = load_certs(ca_path)
+                .map_err(|e| WebTransportError::Configuration(None, e.to_string()))?;
+
+            for cert in ca_certs {
+                root_store
+                    .add(cert)
+                    .map_err(|e| WebTransportError::Configuration(None, e.to_string()))?;
+            }
+        }
+
         let verifier = WebPkiClientVerifier::builder_with_provider(Arc::new(root_store), provider)
             .build()
             .map_err(|e| WebTransportError::Configuration(None, e.to_string()))?;
@@ -131,36 +164,6 @@ fn build_transport_config(
     wt_config: &WtTransportConfig,
 ) -> Result<TransportConfig, WebTransportError> {
     let mut config = TransportConfig::default();
-    let idle_timeout = quinn_proto::IdleTimeout::try_from(wt_config.connection_idle_timeout)
-        .map_err(|e| WebTransportError::Configuration(None, e.to_string()))?;
-    let bidi_limit = constants::WT_SESSION_CONTROL_BIDI_STREAM_COUNT
-        .saturating_add(wt_config.initial_max_streams_bidi)
-        .min(wt_config.transport_streams_cap);
-    let uni_limit = constants::H3_MIN_UNI_STREAM_COUNT
-        .saturating_add(wt_config.initial_max_streams_uni)
-        .min(wt_config.transport_streams_cap);
-    let bidi_varint = quinn_proto::VarInt::try_from(bidi_limit)
-        .map_err(|e| WebTransportError::Configuration(None, e.to_string()))?;
-    let uni_varint = quinn_proto::VarInt::try_from(uni_limit)
-        .map_err(|e| WebTransportError::Configuration(None, e.to_string()))?;
-
-    config.max_idle_timeout(Some(idle_timeout));
-    config.keep_alive_interval(wt_config.keep_alive);
-    config.max_concurrent_bidi_streams(bidi_varint);
-    config.max_concurrent_uni_streams(uni_varint);
-
-    if wt_config.max_datagram_size > 0 {
-        let total_size = wt_config
-            .max_datagram_size
-            .saturating_mul(constants::DATAGRAM_QUEUE_CAPACITY);
-        let buffer_capacity = usize::try_from(total_size).unwrap_or(usize::MAX);
-
-        config.datagram_receive_buffer_size(Some(buffer_capacity));
-        config.datagram_send_buffer_size(buffer_capacity);
-    } else {
-        config.datagram_receive_buffer_size(None);
-        config.datagram_send_buffer_size(0);
-    }
 
     match wt_config.congestion_control_algorithm.as_str() {
         "bbr" => {
@@ -184,6 +187,39 @@ fn build_transport_config(
                 format!("unsupported congestion control algorithm: {unknown}"),
             ));
         }
+    }
+
+    let idle_timeout = quinn_proto::IdleTimeout::try_from(wt_config.connection_idle_timeout)
+        .map_err(|e| WebTransportError::Configuration(None, e.to_string()))?;
+    config.max_idle_timeout(Some(idle_timeout));
+
+    let bidi_limit = constants::WT_SESSION_CONTROL_BIDI_STREAM_COUNT
+        .saturating_add(wt_config.initial_max_streams_bidi)
+        .min(wt_config.transport_streams_cap);
+    let bidi_varint = quinn_proto::VarInt::try_from(bidi_limit)
+        .map_err(|e| WebTransportError::Configuration(None, e.to_string()))?;
+    config.max_concurrent_bidi_streams(bidi_varint);
+
+    let uni_limit = constants::H3_MIN_UNI_STREAM_COUNT
+        .saturating_add(wt_config.initial_max_streams_uni)
+        .min(wt_config.transport_streams_cap);
+    let uni_varint = quinn_proto::VarInt::try_from(uni_limit)
+        .map_err(|e| WebTransportError::Configuration(None, e.to_string()))?;
+    config.max_concurrent_uni_streams(uni_varint);
+
+    config.keep_alive_interval(wt_config.keep_alive);
+
+    if wt_config.max_datagram_size > 0 {
+        let total_size = wt_config
+            .max_datagram_size
+            .saturating_mul(constants::DATAGRAM_QUEUE_CAPACITY);
+        let buffer_capacity = usize::try_from(total_size).unwrap_or(usize::MAX);
+
+        config.datagram_receive_buffer_size(Some(buffer_capacity));
+        config.datagram_send_buffer_size(buffer_capacity);
+    } else {
+        config.datagram_receive_buffer_size(None);
+        config.datagram_send_buffer_size(0);
     }
 
     Ok(config)

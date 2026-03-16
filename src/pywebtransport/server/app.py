@@ -33,7 +33,7 @@ _logger = get_logger(name=__name__)
 class ServerApp:
     """Implement a high-level WebTransport application with routing and middleware."""
 
-    def __init__(self, *, config: ServerConfig | None = None) -> None:
+    def __init__(self, *, config: ServerConfig) -> None:
         """Initialize the instance."""
         self._handler_tasks: weakref.WeakSet[asyncio.Task[Any]] = weakref.WeakSet()
         self._middleware_manager = MiddlewareManager()

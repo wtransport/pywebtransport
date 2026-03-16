@@ -40,12 +40,39 @@ fn test_build_client_config_without_certs_succeeds() {
 }
 
 #[rstest]
+#[case(Some(PathBuf::from("/non/existent/ca.pem")), None, None)]
+#[case(
+    None,
+    Some(PathBuf::from("/non/existent/cert.pem")),
+    Some(PathBuf::from("/non/existent/key.pem"))
+)]
+fn test_build_client_config_fails_with_invalid_paths(
+    #[case] ca_certs: Option<PathBuf>,
+    #[case] certfile: Option<PathBuf>,
+    #[case] keyfile: Option<PathBuf>,
+) {
+    let config = RustClientConfig {
+        ca_certs,
+        certfile,
+        keyfile,
+        ..Default::default()
+    };
+
+    let result = build_client_config(&config);
+
+    let Err(_) = result else {
+        assert_eq!("err", "ok", "Expected err");
+        unreachable!()
+    };
+}
+
+#[rstest]
 fn test_build_endpoint_config_returns_default() {
     let config = RustServerConfig {
         bind_host: String::new(),
         bind_port: 0,
+        ca_certs: None,
         certfile: PathBuf::new(),
-        enable_stateless_retry: false,
         keyfile: PathBuf::new(),
         require_client_auth: false,
         transport: WtTransportConfig::default(),
@@ -57,14 +84,20 @@ fn test_build_endpoint_config_returns_default() {
 }
 
 #[rstest]
-fn test_build_server_config_fails_with_invalid_cert_paths() {
+#[case(false, None)]
+#[case(true, None)]
+#[case(true, Some(PathBuf::from("/non/existent/path/ca.pem")))]
+fn test_build_server_config_fails_with_invalid_cert_paths(
+    #[case] require_client_auth: bool,
+    #[case] ca_certs: Option<PathBuf>,
+) {
     let config = RustServerConfig {
         bind_host: "127.0.0.1".to_owned(),
         bind_port: 4433,
+        ca_certs,
         certfile: PathBuf::from("/non/existent/path/cert.pem"),
-        enable_stateless_retry: false,
         keyfile: PathBuf::from("/non/existent/path/key.pem"),
-        require_client_auth: false,
+        require_client_auth,
         transport: WtTransportConfig::default(),
     };
 

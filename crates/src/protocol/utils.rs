@@ -18,6 +18,12 @@ const H3_ERROR_RESERVED_MODULO: u64 = 0x1F;
 // WebTransport error mapping constant divisor.
 const WT_ERROR_MAP_DIVISOR: u64 = 0x1E;
 
+// Header value search and UTF-8 decoding.
+pub(crate) fn find_header_str(headers: &Headers, key: &str) -> Option<String> {
+    let val = find_header(headers, key)?;
+    String::from_utf8(val.to_vec()).ok()
+}
+
 // Stream reception capability check.
 pub(super) fn can_receive_on_stream(stream_id: StreamId, is_client: bool) -> bool {
     if is_bidirectional_stream(stream_id) {
@@ -70,12 +76,6 @@ pub(super) fn find_header(headers: &Headers, key: &str) -> Option<Bytes> {
     }
 
     None
-}
-
-// Header value search and UTF-8 decoding.
-pub(crate) fn find_header_str(headers: &Headers, key: &str) -> Option<String> {
-    let val = find_header(headers, key)?;
-    String::from_utf8(val.to_vec()).ok()
 }
 
 // HTTP/3 to WebTransport error code mapping.

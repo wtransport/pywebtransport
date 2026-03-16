@@ -21,7 +21,6 @@ from pywebtransport.constants import (
     DEFAULT_CONNECTION_ATTEMPT_DELAY,
     DEFAULT_CONNECTION_IDLE_TIMEOUT,
     DEFAULT_DEV_PORT,
-    DEFAULT_ENABLE_STATELESS_RETRY,
     DEFAULT_FLOW_CONTROL_WINDOW_AUTO_SCALE,
     DEFAULT_FLOW_CONTROL_WINDOW_SIZE,
     DEFAULT_INITIAL_MAX_DATA,
@@ -66,8 +65,6 @@ class BaseConfig(ABC):
     """Encapsulate common configuration fields and logic."""
 
     alpn_protocols: list[str] = field(default_factory=lambda: list(DEFAULT_ALPN_PROTOCOLS))
-    ca_certs: str | None = None
-    certfile: str | None = None
     close_timeout: float = DEFAULT_CLOSE_TIMEOUT
     congestion_control_algorithm: str = DEFAULT_CONGESTION_CONTROL_ALGORITHM
     connection_idle_timeout: float = DEFAULT_CONNECTION_IDLE_TIMEOUT
@@ -77,7 +74,6 @@ class BaseConfig(ABC):
     initial_max_streams_bidi: int = DEFAULT_INITIAL_MAX_STREAMS_BIDI
     initial_max_streams_uni: int = DEFAULT_INITIAL_MAX_STREAMS_UNI
     keep_alive: float | None = DEFAULT_KEEP_ALIVE
-    keyfile: str | None = None
     log_level: str = DEFAULT_LOG_LEVEL
     max_capsule_size: int = DEFAULT_MAX_CAPSULE_SIZE
     max_connections: int
@@ -305,9 +301,12 @@ class BaseConfig(ABC):
 class ClientConfig(BaseConfig):
     """Encapsulate WebTransport client configuration."""
 
+    ca_certs: str | None = None
+    certfile: str | None = None
     connect_timeout: float = DEFAULT_CONNECT_TIMEOUT
     connection_attempt_delay: float = DEFAULT_CONNECTION_ATTEMPT_DELAY
     headers: Headers = field(default_factory=dict)
+    keyfile: str | None = None
     max_connection_retries: int = DEFAULT_MAX_CONNECTION_RETRIES
     max_connections: int = DEFAULT_CLIENT_MAX_CONNECTIONS
     max_retry_delay: float = DEFAULT_MAX_RETRY_DELAY
@@ -316,11 +315,20 @@ class ClientConfig(BaseConfig):
     retry_delay: float = DEFAULT_RETRY_DELAY
     subprotocols: list[str] | None = None
     user_agent: str | None = None
-    verify_mode: ssl.VerifyMode | None = ssl.CERT_REQUIRED
+    verify_mode: ssl.VerifyMode = ssl.CERT_REQUIRED
 
     def validate(self) -> None:
         """Validate the client configuration state."""
         super().validate()
+
+        has_certfile = self.certfile is not None
+        has_keyfile = self.keyfile is not None
+        if has_certfile != has_keyfile:
+            raise ConfigurationError(
+                message="TLS configuration error: 'certfile' and 'keyfile' must be provided together",
+                config_key="certfile/keyfile",
+                config_value=f"certfile={self.certfile}, keyfile={self.keyfile}",
+            )
 
         try:
             _validate_timeout(timeout=self.connect_timeout)
@@ -373,16 +381,7 @@ class ClientConfig(BaseConfig):
                     config_value=self.subprotocols,
                 )
 
-        has_certfile = self.certfile is not None
-        has_keyfile = self.keyfile is not None
-        if has_certfile != has_keyfile:
-            raise ConfigurationError(
-                message="TLS configuration error: 'certfile' and 'keyfile' must be provided together",
-                config_key="certfile/keyfile",
-                config_value=f"certfile={self.certfile}, keyfile={self.keyfile}",
-            )
-
-        allowed_verify_modes: list[ssl.VerifyMode | None] = [ssl.CERT_NONE, ssl.CERT_OPTIONAL, ssl.CERT_REQUIRED, None]
+        allowed_verify_modes: list[ssl.VerifyMode] = [ssl.CERT_NONE, ssl.CERT_OPTIONAL, ssl.CERT_REQUIRED]
         if self.verify_mode not in allowed_verify_modes:
             raise ConfigurationError(
                 message="Invalid value for 'verify_mode': unknown SSL verify mode",
@@ -397,7 +396,9 @@ class ServerConfig(BaseConfig):
 
     bind_host: str = DEFAULT_BIND_HOST
     bind_port: int = DEFAULT_DEV_PORT
-    enable_stateless_retry: bool = DEFAULT_ENABLE_STATELESS_RETRY
+    ca_certs: str | None = None
+    certfile: str
+    keyfile: str
     max_connections: int = DEFAULT_SERVER_MAX_CONNECTIONS
     max_sessions: int = DEFAULT_SERVER_MAX_SESSIONS
     verify_mode: ssl.VerifyMode = ssl.CERT_NONE
@@ -444,6 +445,13 @@ class ServerConfig(BaseConfig):
                 message="Invalid value for 'verify_mode': unknown SSL verify mode",
                 config_key="verify_mode",
                 config_value=self.verify_mode,
+            )
+
+        if self.verify_mode in (ssl.CERT_REQUIRED, ssl.CERT_OPTIONAL) and not self.ca_certs:
+            raise ConfigurationError(
+                message="TLS configuration error: Server requires 'ca_certs' for mTLS",
+                config_key="ca_certs",
+                config_value=self.ca_certs,
             )
 
 

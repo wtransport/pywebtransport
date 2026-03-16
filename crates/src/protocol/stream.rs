@@ -20,30 +20,30 @@ const OPTIMIZED_READ_SLICE_THRESHOLD: u64 = 32 * 1024;
 
 // Single WebTransport stream state machine.
 #[derive(Debug)]
-pub(crate) struct Stream {
-    pub(crate) id: StreamId,
-    pub(crate) session_id: SessionId,
-    pub(crate) direction: StreamDirection,
-    pub(crate) state: StreamState,
-    pub(crate) is_peer_initiated: bool,
-    pub(crate) created_at: f64,
-    pub(crate) bytes_sent: u64,
-    pub(crate) bytes_received: u64,
-    pub(crate) read_buffer: VecDeque<Bytes>,
-    pub(crate) read_buffer_size: u64,
-    pub(crate) pending_read_requests: VecDeque<(RequestId, u64)>,
-    pub(crate) write_buffer: VecDeque<(Bytes, RequestId, bool)>,
-    pub(crate) write_buffer_size: u64,
-    pub(crate) close_code: Option<ErrorCode>,
-    pub(crate) close_reason: Option<String>,
-    pub(crate) closed_at: Option<f64>,
-    pub(crate) max_read_buffer_size: u64,
-    pub(crate) max_write_buffer_size: u64,
+pub(super) struct Stream {
+    pub(super) id: StreamId,
+    pub(super) session_id: SessionId,
+    pub(super) direction: StreamDirection,
+    pub(super) state: StreamState,
+    pub(super) is_peer_initiated: bool,
+    pub(super) created_at: f64,
+    pub(super) bytes_sent: u64,
+    pub(super) bytes_received: u64,
+    pub(super) read_buffer: VecDeque<Bytes>,
+    pub(super) read_buffer_size: u64,
+    pub(super) pending_read_requests: VecDeque<(RequestId, u64)>,
+    pub(super) write_buffer: VecDeque<(Bytes, RequestId, bool)>,
+    pub(super) write_buffer_size: u64,
+    pub(super) close_code: Option<ErrorCode>,
+    pub(super) close_reason: Option<String>,
+    pub(super) closed_at: Option<f64>,
+    pub(super) max_read_buffer_size: u64,
+    pub(super) max_write_buffer_size: u64,
 }
 
 impl Stream {
     // Stream entity initialization.
-    pub(crate) fn new(
+    pub(super) fn new(
         id: StreamId,
         session_id: SessionId,
         direction: StreamDirection,
@@ -75,7 +75,7 @@ impl Stream {
     }
 
     // User diagnostics event handling.
-    pub(crate) fn diagnose(&self, request_id: RequestId) -> Vec<Effect> {
+    pub(super) fn diagnose(&self, request_id: RequestId) -> Vec<Effect> {
         let diag = self.diagnostics_snapshot();
         vec![Effect::NotifyRequestDone {
             request_id,
@@ -84,7 +84,7 @@ impl Stream {
     }
 
     // Write buffer flushing with flow control.
-    pub(crate) fn flush_writes(
+    pub(super) fn flush_writes(
         &mut self,
         available_credit: u64,
         peer_max_data: u64,
@@ -176,7 +176,7 @@ impl Stream {
     }
 
     // User read request handling.
-    pub(crate) fn read(&mut self, request_id: RequestId, max_bytes: u64) -> (Vec<Effect>, u64) {
+    pub(super) fn read(&mut self, request_id: RequestId, max_bytes: u64) -> (Vec<Effect>, u64) {
         let mut effects = Vec::new();
 
         if self.read_buffer_size > 0 {
@@ -236,7 +236,7 @@ impl Stream {
     }
 
     // Network data reception handling.
-    pub(crate) fn recv_data(
+    pub(super) fn recv_data(
         &mut self,
         data: Bytes,
         end_stream: bool,
@@ -330,7 +330,7 @@ impl Stream {
     }
 
     // Network reset reception handling.
-    pub(crate) fn recv_reset(&mut self, error_code: ErrorCode, now: f64) -> Vec<Effect> {
+    pub(super) fn recv_reset(&mut self, error_code: ErrorCode, now: f64) -> Vec<Effect> {
         let mut effects = Vec::new();
 
         if self.state == StreamState::Closed {
@@ -395,7 +395,7 @@ impl Stream {
     }
 
     // Network stop_sending reception handling.
-    pub(crate) fn recv_stop_sending(&mut self, error_code: ErrorCode) -> Vec<Effect> {
+    pub(super) fn recv_stop_sending(&mut self, error_code: ErrorCode) -> Vec<Effect> {
         let mut effects = Vec::new();
 
         if self.state == StreamState::Closed {
@@ -422,7 +422,7 @@ impl Stream {
     }
 
     // User reset command handling.
-    pub(crate) fn reset(
+    pub(super) fn reset(
         &mut self,
         request_id: RequestId,
         error_code: ErrorCode,
@@ -500,7 +500,7 @@ impl Stream {
     }
 
     // User stop command handling.
-    pub(crate) fn stop(
+    pub(super) fn stop(
         &mut self,
         request_id: RequestId,
         error_code: ErrorCode,
@@ -580,7 +580,7 @@ impl Stream {
     }
 
     // User write request handling.
-    pub(crate) fn write(
+    pub(super) fn write(
         &mut self,
         request_id: RequestId,
         data: Bytes,

@@ -356,46 +356,6 @@ impl<'a, 'py> FromPyObject<'a, 'py> for ProtocolEvent {
     }
 }
 
-// Bytes extraction from Python object using buffer protocol or UTF-8 encoding.
-pub(super) fn extract_bytes(obj: &Bound<'_, PyAny>) -> PyResult<Bytes> {
-    if let Ok(buffer) = obj.extract::<PyBuffer<u8>>() {
-        Ok(Bytes::from(buffer.to_vec(obj.py())?))
-    } else if let Ok(s) = obj.extract::<Bound<'_, PyString>>() {
-        Ok(Bytes::copy_from_slice(s.to_str()?.as_bytes()))
-    } else {
-        Err(PyValueError::new_err(
-            "Expected bytes, bytearray, memoryview, or str",
-        ))
-    }
-}
-
-// HTTP/3 header extraction from Python dictionary or list.
-pub(super) fn extract_headers(obj: &Bound<'_, PyAny>) -> PyResult<Headers> {
-    let mut headers = Vec::new();
-
-    if let Ok(dict) = obj.extract::<Bound<'_, PyDict>>() {
-        for (k, v) in dict {
-            process_header_item(&k, &v, &mut headers)?;
-        }
-    } else if let Ok(list) = obj.extract::<Bound<'_, PyList>>() {
-        for item in list {
-            let tuple = item.extract::<Bound<'_, PyTuple>>().map_err(|e| {
-                PyValueError::new_err(format!("Headers list must contain tuples: {e}"))
-            })?;
-
-            if tuple.len() != 2 {
-                return Err(PyValueError::new_err("Header tuple must have 2 elements"));
-            }
-
-            process_header_item(&tuple.get_item(0)?, &tuple.get_item(1)?, &mut headers)?;
-        }
-    } else {
-        return Err(PyValueError::new_err("Headers must be a dict or list"));
-    }
-
-    Ok(headers)
-}
-
 // Converts ConnectionDiagnostics into a Python dictionary.
 fn connection_diagnostics_to_py<'py>(
     py: Python<'py>,
@@ -421,6 +381,46 @@ fn connection_diagnostics_to_py<'py>(
     dict.set_item("closed_at", diag.closed_at)?;
 
     Ok(dict.into_any())
+}
+
+// Bytes extraction from Python object using buffer protocol or UTF-8 encoding.
+fn extract_bytes(obj: &Bound<'_, PyAny>) -> PyResult<Bytes> {
+    if let Ok(buffer) = obj.extract::<PyBuffer<u8>>() {
+        Ok(Bytes::from(buffer.to_vec(obj.py())?))
+    } else if let Ok(s) = obj.extract::<Bound<'_, PyString>>() {
+        Ok(Bytes::copy_from_slice(s.to_str()?.as_bytes()))
+    } else {
+        Err(PyValueError::new_err(
+            "Expected bytes, bytearray, memoryview, or str",
+        ))
+    }
+}
+
+// HTTP/3 header extraction from Python dictionary or list.
+fn extract_headers(obj: &Bound<'_, PyAny>) -> PyResult<Headers> {
+    let mut headers = Vec::new();
+
+    if let Ok(dict) = obj.extract::<Bound<'_, PyDict>>() {
+        for (k, v) in dict {
+            process_header_item(&k, &v, &mut headers)?;
+        }
+    } else if let Ok(list) = obj.extract::<Bound<'_, PyList>>() {
+        for item in list {
+            let tuple = item.extract::<Bound<'_, PyTuple>>().map_err(|e| {
+                PyValueError::new_err(format!("Headers list must contain tuples: {e}"))
+            })?;
+
+            if tuple.len() != 2 {
+                return Err(PyValueError::new_err("Header tuple must have 2 elements"));
+            }
+
+            process_header_item(&tuple.get_item(0)?, &tuple.get_item(1)?, &mut headers)?;
+        }
+    } else {
+        return Err(PyValueError::new_err("Headers must be a dict or list"));
+    }
+
+    Ok(headers)
 }
 
 // Converts a Rust Headers vector into a Python list of tuples.

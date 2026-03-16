@@ -16,9 +16,9 @@ mod sys {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 
-/// Encoder dynamic table capacity physical limit.
+// Encoder dynamic table capacity physical limit.
 const ENCODER_MAX_TABLE_CAPACITY_LIMIT: u32 = 65536;
-/// Encoder maximum blocked streams physical limit.
+// Encoder maximum blocked streams physical limit.
 const ENCODER_MAX_BLOCKED_STREAMS_LIMIT: u32 = 16;
 
 // High-level wrapper for the QPACK Encoder.
@@ -200,7 +200,6 @@ impl Encoder {
 pub(super) struct Decoder {
     inner: Pin<Box<InnerDecoder>>,
     pending_blocks: HashMap<u64, Pin<Box<PendingBlock>>>,
-    unblocked_queue: Vec<u64>,
 }
 
 unsafe impl Send for Decoder {}
@@ -216,6 +215,7 @@ impl Decoder {
                 dhi_process_header: Some(cb_process_header),
             },
             dec_buffer: Vec::with_capacity(1024),
+            unblocked_queue: Vec::new(),
             _pin: PhantomPinned,
         });
 
@@ -234,7 +234,6 @@ impl Decoder {
         Self {
             inner,
             pending_blocks: HashMap::new(),
-            unblocked_queue: Vec::new(),
         }
     }
 
@@ -244,8 +243,10 @@ impl Decoder {
         stream_id: u64,
         data: Bytes,
     ) -> Result<(Vec<u8>, DecodeStatus), QpackError> {
+        let inner = unsafe { self.inner.as_mut().get_unchecked_mut() };
+
         let ctx = HeaderBlockCtx {
-            unblocked_queue_ptr: &raw mut self.unblocked_queue,
+            unblocked_queue_ptr: &raw mut inner.unblocked_queue,
             stream_id,
             headers: Vec::new(),
             header_buf: Vec::with_capacity(4096),
@@ -259,8 +260,6 @@ impl Decoder {
             ctx,
             _pin: PhantomPinned,
         });
-
-        let inner = unsafe { self.inner.as_mut().get_unchecked_mut() };
 
         let target_size = cmp::max(1024, pending.data.len() * 2);
         if inner.dec_buffer.capacity() < target_size {
@@ -320,7 +319,7 @@ impl Decoder {
             unsafe { sys::lsqpack_dec_enc_in(&raw mut inner.decoder, data.as_ptr(), data.len()) };
 
         if res == 0 {
-            let unblocked = std::mem::take(&mut self.unblocked_queue);
+            let unblocked = std::mem::take(&mut inner.unblocked_queue);
             Ok(unblocked)
         } else {
             Err(QpackError::DecoderError)
@@ -460,6 +459,7 @@ struct InnerDecoder {
     decoder: sys::lsqpack_dec,
     cb: sys::lsqpack_dec_hset_if,
     dec_buffer: Vec<u8>,
+    unblocked_queue: Vec<u64>,
     _pin: PhantomPinned,
 }
 

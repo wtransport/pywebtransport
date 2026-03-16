@@ -87,8 +87,8 @@ fn create_dummy_rust_server_config() -> RustServerConfig {
     RustServerConfig {
         bind_host: "127.0.0.1".to_owned(),
         bind_port: 4433,
+        ca_certs: None,
         certfile: PathBuf::from("dummy.crt"),
-        enable_stateless_retry: false,
         keyfile: PathBuf::from("dummy.key"),
         require_client_auth: false,
         transport: WtTransportConfig::default(),

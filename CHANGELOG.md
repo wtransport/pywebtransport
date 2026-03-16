@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(No planned changes for the next release yet.)_
 
+## [0.16.1] - 2026-03-16
+
+This release streamlines the FFI configuration boundary, resolves mTLS trust chain configuration issues, and delegates connection lifecycle management to the Python asynchronous runtime. It requires explicit configuration instantiation, corrects HTTP header prioritization, and removes runtime I/O from diagnostic paths.
+
+### Changed
+
+- **Lifecycle Delegation**: Decoupled application-layer semantics (HTTP headers, ALPN subprotocols, timeout parameters, and retry backoff multipliers) from the internal Rust `TransportConfig`. Lifecycle orchestration is now managed by the Python `asyncio` layer, reducing cross-boundary state synchronization.
+- **Configuration Strictness**: Removed implicit zero-configuration defaults for server initialization. `ServerConfig`, `WebTransportServer`, and `ServerApp` now require explicit cryptographic parameter injection (`certfile`, `keyfile`) at instantiation to ensure validation prior to binding.
+- **Header Priority Chain**: Refactored `WebTransportClient` connection initialization to enforce a three-tier hierarchical merge strategy for HTTP headers (Global Config -> Instance Defaults -> Per-Request Parameters), resolving global configuration shadowing.
+- **Diagnostic Observability**: Removed blocking disk I/O operations (certificate file existence verifications) from the `ServerDiagnostics` polling path. Diagnostic data generation is now strictly memory-bound, reducing context-switching overhead during observability polling.
+
+### Fixed
+
+- **mTLS Verification Lifecycle**: Resolved a defect in server-side mutual TLS (mTLS) where client certificates were rejected due to an unpopulated `RootCertStore`. The configuration layer now correctly maps `ca_certs` to the underlying `WebPkiClientVerifier` to establish the strict trust chain.
+- **Client Certificate Fallback**: Implemented a deterministic fallback hierarchy for client-side X.509 certificate validation. The engine evaluates user-provided CA bundles, falling back to the host OS native certificate store (`rustls-native-certs`), and finally to `webpki-roots` to support minimal containerized environments.
+
 ## [0.16.0] - 2026-03-13
 
 This release marks a definitive alignment with the `draft-ietf-webtrans-http3-15` specification, introducing foundational protocol features including Application Protocol Negotiation (ALPN) and TLS Keying Material Exporters. It comprehensively hardens the internal state machine against resource exhaustion and protocol semantic violations by establishing strict flow control boundaries and isolating stream-level errors, alongside zero-cost memory optimizations across the FFI layer.
@@ -873,7 +889,8 @@ This is a major release focused on enhancing runtime safety and modernizing the 
 - cryptography (>=45.0.4,<46.0.0) for SSL/TLS operations
 - typing-extensions (>=4.14.0,<5.0.0) for Python <3.10 support
 
-[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.16.1...HEAD
+[0.16.1]: https://github.com/wtransport/pywebtransport/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/wtransport/pywebtransport/compare/v0.15.1...v0.16.0
 [0.15.1]: https://github.com/wtransport/pywebtransport/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/wtransport/pywebtransport/compare/v0.14.1...v0.15.0

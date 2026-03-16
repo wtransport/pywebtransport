@@ -48,8 +48,8 @@ from .test_09_subprotocols import test_exact_match as run_09_exact_match
 from .test_09_subprotocols import test_fallback_downgrade as run_09_fallback_downgrade
 from .test_09_subprotocols import test_mismatch_rejection as run_09_mismatch_rejection
 from .test_09_subprotocols import test_missing_required as run_09_missing_required
-from .test_09_subprotocols import test_rogue_missing as run_09_rogue_missing
 from .test_09_subprotocols import test_rogue_mismatch as run_09_rogue_mismatch
+from .test_09_subprotocols import test_rogue_missing as run_09_rogue_missing
 from .test_10_tls_export import test_context_and_label_isolation as run_10_context_and_label_isolation
 from .test_10_tls_export import test_e2e_symmetry as run_10_e2e_symmetry
 from .test_10_tls_export import test_error_handling as run_10_error_handling

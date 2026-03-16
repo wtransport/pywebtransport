@@ -111,12 +111,13 @@ class TestWebTransportClient:
         mock = mocker.create_autospec(spec=ClientConfig, instance=True)
         mock.connect_timeout = 10.0
         mock.connection_attempt_delay = 0.250
-        mock.update.return_value = mock
+        mock.headers = None
         mock.max_connections = 100
         mock.connection_idle_timeout = 60.0
         mock.max_event_queue_size = 100
         mock.max_event_listeners = 50
         mock.max_event_history_size = 100
+        mock.subprotocols = None
         mock.user_agent = None
 
         return mock
@@ -800,15 +801,44 @@ class TestWebTransportClient:
         assert session_kwargs["subprotocols"] == ["h3", "dummy"]
 
     @pytest.mark.asyncio
+    async def test_connect_success_with_subprotocols_from_config(
+        self,
+        client: WebTransportClient,
+        mock_client_config: Any,
+        mock_controller_cls: Any,
+        mock_connection_cls: Any,
+        mock_controller: Any,
+        mock_connection_manager: Any,
+        mock_webtransport_connection: Any,
+        mock_session: Any,
+        mocker: MockerFixture,
+    ) -> None:
+        mock_client_config.subprotocols = ["config-proto"]
+        mocker.patch(target="pywebtransport.client.client.get_timestamp", side_effect=[2000.0, 2001.23])
+
+        session = await client.connect(url="https://example.com")
+
+        assert session is mock_session
+        mock_webtransport_connection.create_session.assert_awaited_once()
+
+        _, session_kwargs = mock_webtransport_connection.create_session.call_args
+        assert session_kwargs["subprotocols"] == ["config-proto"]
+
+    @pytest.mark.asyncio
     async def test_connect_ua_from_config(
-        self, client: WebTransportClient, mock_client_config: Any, mock_controller_cls: Any, mock_connection_cls: Any
+        self,
+        client: WebTransportClient,
+        mock_client_config: Any,
+        mock_controller_cls: Any,
+        mock_connection_cls: Any,
+        mock_webtransport_connection: Any,
     ) -> None:
         mock_client_config.user_agent = "CustomClient/1.2.3"
 
         await client.connect(url="https://example.com")
 
-        mock_client_config.update.assert_called_once()
-        passed_headers = mock_client_config.update.call_args.kwargs["headers"]
+        mock_webtransport_connection.create_session.assert_awaited_once()
+        passed_headers = mock_webtransport_connection.create_session.call_args.kwargs["headers"]
 
         if isinstance(passed_headers, dict):
             assert passed_headers["user-agent"] == "CustomClient/1.2.3"
@@ -823,14 +853,15 @@ class TestWebTransportClient:
         mock_controller_cls: Any,
         mock_connection_cls: Any,
         mock_client_config: Any,
+        mock_webtransport_connection: Any,
         mocker: MockerFixture,
     ) -> None:
         mocker.patch(target="pywebtransport.client.client.normalize_headers", return_value={"host": "example.com"})
 
         await client.connect(url="https://example.com")
 
-        mock_client_config.update.assert_called_once()
-        passed_headers = mock_client_config.update.call_args.kwargs["headers"]
+        mock_webtransport_connection.create_session.assert_awaited_once()
+        passed_headers = mock_webtransport_connection.create_session.call_args.kwargs["headers"]
 
         assert isinstance(passed_headers, dict)
         assert "user-agent" in passed_headers
@@ -888,14 +919,19 @@ class TestWebTransportClient:
 
     @pytest.mark.asyncio
     async def test_connect_with_explicit_user_agent_header(
-        self, client: WebTransportClient, mock_controller_cls: Any, mock_connection_cls: Any, mock_client_config: Any
+        self,
+        client: WebTransportClient,
+        mock_controller_cls: Any,
+        mock_connection_cls: Any,
+        mock_client_config: Any,
+        mock_webtransport_connection: Any,
     ) -> None:
         custom_ua = "ExplicitUA/1.0"
 
         await client.connect(url="https://example.com", headers={"user-agent": custom_ua})
 
-        mock_client_config.update.assert_called_once()
-        passed_headers = mock_client_config.update.call_args.kwargs["headers"]
+        mock_webtransport_connection.create_session.assert_awaited_once()
+        passed_headers = mock_webtransport_connection.create_session.call_args.kwargs["headers"]
 
         if isinstance(passed_headers, dict):
             assert passed_headers["user-agent"] == custom_ua
@@ -904,7 +940,7 @@ class TestWebTransportClient:
             assert custom_ua in ua_values
 
     @pytest.mark.asyncio
-    async def test_connect_with_headers(
+    async def test_connect_with_headers_merging(
         self,
         client: WebTransportClient,
         mock_controller_cls: Any,
@@ -912,22 +948,23 @@ class TestWebTransportClient:
         mock_client_config: Any,
         mock_webtransport_connection: Any,
     ) -> None:
-        client.set_default_headers(headers={"default": "header"})
+        mock_client_config.headers = {"global": "1"}
+        client.set_default_headers(headers={"default": "2"})
 
-        await client.connect(url="https://example.com", headers={"extra": "header"})
+        await client.connect(url="https://example.com", headers={"local": "3"})
 
-        mock_client_config.update.assert_called_once()
-        passed_headers = mock_client_config.update.call_args.kwargs["headers"]
+        mock_webtransport_connection.create_session.assert_awaited_once()
+        passed_headers = mock_webtransport_connection.create_session.call_args.kwargs["headers"]
 
         if isinstance(passed_headers, dict):
-            assert passed_headers["default"] == "header"
-            assert passed_headers["extra"] == "header"
-            assert "user-agent" in passed_headers
+            assert passed_headers["global"] == "1"
+            assert passed_headers["default"] == "2"
+            assert passed_headers["local"] == "3"
         else:
             header_dict = dict(passed_headers)
-            assert header_dict["default"] == "header"
-            assert header_dict["extra"] == "header"
-            assert "user-agent" in header_dict
+            assert header_dict["global"] == "1"
+            assert header_dict["default"] == "2"
+            assert header_dict["local"] == "3"
 
     @pytest.mark.asyncio
     async def test_context_manager(self, client: WebTransportClient, mock_connection_manager: Any) -> None:
