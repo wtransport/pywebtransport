@@ -1,14 +1,13 @@
-"""Unit tests for the pywebtransport.server.router module."""
+"""Unit tests for the pywebtransport.framework.router module."""
 
 import re
 from typing import Any
 
 import pytest
-from _pytest.logging import LogCaptureFixture
 from pytest_mock import MockerFixture
 
 from pywebtransport import WebTransportSession
-from pywebtransport.server import RequestRouter
+from pywebtransport.framework import RequestRouter
 
 
 class TestRequestRouter:
@@ -33,16 +32,14 @@ class TestRequestRouter:
         assert router.get_all_routes() == {"/home": mock_handler}
         assert router.get_route_stats()["exact_routes"] == 1
 
-    def test_add_invalid_pattern_route(
-        self, router: RequestRouter, mock_handler: Any, caplog: LogCaptureFixture
-    ) -> None:
+    def test_add_invalid_pattern_route(self, router: RequestRouter, mock_handler: Any) -> None:
         invalid_pattern = r"/users/(\d+"
+        expected_msg = re.escape(f"app_router validate invalid actual={invalid_pattern}")
 
-        with pytest.raises(expected_exception=re.error):
+        with pytest.raises(expected_exception=ValueError, match=expected_msg):
             router.add_pattern_route(pattern=invalid_pattern, handler=mock_handler)
 
         assert router.get_route_stats()["pattern_routes"] == 0
-        assert f"Invalid regex pattern '{invalid_pattern}'" in caplog.text
 
     def test_add_pattern_route(self, router: RequestRouter, mock_handler: Any) -> None:
         router.add_pattern_route(pattern=r"/users/(\d+)", handler=mock_handler)
@@ -54,7 +51,7 @@ class TestRequestRouter:
     def test_add_route_duplicate_raises_error(self, router: RequestRouter, mock_handler: Any) -> None:
         router.add_route(path="/home", handler=mock_handler)
 
-        with pytest.raises(expected_exception=ValueError, match="Route for path '/home' already exists"):
+        with pytest.raises(expected_exception=ValueError, match="app_router validate failed actual=/home"):
             router.add_route(path="/home", handler=mock_handler)
 
     def test_add_route_override(self, router: RequestRouter, mock_handler: Any, mocker: MockerFixture) -> None:

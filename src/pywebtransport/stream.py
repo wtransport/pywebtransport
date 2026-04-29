@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import weakref
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -11,16 +12,15 @@ from typing import TYPE_CHECKING, Final, Self
 
 from pywebtransport._protocol.events import (
     UserGetStreamDiagnostics,
+    UserReadStream,
     UserResetStream,
     UserSendStreamData,
     UserStopSending,
-    UserStreamRead,
 )
 from pywebtransport.constants import ErrorCodes
 from pywebtransport.events import Event, EventEmitter
 from pywebtransport.exceptions import ConnectionError, StreamError, TimeoutError
 from pywebtransport.types import Buffer, EventType, SessionId, StreamDirection, StreamId, StreamState
-from pywebtransport.utils import ensure_buffer, get_logger
 
 if TYPE_CHECKING:
     from pywebtransport.session import WebTransportSession
@@ -35,36 +35,36 @@ __all__: list[str] = [
 
 type StreamType = WebTransportStream | WebTransportReceiveStream | WebTransportSendStream
 
-_DEFAULT_EVENT_HISTORY_SIZE: Final[int] = 0
-_DEFAULT_EVENT_QUEUE_SIZE: Final[int] = 16
-_DEFAULT_MAX_EVENT_LISTENERS: Final[int] = 20
+_EVENT_HISTORY_CAPACITY: Final[int] = 0
+_EVENT_LISTENER_CAPACITY: Final[int] = 20
+_EVENT_QUEUE_CAPACITY: Final[int] = 16
 
-_logger = get_logger(name=__name__)
+_logger = logging.getLogger(name=__name__)
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
 class StreamDiagnostics:
     """Encapsulate stream diagnostic data."""
 
-    stream_id: StreamId
-    session_id: SessionId
-    direction: StreamDirection
-    state: StreamState
-    is_peer_initiated: bool
-    created_at: float
-    bytes_sent: int
     bytes_received: int
-    read_buffer_size: int
-    write_buffer_size: int
+    bytes_sent: int
     close_code: int | None
     close_reason: str | None
     closed_at: float | None
+    created_at: float
+    direction: StreamDirection
+    is_peer_initiated: bool
+    read_buffer_size: int
+    session_id: SessionId
+    state: StreamState
+    stream_id: StreamId
+    write_buffer_size: int
 
 
 class _BaseStream:
     """Manage the common state for WebTransport stream handles."""
 
-    __slots__ = ("_session", "_stream_id", "_is_remote", "_cached_state", "events")
+    __slots__ = ("_cached_state", "_is_remote", "_session", "_stream_id", "events")
 
     def __init__(self, *, session: WebTransportSession, stream_id: StreamId, is_remote: bool) -> None:
         """Initialize the instance."""
@@ -74,9 +74,9 @@ class _BaseStream:
 
         self._cached_state = StreamState.OPEN
         self.events = EventEmitter(
-            max_queue_size=_DEFAULT_EVENT_QUEUE_SIZE,
-            max_history=_DEFAULT_EVENT_HISTORY_SIZE,
-            max_listeners=_DEFAULT_MAX_EVENT_LISTENERS,
+            max_listeners=_EVENT_LISTENER_CAPACITY,
+            max_history=_EVENT_HISTORY_CAPACITY,
+            max_queue_size=_EVENT_QUEUE_CAPACITY,
         )
 
         self.events.on(event_type=EventType.STREAM_CLOSED, handler=self._on_closed)
@@ -96,7 +96,7 @@ class _BaseStream:
         """Return the parent session handle."""
         session = self._session()
         if session is None:
-            raise ConnectionError("Session is gone.")
+            raise ConnectionError(message="wt_session resolve failed")
         return session
 
     @property
@@ -113,7 +113,7 @@ class _BaseStream:
         """Retrieve diagnostic information about the stream."""
         connection = self.session._connection()
         if connection is None:
-            raise ConnectionError("Connection is gone.")
+            raise ConnectionError(message="wt_connection resolve failed")
 
         request_id, future = connection._controller._pending_manager.create_request()
         event = UserGetStreamDiagnostics(request_id=request_id, stream_id=self.stream_id)
@@ -122,7 +122,9 @@ class _BaseStream:
         try:
             diag_data = await future
         except ConnectionError as e:
-            raise StreamError(f"Connection is closed, cannot get diagnostics: {e}", stream_id=self.stream_id) from e
+            raise StreamError.from_cause(
+                message=f"wt_stream resolve failed stream_id={self.stream_id}", cause=e, stream_id=self.stream_id
+            ) from e
 
         return StreamDiagnostics(**diag_data)
 
@@ -181,18 +183,18 @@ class WebTransportReceiveStream(_BaseStream):
 
         connection = self.session._connection()
         if connection is None:
-            raise ConnectionError("Connection is gone.")
+            raise ConnectionError(message="wt_connection resolve failed")
 
         request_id, future = connection._controller._pending_manager.create_request()
 
         limit = max_bytes if max_bytes >= 0 else None
-        event = UserStreamRead(request_id=request_id, stream_id=self.stream_id, max_bytes=limit)
+        event = UserReadStream(request_id=request_id, stream_id=self.stream_id, max_bytes=limit)
         connection._controller.send_user_event(handle=connection._handle, event=event)
 
         try:
             data = await future
         except StreamError as e:
-            if e.error_code == ErrorCodes.STREAM_STATE_ERROR:
+            if e.error_code == ErrorCodes.LIB_STREAM_STATE_ERROR:
                 self._read_eof = True
                 return b""
             raise
@@ -212,13 +214,13 @@ class WebTransportReceiveStream(_BaseStream):
     async def readexactly(self, *, n: int) -> bytes:
         """Read exactly n bytes from the stream."""
         if n < 0:
-            raise ValueError("n must be a non-negative integer")
+            raise ValueError(f"wt_stream validate invalid actual={n}")
         if n == 0:
             return b""
 
         connection = self.session._connection()
         if connection is None:
-            raise ConnectionError("Connection is gone.")
+            raise ConnectionError(message="wt_connection resolve failed")
         read_timeout = connection.config.read_timeout
 
         chunks: list[bytes] = []
@@ -236,7 +238,7 @@ class WebTransportReceiveStream(_BaseStream):
                     chunks.append(chunk)
                     bytes_read += len(chunk)
         except asyncio.TimeoutError:
-            raise TimeoutError(f"readexactly timed out after {read_timeout}s") from None
+            raise TimeoutError(message=f"wt_stream receive failed stream_id={self.stream_id}") from None
 
         return b"".join(chunks)
 
@@ -247,11 +249,11 @@ class WebTransportReceiveStream(_BaseStream):
     async def readuntil(self, *, separator: bytes, limit: int = -1) -> bytes:
         """Read data from the stream until a separator is found."""
         if not separator:
-            raise ValueError("Separator cannot be empty")
+            raise ValueError(f"wt_stream validate invalid actual={separator}")
 
         connection = self.session._connection()
         if connection is None:
-            raise ConnectionError("Connection is gone.")
+            raise ConnectionError(message="wt_connection resolve failed")
         read_timeout = connection.config.read_timeout
 
         data = bytearray()
@@ -265,11 +267,15 @@ class WebTransportReceiveStream(_BaseStream):
                     if data.endswith(separator):
                         return bytes(data)
                     if limit > 0 and len(data) > limit:
-                        raise StreamError(f"Separator not found within limit {limit}", stream_id=self.stream_id)
+                        raise StreamError(
+                            message=f"wt_stream receive exceeded actual={len(data)} limit={limit} "
+                            f"stream_id={self.stream_id}",
+                            stream_id=self.stream_id,
+                        )
         except asyncio.TimeoutError:
-            raise TimeoutError(f"readuntil timed out after {read_timeout}s") from None
+            raise TimeoutError(message=f"wt_stream receive failed stream_id={self.stream_id}") from None
 
-    async def stop_receiving(self, *, error_code: int = ErrorCodes.NO_ERROR) -> None:
+    async def stop_receiving(self, *, error_code: int = ErrorCodes.APP_NO_ERROR) -> None:
         """Signal the peer to stop sending data."""
         if self._read_eof:
             return
@@ -285,7 +291,7 @@ class WebTransportReceiveStream(_BaseStream):
         try:
             await future
         except StreamError as e:
-            if e.error_code != ErrorCodes.STREAM_STATE_ERROR:
+            if e.error_code != ErrorCodes.LIB_STREAM_STATE_ERROR:
                 raise
 
     def __aiter__(self) -> AsyncIterator[bytes]:
@@ -316,9 +322,9 @@ class WebTransportSendStream(_BaseStream):
         exit_error_code: int | None = None
 
         if isinstance(exc_val, asyncio.CancelledError):
-            exit_error_code = ErrorCodes.APPLICATION_ERROR
+            exit_error_code = ErrorCodes.APP_CANCELLED
         elif isinstance(exc_val, BaseException):
-            exit_error_code = getattr(exc_val, "error_code", ErrorCodes.APPLICATION_ERROR)
+            exit_error_code = getattr(exc_val, "error_code", ErrorCodes.APP_GENERIC_ERROR)
 
         await self.close(error_code=exit_error_code)
 
@@ -341,16 +347,17 @@ class WebTransportSendStream(_BaseStream):
         try:
             await self.write(data=b"", end_stream=True)
         except StreamError as e:
-            _logger.debug("Ignoring expected StreamError on stream %s close: %s", self.stream_id, e)
+            _logger.debug("wt_stream close failed stream_id=%d err=%s", self.stream_id, e)
         except Exception as e:
-            _logger.error("Unexpected error during stream %s close: %s", self.stream_id, e, exc_info=True)
-            raise
+            raise StreamError.from_cause(
+                message=f"wt_stream close failed stream_id={self.stream_id}", cause=e, stream_id=self.stream_id
+            ) from e
 
-    async def reset(self, *, error_code: int = ErrorCodes.NO_ERROR) -> None:
+    async def reset(self, *, error_code: int = ErrorCodes.APP_NO_ERROR) -> None:
         """Abruptly terminate stream transmission."""
         connection = self.session._connection()
         if connection is None:
-            raise ConnectionError("Connection is gone.")
+            raise ConnectionError(message="wt_connection resolve failed")
 
         request_id, future = connection._controller._pending_manager.create_request()
         event = UserResetStream(request_id=request_id, stream_id=self.stream_id, error_code=error_code)
@@ -359,23 +366,24 @@ class WebTransportSendStream(_BaseStream):
         try:
             await future
         except StreamError as e:
-            if e.error_code != ErrorCodes.STREAM_STATE_ERROR:
+            if e.error_code != ErrorCodes.LIB_STREAM_STATE_ERROR:
                 raise
 
     async def write(self, *, data: Buffer, end_stream: bool = False) -> None:
         """Write data to the stream."""
         try:
-            buffer_data = ensure_buffer(data=data)
+            buffer_data = _ensure_buffer(data=data)
         except TypeError as e:
-            _logger.debug("Stream %d write failed pre-validation: %s", self.stream_id, e)
-            raise
+            raise StreamError.from_cause(
+                message=f"wt_stream validate invalid stream_id={self.stream_id}", cause=e, stream_id=self.stream_id
+            ) from e
 
         if not buffer_data and not end_stream:
             return
 
         connection = self.session._connection()
         if connection is None:
-            raise ConnectionError("Connection is gone.")
+            raise ConnectionError(message="wt_connection resolve failed")
 
         request_id, future = connection._controller._pending_manager.create_request()
         event = UserSendStreamData(
@@ -391,22 +399,24 @@ class WebTransportSendStream(_BaseStream):
     async def write_all(self, *, data: Buffer, chunk_size: int = 65536, end_stream: bool = False) -> None:
         """Write buffer data to the stream in chunks."""
         try:
-            buffer_data = ensure_buffer(data=data)
-            offset = 0
-            data_len = len(buffer_data)
+            buffer_data = _ensure_buffer(data=data)
+        except TypeError as e:
+            raise StreamError(
+                message=f"wt_stream validate invalid stream_id={self.stream_id}", stream_id=self.stream_id
+            ) from e
 
-            if not buffer_data and end_stream:
-                await self.write(data=b"", end_stream=True)
-                return
+        offset = 0
+        data_len = len(buffer_data)
 
-            while offset < data_len:
-                chunk = buffer_data[offset : offset + chunk_size]
-                offset += len(chunk)
-                is_last_chunk = offset >= data_len
-                await self.write(data=chunk, end_stream=end_stream if is_last_chunk else False)
-        except StreamError as e:
-            _logger.debug("Error writing bytes to stream %d: %s", self.stream_id, e)
-            raise
+        if not buffer_data and end_stream:
+            await self.write(data=b"", end_stream=True)
+            return
+
+        while offset < data_len:
+            chunk = buffer_data[offset : offset + chunk_size]
+            offset += len(chunk)
+            is_last_chunk = offset >= data_len
+            await self.write(data=chunk, end_stream=end_stream if is_last_chunk else False)
 
 
 class WebTransportStream(_BaseStream):
@@ -432,9 +442,9 @@ class WebTransportStream(_BaseStream):
         exit_error_code: int | None = None
 
         if isinstance(exc_val, asyncio.CancelledError):
-            exit_error_code = ErrorCodes.APPLICATION_ERROR
+            exit_error_code = ErrorCodes.APP_CANCELLED
         elif isinstance(exc_val, BaseException):
-            exit_error_code = getattr(exc_val, "error_code", ErrorCodes.APPLICATION_ERROR)
+            exit_error_code = getattr(exc_val, "error_code", ErrorCodes.APP_GENERIC_ERROR)
 
         await self.close(error_code=exit_error_code)
 
@@ -456,7 +466,7 @@ class WebTransportStream(_BaseStream):
     async def close(self, *, error_code: int | None = None) -> None:
         """Terminate both sides of the stream."""
         await self._writer.close(error_code=error_code)
-        stop_code = error_code if error_code is not None else ErrorCodes.NO_ERROR
+        stop_code = error_code if error_code is not None else ErrorCodes.APP_NO_ERROR
         await self._reader.stop_receiving(error_code=stop_code)
 
     async def read(self, *, max_bytes: int = -1) -> bytes:
@@ -479,11 +489,11 @@ class WebTransportStream(_BaseStream):
         """Read data from the stream until a separator is found."""
         return await self._reader.readuntil(separator=separator, limit=limit)
 
-    async def reset(self, *, error_code: int = ErrorCodes.NO_ERROR) -> None:
+    async def reset(self, *, error_code: int = ErrorCodes.APP_NO_ERROR) -> None:
         """Stop sending data and reset the stream."""
         await self._writer.reset(error_code=error_code)
 
-    async def stop_receiving(self, *, error_code: int = ErrorCodes.NO_ERROR) -> None:
+    async def stop_receiving(self, *, error_code: int = ErrorCodes.APP_NO_ERROR) -> None:
         """Signal the peer to stop sending data."""
         await self._reader.stop_receiving(error_code=error_code)
 
@@ -508,3 +518,14 @@ class WebTransportStream(_BaseStream):
     async def __anext__(self) -> bytes:
         """Get the next chunk of data."""
         return await self._reader.__anext__()
+
+
+def _ensure_buffer(*, data: Buffer | str, encoding: str = "utf-8") -> Buffer:
+    """Validate and convert input data to a buffer format."""
+    match data:
+        case str():
+            return data.encode(encoding=encoding)
+        case bytes() | bytearray() | memoryview():
+            return data
+        case _:
+            raise TypeError(f"mem_buffer validate invalid actual={type(data).__name__} expected=buffer")

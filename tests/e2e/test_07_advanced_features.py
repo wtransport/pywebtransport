@@ -11,6 +11,7 @@ from typing import Final
 
 from pywebtransport import ClientConfig, WebTransportClient
 from pywebtransport.types import EventType
+from pywebtransport.utils import init_tracing
 
 SERVER_HOST: Final[str] = "127.0.0.1"
 SERVER_PORT: Final[int] = 4433
@@ -20,6 +21,7 @@ DEBUG_MODE: Final[bool] = "--debug" in sys.argv
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 if DEBUG_MODE:
     logging.getLogger().setLevel(logging.DEBUG)
+    init_tracing()
 
 logger = logging.getLogger(name="test_advanced_features")
 
@@ -53,8 +55,8 @@ async def test_session_statistics() -> bool:
                 return True
             else:
                 logger.error("FAILURE: Session statistics mismatch.")
-                logger.error("   - Streams Created: %s (expected >= 3)", final_stats.local_streams_bidi_opened)
-                logger.error("   - Datagrams Sent: %s (expected >= 5)", final_stats.datagrams_sent)
+                logger.error("   - Streams Created: %d (expected >= 3)", final_stats.local_streams_bidi_opened)
+                logger.error("   - Datagrams Sent: %d (expected >= 5)", final_stats.datagrams_sent)
                 return False
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)
@@ -75,7 +77,7 @@ async def test_connection_info() -> bool:
                 return False
 
             logger.info("Retrieving connection information...")
-            logger.info("   - Connection ID: %s", connection.connection_id)
+            logger.info("   - Connection Handle: %d", connection.handle)
             logger.info("   - State: %s", connection.state.value)
             logger.info("   - Remote Address: %s", connection.remote_address)
 
@@ -105,8 +107,8 @@ async def test_client_statistics() -> bool:
 
             final_stats = (await client.diagnostics()).stats
             logger.info("Final client statistics:")
-            logger.info("   - Connections Attempted: %s", final_stats.connections_attempted)
-            logger.info("   - Connections Successful: %s", final_stats.connections_successful)
+            logger.info("   - Connections Attempted: %d", final_stats.connections_attempted)
+            logger.info("   - Connections Successful: %d", final_stats.connections_successful)
             logger.info("   - Avg Connect Time: %.3fs", final_stats.avg_connect_time)
 
             if final_stats.connections_attempted >= 3 and final_stats.connections_successful >= 3:
@@ -128,7 +130,7 @@ async def test_stream_management_diagnostics() -> bool:
     try:
         async with WebTransportClient(config=config) as client:
             session = await client.connect(url=SERVER_URL)
-            logger.info("Connected, session: %s", session.session_id)
+            logger.info("Connected, session: %d", session.session_id)
             connection = session._connection()
             if not connection:
                 logger.error("FAILURE: Connection lost.")
@@ -139,7 +141,7 @@ async def test_stream_management_diagnostics() -> bool:
 
             conn_diag = await connection.diagnostics()
             logger.info("Connection diagnostics:")
-            logger.info("   - Stream count: %s", conn_diag.stream_count)
+            logger.info("   - Stream count: %d", conn_diag.stream_count)
 
             if conn_diag.stream_count == 5:
                 logger.info("SUCCESS: Connection diagnostics correctly report stream count.")
@@ -175,8 +177,8 @@ async def test_datagram_statistics() -> bool:
             final_stats = await session.diagnostics()
 
             logger.info("Final session datagram statistics:")
-            logger.info("   - Datagrams Sent: %s", final_stats.datagrams_sent)
-            logger.info("   - Bytes Sent: %s", final_stats.datagram_bytes_sent)
+            logger.info("   - Datagrams Sent: %d", final_stats.datagrams_sent)
+            logger.info("   - Bytes Sent: %d", final_stats.datagram_bytes_sent)
 
             if final_stats.datagrams_sent >= 5 and final_stats.datagram_bytes_sent >= total_bytes_sent:
                 logger.info("SUCCESS: Datagram statistics appear correct.")
@@ -210,7 +212,7 @@ async def test_performance_monitoring() -> bool:
                     await stream.close()
 
                 avg_rtt_ms = (sum(latencies) / len(latencies)) * 1000
-                logger.info("   - Avg RTT for %s bytes: %.1fms", size, avg_rtt_ms)
+                logger.info("   - Avg RTT for %d bytes: %.1fms", size, avg_rtt_ms)
 
             logger.info("SUCCESS: Performance monitoring loop completed.")
             return True
@@ -222,7 +224,7 @@ async def test_performance_monitoring() -> bool:
 async def test_session_lifecycle_events() -> bool:
     """Test the real event emission lifecycle using deterministic history verification."""
     logger.info("--- Test 07G: Session Lifecycle Events ---")
-    config = ClientConfig(verify_mode=ssl.CERT_NONE, max_event_history_size=50)
+    config = ClientConfig(verify_mode=ssl.CERT_NONE, event_history_capacity=50)
 
     try:
         async with WebTransportClient(config=config) as client:

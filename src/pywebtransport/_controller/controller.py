@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from collections.abc import Callable
 from typing import Any, Final, cast
@@ -10,11 +11,10 @@ from typing import Any, Final, cast
 from pywebtransport._controller import abi, mapper
 from pywebtransport._controller.pending import PendingRequestManager
 from pywebtransport._protocol.events import ProtocolEvent
-from pywebtransport._wtransport import Endpoint, Waker
+from pywebtransport._pywebtransport import Endpoint, Waker
 from pywebtransport.config import ClientConfig, ServerConfig
 from pywebtransport.exceptions import ConnectionError
 from pywebtransport.types import Address, EventType
-from pywebtransport.utils import get_logger
 
 __all__: list[str] = []
 
@@ -23,7 +23,7 @@ type _SpawnCallback = Callable[[int], None]
 
 _WAKER_DRAIN_BUFFER_SIZE: Final[int] = 8192
 
-_logger = get_logger(name=__name__)
+_logger = logging.getLogger(name=__name__)
 
 
 class EndpointController:
@@ -63,7 +63,7 @@ class EndpointController:
         self._connection_callbacks.clear()
         self._remote_addresses.clear()
         self._spawn_callback = None
-        self._pending_manager.fail_all(exception=ConnectionError("Endpoint closed"))
+        self._pending_manager.fail_all(exception=ConnectionError(message="rt close"))
 
     async def connect(self, *, remote_host: str, remote_port: int, server_name: str) -> int:
         """Dispatch an outbound connection request to the reactor."""
@@ -73,7 +73,7 @@ class EndpointController:
             self._endpoint.connect(request_id=request_id, remote=(remote_host, remote_port), server_name=server_name)
         except Exception as e:
             self._pending_manager.fail_request(request_id=request_id, exception=e)
-            raise ConnectionError(f"Failed to dispatch connect command: {e}") from e
+            raise ConnectionError.from_cause(message="wt_connection open failed", cause=e) from e
 
         return cast(int, await future)
 
@@ -95,9 +95,11 @@ class EndpointController:
             ffi_tuple = mapper.pack_user_event(event=event)
             self._endpoint.handle_user_event(handle=handle, event=ffi_tuple)
         except Exception as e:
-            _logger.error(
-                "Failed to process user event %s for handle %d: %s", type(event).__name__, handle, e, exc_info=True
-            )
+            raise ConnectionError.from_cause(
+                message=f"rt_event send failed actual={type(event).__name__} connection_handle={handle}",
+                cause=e,
+                connection_handle=handle,
+            ) from e
 
     def set_spawn_callback(self, *, callback: _SpawnCallback) -> None:
         """Assign the callback function for newly accepted connections."""
@@ -120,17 +122,19 @@ class EndpointController:
                         req_id, exception = effect_payload
                         self._pending_manager.fail_request(request_id=req_id, exception=exception)
                     case abi.EMIT_CONNECTION_EVENT:
-                        conn_id, ev_type, err_code, reason = effect_payload
+                        conn_handle, ev_type, err_code, reason = effect_payload
                         cb = self._connection_callbacks.get(handle)
                         if cb is not None:
-                            event_data = {"connection_id": conn_id}
+                            event_data = {"connection_handle": conn_handle}
                             if err_code is not None:
                                 event_data["error_code"] = err_code
                             if reason is not None:
                                 event_data["reason"] = reason
                             cb(ev_type, event_data)
                     case abi.EMIT_SESSION_EVENT:
-                        sid, ev_type, path, hdrs, subprotos, subproto, data, uni, md, ms, rdy, err, rsn = effect_payload
+                        sid, ev_type, path, hdrs, wt_avail_protos, wt_proto, data, uni, md, ms, rdy, err, rsn = (
+                            effect_payload
+                        )
                         cb = self._connection_callbacks.get(handle)
                         if cb is not None:
                             event_data = {"session_id": sid}
@@ -138,10 +142,10 @@ class EndpointController:
                                 event_data["path"] = path
                             if hdrs is not None:
                                 event_data["headers"] = hdrs
-                            if subprotos is not None:
-                                event_data["subprotocols"] = subprotos
-                            if subproto is not None:
-                                event_data["subprotocol"] = subproto
+                            if wt_avail_protos is not None:
+                                event_data["wt_available_protocols"] = wt_avail_protos
+                            if wt_proto is not None:
+                                event_data["wt_protocol"] = wt_proto
                             if data is not None:
                                 event_data["data"] = data
                             if uni is not None:
@@ -174,7 +178,9 @@ class EndpointController:
                     case abi.CLEANUP_H3_STREAM:
                         pass
             except Exception as e:
-                _logger.error("Error executing effect %s on handle %d: %s", effect_opcode, handle, e, exc_info=True)
+                _logger.warning(
+                    "rt_event receive failed actual=%s ptr=%s err=%s", effect_opcode, handle, e, exc_info=True
+                )
 
     def _on_waker_triggered(self) -> None:
         """Process the edge-triggered wake-up signal from the pipe."""
@@ -185,7 +191,7 @@ class EndpointController:
                 except BlockingIOError:
                     break
         except OSError as e:
-            _logger.debug("Error draining waker pipe: %s", e)
+            _logger.debug("sys_pipe drain failed err=%s", e)
 
         self._waker.clear()
 
@@ -194,7 +200,7 @@ class EndpointController:
             for event_tuple in events:
                 self._process_runtime_event(event_tuple=event_tuple)
         except Exception as e:
-            _logger.error("Error polling or processing runtime events: %s", e, exc_info=True)
+            _logger.warning("rt_event receive failed err=%s", e, exc_info=True)
 
     def _process_runtime_event(self, *, event_tuple: tuple[int, Any]) -> None:
         """Route the IPC runtime events to the corresponding domain handlers."""
@@ -206,8 +212,10 @@ class EndpointController:
                 self._remote_addresses[handle] = remote_address
                 self._pending_manager.complete_request(request_id=req_id, result=handle)
             case abi.COMMAND_FAILED:
-                req_id, _err_code, reason = payload
-                self._pending_manager.fail_request(request_id=req_id, exception=ConnectionError(reason))
+                req_id, err_code, reason = payload
+                self._pending_manager.fail_request(
+                    request_id=req_id, exception=ConnectionError(message=reason, error_code=err_code)
+                )
             case abi.CONNECTION_EFFECTS:
                 handle, effects = payload
                 self._execute_effects(handle=handle, effects=effects)
@@ -218,14 +226,14 @@ class EndpointController:
                     self._spawn_callback(handle)
                 self._execute_effects(handle=handle, effects=effects)
             case abi.REACTOR_SHUTDOWN:
-                _logger.debug("Background reactor shutdown confirmed.")
+                _logger.debug("rt close")
 
                 if not self._is_closed:
                     self._is_closed = True
                     self._connection_callbacks.clear()
                     self._remote_addresses.clear()
                     self._spawn_callback = None
-                    self._pending_manager.fail_all(exception=ConnectionError("Reactor crashed unexpectedly"))
+                    self._pending_manager.fail_all(exception=ConnectionError(message="rt failed"))
 
                 self._loop.remove_reader(self._r_fd)
 
@@ -233,4 +241,4 @@ class EndpointController:
                     os.close(self._r_fd)
                     os.close(self._w_fd)
                 except OSError as e:
-                    _logger.debug("Error closing IPC pipes during terminal shutdown: %s", e)
+                    _logger.debug("sys_pipe destroy failed err=%s", e)

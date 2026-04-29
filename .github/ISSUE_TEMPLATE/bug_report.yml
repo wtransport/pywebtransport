@@ -14,7 +14,7 @@ body:
     attributes:
       label: "Library Version"
       description: "Specific version identifier."
-      placeholder: "e.g., 0.11.0"
+      placeholder: "e.g., 0.17.0"
     validations:
       required: true
 
@@ -23,7 +23,7 @@ body:
     attributes:
       label: "Python Runtime"
       description: "Interpreter version."
-      placeholder: "e.g., 3.12.12"
+      placeholder: "e.g., 3.12.13"
     validations:
       required: true
 
@@ -68,18 +68,6 @@ body:
     attributes:
       label: "Reproduction"
       description: "Minimal executable code snippet demonstrating the failure."
-      placeholder: |
-        ```python
-        import asyncio
-        from pywebtransport import WebTransportSession
-
-        async def main():
-            # Minimal reproduction logic
-            pass
-
-        if __name__ == "__main__":
-            asyncio.run(main())
-        ```
     validations:
       required: true
 
@@ -88,9 +76,6 @@ body:
     attributes:
       label: "Expected vs Actual"
       description: "Contrast expected protocol behavior with observed results."
-      placeholder: |
-        Expected: Stream closes with error code 0x0.
-        Actual: Connection timeout after 500ms.
     validations:
       required: true
 
@@ -102,11 +87,11 @@ body:
       render: "shell"
 
   - type: "checkboxes"
-    id: "verification"
+    id: "checklist"
     attributes:
-      label: "Verification"
+      label: "Checklist"
       options:
         - label: "Checked existing issues for duplicates."
           required: true
-        - label: "Tested against the latest stable release."
+        - label: "Willing to submit a Pull Request."
           required: false

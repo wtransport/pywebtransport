@@ -1,9 +1,9 @@
-# PyWebTransport Flake8 Configuration
-
 [flake8]
 max-line-length = 120
 extend-ignore = E203, W503
 exclude =
+    *.egg
+    *.egg-info
     .benchmarks
     .cache
     .eggs
@@ -16,10 +16,9 @@ exclude =
     .vscode
     __pycache__
     build
+    crates
     dist
     docs
     scripts
-    *.egg
-    *.egg-info
 per-file-ignores =
     *.pyi: E302

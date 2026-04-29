@@ -1,5 +1,6 @@
 //! Single QUIC connection orchestrator bridging WebTransport engine and Quinn state machine.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
@@ -9,6 +10,7 @@ use quinn_proto::{
     Event as QuinnEvent, ReadError, StreamEvent, StreamId as QuinnStreamId, Transmit, VarInt,
     WriteError,
 };
+use tracing::debug;
 
 use crate::common::constants::ERR_LIB_INTERNAL_ERROR;
 use crate::common::types::ErrorSource;
@@ -18,14 +20,14 @@ use crate::protocol::utils::find_header_str;
 
 // Complete state machine for a single WebTransport connection.
 pub(super) struct TransportConnection {
-    engine: WebTransportEngine,
-    quic: QuinnConnection,
-    pending_effects: VecDeque<Effect>,
-    send_buffers: HashMap<QuinnStreamId, SendBuffer>,
     early_event_ttl: Option<Duration>,
+    engine: WebTransportEngine,
     gc_interval: Option<Duration>,
     next_early_event_time: Option<Instant>,
     next_gc_time: Option<Instant>,
+    pending_effects: VecDeque<Effect>,
+    quic: QuinnConnection,
+    send_buffers: HashMap<QuinnStreamId, SendBuffer>,
 }
 
 impl TransportConnection {
@@ -38,14 +40,14 @@ impl TransportConnection {
         now_instant: Instant,
     ) -> Self {
         Self {
-            engine,
-            quic,
-            pending_effects: VecDeque::new(),
-            send_buffers: HashMap::new(),
             early_event_ttl,
+            engine,
             gc_interval,
             next_early_event_time: early_event_ttl.map(|interval| now_instant + interval),
             next_gc_time: gc_interval.map(|interval| now_instant + interval),
+            pending_effects: VecDeque::new(),
+            quic,
+            send_buffers: HashMap::new(),
         }
     }
 
@@ -62,7 +64,7 @@ impl TransportConnection {
     }
 
     // Handles network and application timeouts.
-    pub(super) fn handle_timeout(&mut self, now_instant: Instant, now: f64) {
+    pub(super) fn handle_timeout(&mut self, now: f64, now_instant: Instant) {
         if self
             .next_gc_time
             .is_some_and(|gc_time| now_instant >= gc_time)
@@ -116,8 +118,8 @@ impl TransportConnection {
     // Retrieves network transmission datagrams using the provided workspace buffer.
     pub(super) fn poll_transmit(
         &mut self,
-        now_instant: Instant,
         workspace: &mut Vec<u8>,
+        now_instant: Instant,
     ) -> Option<Transmit> {
         self.quic.poll_transmit(now_instant, 1, workspace)
     }
@@ -145,12 +147,12 @@ impl TransportConnection {
     }
 
     // Flushes pending bytes for a flow-controlled QUIC stream.
-    fn flush_stream(&mut self, id: QuinnStreamId) {
-        let Some(buf) = self.send_buffers.get_mut(&id) else {
+    fn flush_stream(&mut self, stream_id: QuinnStreamId) {
+        let Some(buf) = self.send_buffers.get_mut(&stream_id) else {
             return;
         };
 
-        let mut stream = self.quic.send_stream(id);
+        let mut stream = self.quic.send_stream(stream_id);
 
         while let Some(chunk) = buf.chunks.front() {
             match stream.write(chunk) {
@@ -196,7 +198,7 @@ impl TransportConnection {
                     if let Some(max_size) = self.quic.datagrams().max_size() {
                         self.dispatch_protocol_event(
                             ProtocolEvent::TransportQuicParametersReceived {
-                                remote_max_datagram_frame_size: max_size as u64,
+                                peer_max_datagram_frame_size: max_size as u64,
                             },
                             now,
                             now_instant,
@@ -214,19 +216,17 @@ impl TransportConnection {
                             u64::from(d_id),
                         ) {
                             Ok(effects) => self.process_effects(effects, now, now_instant),
-                            Err(e) => tracing::error!("Failed to initialize H3 transport: {:?}", e),
+                            Err(e) => debug!("h3_connection open failed err={e:?}"),
                         }
                     } else {
-                        tracing::error!(
-                            "Failed to open H3 infrastructure streams. Peer might not have granted sufficient initial unidirectional streams."
-                        );
+                        debug!("quic_stream create failed");
                     }
                 }
                 QuinnEvent::ConnectionLost { reason } => {
                     self.dispatch_protocol_event(
                         ProtocolEvent::TransportConnectionTerminated {
                             error_code: 0,
-                            reason: reason.to_string(),
+                            reason: reason.to_string().into(),
                         },
                         now,
                         now_instant,
@@ -240,23 +240,27 @@ impl TransportConnection {
                         self.read_stream_data(stream_id, now, now_instant);
                     }
                 }
-                QuinnEvent::Stream(StreamEvent::Readable { id }) => {
-                    self.read_stream_data(id, now, now_instant);
+                QuinnEvent::Stream(StreamEvent::Readable { id: stream_id }) => {
+                    self.read_stream_data(stream_id, now, now_instant);
                 }
-                QuinnEvent::Stream(StreamEvent::Stopped { id, error_code }) => {
+                QuinnEvent::Stream(StreamEvent::Stopped {
+                    id: stream_id,
+                    error_code,
+                }) => {
                     self.dispatch_protocol_event(
                         ProtocolEvent::TransportStopSendingReceived {
-                            stream_id: u64::from(id),
+                            stream_id: u64::from(stream_id),
                             error_code: error_code.into_inner(),
                         },
                         now,
                         now_instant,
                     );
 
-                    self.engine.cleanup_stream(u64::from(id));
+                    let effects = self.engine.cleanup_stream(u64::from(stream_id));
+                    self.process_effects(effects, now, now_instant);
                 }
-                QuinnEvent::Stream(StreamEvent::Writable { id }) => {
-                    self.flush_stream(id);
+                QuinnEvent::Stream(StreamEvent::Writable { id: stream_id }) => {
+                    self.flush_stream(stream_id);
                 }
                 _ => {}
             }
@@ -268,10 +272,14 @@ impl TransportConnection {
         for effect in effects {
             match effect {
                 Effect::CloseQuicConnection { error_code, reason } => {
-                    let reason_bytes = reason.unwrap_or_default().into_bytes();
-                    let code = VarInt::try_from(error_code).unwrap_or(VarInt::from(0u32));
+                    let reason = match reason {
+                        Some(Cow::Borrowed(s)) => Bytes::from_static(s.as_bytes()),
+                        Some(Cow::Owned(s)) => Bytes::from(s),
+                        None => Bytes::new(),
+                    };
+                    let error_code = VarInt::try_from(error_code).unwrap_or(VarInt::from(0u32));
 
-                    self.quic.close(now_instant, code, reason_bytes.into());
+                    self.quic.close(now_instant, error_code, reason);
                 }
                 Effect::CreateH3Session {
                     request_id,
@@ -304,7 +312,7 @@ impl TransportConnection {
                                     ProtocolEvent::InternalFailH3Session {
                                         request_id,
                                         error_code: None,
-                                        reason: e.to_string(),
+                                        reason: e.to_string().into(),
                                     },
                                     now,
                                     now_instant,
@@ -317,7 +325,7 @@ impl TransportConnection {
                             ProtocolEvent::InternalFailH3Session {
                                 request_id,
                                 error_code: None,
-                                reason: "Failed to open QUIC stream".to_owned(),
+                                reason: "quic_stream create failed".into(),
                             },
                             now,
                             now_instant,
@@ -364,7 +372,7 @@ impl TransportConnection {
                                     session_id,
                                     is_unidirectional,
                                     error_code: None,
-                                    reason: "Failed to open QUIC stream".to_owned(),
+                                    reason: "quic_stream create failed".into(),
                                 },
                                 now,
                                 now_instant,
@@ -391,11 +399,12 @@ impl TransportConnection {
                             });
                         }
                         Err(e) => {
+                            debug!("tls_keying_material resolve failed err={e:?}");
                             self.pending_effects.push_back(Effect::NotifyRequestFailed {
                                 request_id,
                                 source: ErrorSource::Session,
                                 error_code: Some(ERR_LIB_INTERNAL_ERROR),
-                                reason: format!("Failed to export TLS keying material: {e:?}"),
+                                reason: "tls_keying_material resolve failed".into(),
                             });
                         }
                     }
@@ -519,13 +528,13 @@ impl TransportConnection {
     }
 
     // Reads incoming QUIC streams utilizing zero-copy architecture.
-    fn read_stream_data(&mut self, id: QuinnStreamId, now: f64, now_instant: Instant) {
+    fn read_stream_data(&mut self, stream_id: QuinnStreamId, now: f64, now_instant: Instant) {
         let mut chunks = Vec::new();
         let mut is_finished = false;
         let mut is_reset = None;
 
         {
-            let mut recv = self.quic.recv_stream(id);
+            let mut recv = self.quic.recv_stream(stream_id);
 
             if let Ok(mut chunks_reader) = recv.read(true) {
                 loop {
@@ -556,7 +565,7 @@ impl TransportConnection {
         for chunk in chunks {
             self.dispatch_protocol_event(
                 ProtocolEvent::TransportStreamDataReceived {
-                    stream_id: u64::from(id),
+                    stream_id: u64::from(stream_id),
                     data: chunk,
                     end_stream: false,
                 },
@@ -568,7 +577,7 @@ impl TransportConnection {
         if is_finished {
             self.dispatch_protocol_event(
                 ProtocolEvent::TransportStreamDataReceived {
-                    stream_id: u64::from(id),
+                    stream_id: u64::from(stream_id),
                     data: Bytes::new(),
                     end_stream: true,
                 },
@@ -580,14 +589,15 @@ impl TransportConnection {
         if let Some(code) = is_reset {
             self.dispatch_protocol_event(
                 ProtocolEvent::TransportStreamResetReceived {
-                    stream_id: u64::from(id),
+                    stream_id: u64::from(stream_id),
                     error_code: code,
                 },
                 now,
                 now_instant,
             );
 
-            self.engine.cleanup_stream(u64::from(id));
+            let effects = self.engine.cleanup_stream(u64::from(stream_id));
+            self.process_effects(effects, now, now_instant);
         }
     }
 }

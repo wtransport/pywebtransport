@@ -10,6 +10,7 @@ from typing import Final
 
 from pywebtransport import ClientConfig, ConnectionError, TimeoutError, WebTransportClient
 from pywebtransport.types import SessionState
+from pywebtransport.utils import init_tracing
 
 SERVER_HOST: Final[str] = "127.0.0.1"
 SERVER_PORT: Final[int] = 4433
@@ -19,6 +20,7 @@ DEBUG_MODE: Final[bool] = "--debug" in sys.argv
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 if DEBUG_MODE:
     logging.getLogger().setLevel(logging.DEBUG)
+    init_tracing()
 
 logger = logging.getLogger(name="test_basic_connection")
 
@@ -32,7 +34,7 @@ async def test_server_reachability() -> bool:
         sock.settimeout(2.0)
         try:
             sock.sendto(b"ping", (SERVER_HOST, SERVER_PORT))
-            logger.info("Server port %s (UDP) is reachable.", SERVER_PORT)
+            logger.info("Server port %d (UDP) is reachable.", SERVER_PORT)
             return True
         except socket.error as e:
             logger.warning("UDP probe failed: %s. This might be normal.", e)
@@ -51,7 +53,7 @@ async def test_basic_connection() -> bool:
 
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
     logger.info("Target server: %s", SERVER_URL)
-    logger.info("Config: timeout=%ss, verify_ssl=False", config.connect_timeout)
+    logger.info("Config: timeout=%fs, verify_ssl=False", config.connect_timeout)
 
     try:
         async with WebTransportClient(config=config) as client:
@@ -62,7 +64,7 @@ async def test_basic_connection() -> bool:
 
             logger.info("Connection established!")
             logger.info("   - Connection time: %.3fs", connect_time)
-            logger.info("   - Session ID: %s", session.session_id)
+            logger.info("   - Session ID: %d", session.session_id)
             logger.info("   - Session state: %s", session.state.value)
 
             if session.state != SessionState.CONNECTED:

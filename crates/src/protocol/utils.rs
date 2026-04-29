@@ -1,13 +1,15 @@
 //! Internal utility functions for flow control, stream ID logic, error mapping, and encoding.
 
+use std::borrow::Cow;
 use std::io::Cursor;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use tracing::debug;
 
 use crate::common::constants::{
-    BIDIRECTIONAL_STREAM, ERR_H3_FRAME_ERROR, ERR_LIB_INTERNAL_ERROR,
-    ERR_WT_APPLICATION_ERROR_FIRST, ERR_WT_APPLICATION_ERROR_LAST, MAX_STREAM_ID,
-    UNIDIRECTIONAL_STREAM,
+    ERR_H3_FRAME_ERROR, ERR_LIB_INTERNAL_ERROR, ERR_WT_APPLICATION_ERROR_FIRST,
+    ERR_WT_APPLICATION_ERROR_LAST, QUIC_MAX_STREAM_ID, QUIC_STREAM_DIRECTION_MASK,
+    QUIC_STREAM_INITIATOR_MASK,
 };
 use crate::common::types::{ErrorCode, Headers, StreamDirection, StreamId};
 
@@ -44,8 +46,8 @@ pub(super) fn can_send_on_stream(stream_id: StreamId, is_client: bool) -> bool {
         || (!is_client && is_server_initiated_stream(stream_id))
 }
 
-// Encodes a list of subprotocols into a Structured Fields String List.
-pub(super) fn encode_subprotocol_list(protocols: &[String]) -> Bytes {
+// Encodes a list of protocols into a Structured Fields String List.
+pub(super) fn encode_wt_protocol_list(protocols: &[String]) -> Result<Bytes, Cow<'static, str>> {
     let mut buf = BytesMut::new();
     for (i, p) in protocols.iter().enumerate() {
         if i > 0 {
@@ -58,11 +60,15 @@ pub(super) fn encode_subprotocol_list(protocols: &[String]) -> Bytes {
             }
             if (0x20..=0x7E).contains(&b) {
                 buf.put_u8(b);
+            } else {
+                debug!("wt_protocol validate invalid actual={b} expected=printable_ascii");
+                return Err("wt_protocol validate invalid".into());
             }
         }
         buf.put_u8(b'"');
     }
-    buf.freeze()
+
+    Ok(buf.freeze())
 }
 
 // Case-insensitive header search.
@@ -97,7 +103,7 @@ pub(super) fn http_to_wt_error(http_error_code: u64) -> Option<ErrorCode> {
 
 // Bidirectional stream check.
 pub(super) fn is_bidirectional_stream(stream_id: StreamId) -> bool {
-    (stream_id & UNIDIRECTIONAL_STREAM) == BIDIRECTIONAL_STREAM
+    (stream_id & QUIC_STREAM_DIRECTION_MASK) == 0
 }
 
 // Peer-initiated stream check.
@@ -116,7 +122,7 @@ pub(super) fn is_request_response_stream(stream_id: StreamId) -> bool {
 
 // Unidirectional stream check.
 pub(super) fn is_unidirectional_stream(stream_id: StreamId) -> bool {
-    (stream_id & UNIDIRECTIONAL_STREAM) == UNIDIRECTIONAL_STREAM
+    (stream_id & QUIC_STREAM_DIRECTION_MASK) != 0
 }
 
 // Header set merging operation.
@@ -171,7 +177,7 @@ pub(super) fn next_stream_limit(
 }
 
 // Parses a Structured Fields String List securely.
-pub(super) fn parse_subprotocol_list(header: &[u8]) -> Option<Vec<String>> {
+pub(super) fn parse_wt_protocol_list(header: &[u8]) -> Option<Vec<String>> {
     let mut result = Vec::new();
     let mut current = String::new();
     let mut in_string = false;
@@ -217,8 +223,8 @@ pub(super) fn parse_subprotocol_list(header: &[u8]) -> Option<Vec<String>> {
 }
 
 // Parses a single Structured Fields String securely.
-pub(super) fn parse_subprotocol_string(header: &[u8]) -> Option<String> {
-    let mut list = parse_subprotocol_list(header)?;
+pub(super) fn parse_wt_protocol_string(header: &[u8]) -> Option<String> {
+    let mut list = parse_wt_protocol_list(header)?;
     if list.len() == 1 { list.pop() } else { None }
 }
 
@@ -252,8 +258,8 @@ pub(super) fn read_varint(buf: &mut Cursor<&[u8]>) -> Result<u64, ErrorCode> {
 pub(super) fn stream_dir_from_id(stream_id: StreamId, is_client: bool) -> StreamDirection {
     if cfg!(debug_assertions) {
         debug_assert!(
-            validate_stream_id(stream_id).is_ok(),
-            "Invalid stream ID encountered in debug path"
+            stream_id <= QUIC_MAX_STREAM_ID,
+            "quic_stream validate exceeded actual={stream_id} expected=quic_max_stream_id"
         );
     }
 
@@ -264,42 +270,8 @@ pub(super) fn stream_dir_from_id(stream_id: StreamId, is_client: bool) -> Stream
         (true, true) => StreamDirection::Bidirectional,
         (true, false) => StreamDirection::SendOnly,
         (false, true) => StreamDirection::ReceiveOnly,
-        (false, false) => unreachable!("Valid QUIC stream ID must be sendable or receivable"),
+        (false, false) => unreachable!("quic_stream resolve failed"),
     }
-}
-
-// Control stream ID validation.
-pub(super) fn validate_control_stream_id(stream_id: StreamId) -> Result<(), String> {
-    if !is_request_response_stream(stream_id) {
-        return Err(format!(
-            "Invalid Session ID format: {stream_id} (must be client-initiated bidirectional)"
-        ));
-    }
-
-    Ok(())
-}
-
-// WebTransport stream ID validation.
-pub(super) fn validate_stream_id(stream_id: StreamId) -> Result<(), String> {
-    if stream_id > MAX_STREAM_ID {
-        return Err(format!("Stream ID {stream_id} out of valid range"));
-    }
-
-    Ok(())
-}
-
-// Unidirectional stream ID validation.
-pub(super) fn validate_unidirectional_stream_id(
-    stream_id: StreamId,
-    context: &str,
-) -> Result<(), String> {
-    if !is_unidirectional_stream(stream_id) {
-        return Err(format!(
-            "{context} stream ID {stream_id} must be unidirectional."
-        ));
-    }
-
-    Ok(())
 }
 
 // WebTransport to HTTP/3 error code mapping.
@@ -332,12 +304,12 @@ pub(super) fn write_varint(buf: &mut BytesMut, value: u64) -> Result<(), ErrorCo
 
 // Client initiated stream ID check.
 fn is_client_initiated_stream(stream_id: StreamId) -> bool {
-    (stream_id & 0x1) == 0
+    (stream_id & QUIC_STREAM_INITIATOR_MASK) == 0
 }
 
 // Server initiated stream ID check.
 fn is_server_initiated_stream(stream_id: StreamId) -> bool {
-    (stream_id & 0x1) == 1
+    (stream_id & QUIC_STREAM_INITIATOR_MASK) != 0
 }
 
 #[cfg(test)]

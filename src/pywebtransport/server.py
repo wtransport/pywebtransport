@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 from collections import Counter
 from dataclasses import asdict, dataclass
 from types import TracebackType
@@ -16,22 +18,21 @@ from pywebtransport.exceptions import ServerError
 from pywebtransport.manager.connection import ConnectionManager
 from pywebtransport.manager.session import SessionManager
 from pywebtransport.types import Address, ConnectionState, EventType, SessionState
-from pywebtransport.utils import get_logger, get_timestamp
 
 __all__: list[str] = ["ServerDiagnostics", "ServerStats", "WebTransportServer"]
 
-_logger = get_logger(name=__name__)
+_logger = logging.getLogger(name=__name__)
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
 class ServerDiagnostics:
     """Encapsulate a snapshot of server health."""
 
-    is_serving: bool
-    stats: ServerStats
     connection_states: dict[ConnectionState, int]
+    is_serving: bool
     max_connections: int
     session_states: dict[SessionState, int]
+    stats: ServerStats
 
     @property
     def issues(self) -> list[str]:
@@ -40,18 +41,19 @@ class ServerDiagnostics:
         stats_dict = self.stats.to_dict()
 
         if not self.is_serving:
-            issues.append("Server is not currently serving.")
+            issues.append("app_server validate failed")
 
         total_attempts = stats_dict.get("total_connections_attempted", 0)
         success_rate = stats_dict.get("success_rate", 1.0)
-        connections_rejected = stats_dict.get("connections_rejected", 0)
 
         if total_attempts > 20 and success_rate < 0.9:
-            issues.append(f"High connection rejection rate: {connections_rejected}/{total_attempts}")
+            issues.append(f"app_server validate exceeded actual={success_rate} expected=health_success_rate_threshold")
 
         active_connections = self.connection_states.get(ConnectionState.CONNECTED, 0)
-        if self.max_connections > 0 and (active_connections / max(1, self.max_connections)) > 0.9:
-            issues.append(f"High connection usage: {active_connections / self.max_connections:.1%}")
+        if self.max_connections > 0:
+            usage = active_connections / self.max_connections
+            if usage > 0.9:
+                issues.append(f"app_server validate exceeded actual={usage} expected=health_connection_usage_threshold")
 
         return issues
 
@@ -60,11 +62,11 @@ class ServerDiagnostics:
 class ServerStats:
     """Encapsulate server statistics."""
 
-    start_time: float | None = None
+    connection_errors: int = 0
     connections_accepted: int = 0
     connections_rejected: int = 0
-    connection_errors: int = 0
     protocol_errors: int = 0
+    start_time: float | None = None
 
     @property
     def success_rate(self) -> float:
@@ -84,7 +86,7 @@ class ServerStats:
         data = asdict(obj=self)
         data["total_connections_attempted"] = self.total_connections_attempted
         data["success_rate"] = self.success_rate
-        data["uptime"] = (get_timestamp() - self.start_time) if self.start_time is not None else 0.0
+        data["uptime"] = (time.perf_counter() - self.start_time) if self.start_time is not None else 0.0
         return data
 
 
@@ -96,9 +98,9 @@ class WebTransportServer(EventEmitter):
         config.validate()
 
         super().__init__(
-            max_queue_size=config.max_event_queue_size,
             max_listeners=config.max_event_listeners,
-            max_history=config.max_event_history_size,
+            max_history=config.event_history_capacity,
+            max_queue_size=config.event_queue_capacity,
         )
 
         self._config = config
@@ -114,7 +116,7 @@ class WebTransportServer(EventEmitter):
         self._controller: EndpointController | None = None
         self._stats = ServerStats()
 
-        _logger.info("WebTransport server initialized.")
+        _logger.info("app_server create")
 
     async def __aenter__(self) -> Self:
         """Enter the asynchronous context."""
@@ -179,22 +181,20 @@ class WebTransportServer(EventEmitter):
         session_states = Counter(sess.state for sess in sessions)
 
         return ServerDiagnostics(
-            is_serving=self.is_serving,
-            stats=self._stats,
             connection_states=dict(connection_states),
+            is_serving=self.is_serving,
             max_connections=self.config.max_connections,
             session_states=dict(session_states),
+            stats=self._stats,
         )
 
     async def listen(self, *, host: str | None = None, port: int | None = None) -> None:
         """Start the server and begin listening for connections."""
         if self._serving:
-            raise ServerError(message="Server is already serving")
+            raise ServerError(message="app_server validate failed")
 
         bind_host = host if host is not None else self._config.bind_host
         bind_port = port if port is not None else self._config.bind_port
-
-        _logger.info("Starting WebTransport server on %s:%s", bind_host, bind_port)
 
         try:
             listen_config = self._config
@@ -207,40 +207,30 @@ class WebTransportServer(EventEmitter):
 
             self._controller = controller
             self._serving = True
-            self._stats.start_time = get_timestamp()
+            self._stats.start_time = time.perf_counter()
 
-            addresses = self.local_addresses
-            if addresses:
-                addr_strs = [f"{ip}:{p}" for ip, p in addresses]
-                _logger.info("WebTransport server listening on %s", ", ".join(addr_strs))
-            else:
-                _logger.info("WebTransport server listening but no addresses acquired.")
+            _logger.info("app_server open")
 
         except FileNotFoundError as e:
-            _logger.critical("CA/Certificate/Key file error: %s", e)
-            raise ServerError(message=f"CA/Certificate/Key file error: {e}") from e
+            raise ServerError(message="sys_file open failed") from e
         except Exception as e:
-            _logger.critical("Failed to start server: %s", e, exc_info=True)
-            raise ServerError(message=f"Failed to start server: {e}") from e
+            raise ServerError.from_cause(message="app_server open failed", cause=e) from e
 
     async def serve_forever(self) -> None:
         """Run the server indefinitely until interrupted."""
         if not self._serving or self._controller is None:
-            raise ServerError(message="Server is not listening")
+            raise ServerError(message="app_server validate failed")
 
-        _logger.info("Server is running. Press Ctrl+C to stop.")
         try:
             await self._shutdown_event.wait()
         except asyncio.CancelledError:
-            _logger.info("serve_forever cancelled.")
+            pass
         except Exception as e:
-            _logger.error("Error during serve_forever wait: %s", e)
-        finally:
-            _logger.info("serve_forever loop finished.")
+            raise ServerError.from_cause(message="rt_event resolve failed", cause=e) from e
 
     async def _close_implementation(self) -> None:
         """Execute internal server closure logic."""
-        _logger.info("Closing WebTransport server...")
+        _logger.info("app_server drain")
         self._serving = False
         self._closing = True
 
@@ -256,7 +246,7 @@ class WebTransportServer(EventEmitter):
                 tg.create_task(coro=self._connection_manager.shutdown())
                 tg.create_task(coro=self._session_manager.shutdown())
         except* Exception as eg:
-            _logger.error("Errors occurred during manager shutdown: %s", eg.exceptions, exc_info=eg)
+            _logger.warning("app_manager close failed err=%s", eg.exceptions, exc_info=eg)
 
         if self._controller is not None:
             self._controller.close()
@@ -264,14 +254,12 @@ class WebTransportServer(EventEmitter):
         self._shutdown_event.set()
 
         self._closing = False
-        _logger.info("WebTransport server closed.")
+        _logger.info("app_server close")
 
     def _spawn_connection_callback(self, handle: int) -> None:
         """Instantiate a new WebTransportConnection from the spawned endpoint handle."""
-        _logger.debug("Creating WebTransportConnection for handle %d.", handle)
-
         if self._controller is None:
-            _logger.error("Spawn callback triggered but server is not fully initialized.")
+            _logger.warning("app_server validate failed")
             return
 
         try:
@@ -280,9 +268,9 @@ class WebTransportServer(EventEmitter):
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
         except Exception as e:
-            _logger.error("Error creating WebTransportConnection in callback: %s", e, exc_info=True)
+            _logger.warning("wt_connection open failed connection_handle=%d err=%s", handle, e, exc_info=True)
 
-    async def _initialize_and_register_connection(self, connection: WebTransportConnection) -> None:
+    async def _initialize_and_register_connection(self, *, connection: WebTransportConnection) -> None:
         """Initialize the connection engine and register it with the manager."""
 
         async def forward_session_request(event: Event) -> None:
@@ -294,7 +282,12 @@ class WebTransportServer(EventEmitter):
                 try:
                     await self._session_manager.add_session(session=session)
                 except Exception as e:
-                    _logger.error("Failed to register session %s: %s", session.session_id, e)
+                    _logger.warning(
+                        "app_manager register failed component=session session_id=%d err=%s",
+                        session.session_id,
+                        e,
+                        exc_info=True,
+                    )
 
             await self.emit(event_type=EventType.SESSION_REQUEST, data=event_data)
 
@@ -303,11 +296,15 @@ class WebTransportServer(EventEmitter):
         try:
             await self._connection_manager.add_connection(connection=connection)
             self._stats.connections_accepted += 1
-            _logger.info("New connection registered: %s", connection.connection_id)
         except Exception as e:
             self._stats.connections_rejected += 1
             self._stats.connection_errors += 1
-            _logger.error("Failed to initialize/register new connection: %s", e, exc_info=True)
+            _logger.warning(
+                "app_manager register failed component=connection connection_handle=%d err=%s",
+                connection.handle,
+                e,
+                exc_info=True,
+            )
             connection.events.off(event_type=EventType.SESSION_REQUEST, handler=forward_session_request)
             if not connection.is_closed:
                 await connection.close()
@@ -331,8 +328,6 @@ class WebTransportServer(EventEmitter):
         conn_count = len(self._connection_manager)
         sess_count = len(self._session_manager)
         return (
-            f"WebTransportServer(status={status}, "
-            f"addresses={address_str}, "
-            f"connections={conn_count}, "
+            f"WebTransportServer(status={status}, addresses={address_str}, connections={conn_count}, "
             f"sessions={sess_count})"
         )

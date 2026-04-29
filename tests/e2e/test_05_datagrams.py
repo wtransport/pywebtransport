@@ -10,6 +10,7 @@ from typing import Final
 
 from pywebtransport import ClientConfig, ConnectionError, Event, TimeoutError, WebTransportClient, WebTransportError
 from pywebtransport.types import EventType
+from pywebtransport.utils import init_tracing
 
 SERVER_HOST: Final[str] = "127.0.0.1"
 SERVER_PORT: Final[int] = 4433
@@ -19,6 +20,7 @@ DEBUG_MODE: Final[bool] = "--debug" in sys.argv
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 if DEBUG_MODE:
     logging.getLogger().setLevel(level=logging.DEBUG)
+    init_tracing()
 
 logger = logging.getLogger(name="test_datagrams")
 
@@ -124,7 +126,7 @@ async def test_multiple_datagrams() -> bool:
 
 async def test_datagram_sizes() -> bool:
     logger.info("--- Test 05C: Datagram Size Limits ---")
-    config = ClientConfig(verify_mode=ssl.CERT_NONE, max_datagram_size=1200)
+    config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
@@ -136,12 +138,8 @@ async def test_datagram_sizes() -> bool:
                 return False
 
             diags = await connection.diagnostics()
-            local_max = diags.max_datagram_size
-            remote_max = diags.remote_max_datagram_frame_size
-            logger.info("Max datagram size from diagnostics: local=%s, remote=%s", local_max, remote_max)
-
-            if local_max != 1200:
-                logger.warning("Engine state max_datagram_size (%s) mismatch config (%s)", local_max, 1200)
+            remote_max = diags.peer_max_datagram_frame_size
+            logger.info("Max datagram size from diagnostics: remote=%d", remote_max)
 
             if remote_max is None:
                 logger.error(
@@ -156,7 +154,7 @@ async def test_datagram_sizes() -> bool:
                 logger.error("FAILURE: Sending oversized datagram should have raised an exception.")
                 return False
             except WebTransportError as e:
-                if "Datagram size" in str(e) and "exceeds limit" in str(e):
+                if "wt_datagram validate exceeded" in str(e):
                     logger.info("SUCCESS: Oversized datagram correctly raised WebTransportError: %s", e)
                     return True
                 else:
@@ -171,7 +169,7 @@ async def test_datagram_sizes() -> bool:
 
 
 async def test_datagram_burst() -> bool:
-    logger.info("--- Test 05G: Datagram Burst ---")
+    logger.info("--- Test 05D: Datagram Burst ---")
     burst_size = 50
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 

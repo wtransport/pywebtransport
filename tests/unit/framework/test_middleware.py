@@ -1,7 +1,6 @@
-"""Unit tests for the pywebtransport.server.middleware module."""
+"""Unit tests for the pywebtransport.framework.middleware module."""
 
 import asyncio
-import http
 import logging
 from collections import deque
 from collections.abc import AsyncGenerator
@@ -13,16 +12,15 @@ from _pytest.logging import LogCaptureFixture
 from pytest_asyncio import fixture as asyncio_fixture
 from pytest_mock import MockerFixture
 
-from pywebtransport import ServerError, WebTransportSession
-from pywebtransport.server import (
+from pywebtransport import Headers, ServerError, WebTransportSession
+from pywebtransport.framework import (
     MiddlewareManager,
     MiddlewareRejected,
     create_auth_middleware,
     create_cors_middleware,
-    create_logging_middleware,
     create_rate_limit_middleware,
 )
-from pywebtransport.server.middleware import RateLimiter
+from pywebtransport.framework.middleware import RateLimiter, _find_header_str
 
 
 class TestMiddlewareFactories:
@@ -43,7 +41,7 @@ class TestMiddlewareFactories:
         with pytest.raises(expected_exception=MiddlewareRejected) as exc_info:
             await auth_middleware(session=mock_session)
 
-        assert exc_info.value.status_code == http.HTTPStatus.UNAUTHORIZED
+        assert exc_info.value.status_code == 401
         assert exc_info.value.headers == {}
         auth_handler.assert_awaited_once_with(headers=mock_session.headers)
 
@@ -55,7 +53,7 @@ class TestMiddlewareFactories:
         with pytest.raises(expected_exception=MiddlewareRejected) as exc_info:
             await auth_middleware(session=mock_session)
 
-        assert exc_info.value.status_code == http.HTTPStatus.INTERNAL_SERVER_ERROR
+        assert exc_info.value.status_code == 500
 
     @pytest.mark.asyncio
     async def test_create_auth_middleware_success(self, mock_session: Any, mocker: MockerFixture) -> None:
@@ -88,30 +86,7 @@ class TestMiddlewareFactories:
         else:
             with pytest.raises(expected_exception=MiddlewareRejected) as exc_info:
                 await cors_middleware(session=mock_session)
-            assert exc_info.value.status_code == http.HTTPStatus.FORBIDDEN
-
-    @pytest.mark.asyncio
-    async def test_create_logging_middleware(self, mock_session: Any, caplog: LogCaptureFixture) -> None:
-        caplog.set_level(level=logging.INFO)
-        logging_middleware = create_logging_middleware()
-
-        await logging_middleware(session=mock_session)
-
-        assert "Session request: path='/test' from=1.2.3.4:12345" in caplog.text
-
-    @pytest.mark.asyncio
-    async def test_create_logging_middleware_no_remote_address(
-        self, mocker: MockerFixture, caplog: LogCaptureFixture
-    ) -> None:
-        caplog.set_level(level=logging.INFO)
-        session = mocker.Mock(spec=WebTransportSession)
-        session.path = "/no-addr"
-        session.remote_address = None
-        logging_middleware = create_logging_middleware()
-
-        await logging_middleware(session=session)
-
-        assert "from=unknown" in caplog.text
+            assert exc_info.value.status_code == 403
 
     def test_create_rate_limit_middleware(self) -> None:
         limiter = create_rate_limit_middleware(
@@ -125,16 +100,11 @@ class TestMiddlewareFactories:
         assert limiter._max_tracked_ips == 500
 
     @pytest.mark.asyncio
-    async def test_middleware_with_generic_session(self, caplog: LogCaptureFixture) -> None:
-        caplog.set_level(level=logging.INFO)
+    async def test_middleware_with_generic_session(self) -> None:
         generic_session = MagicMock()
         generic_session.path = "/generic"
         generic_session.headers = {}
         generic_session.remote_address = None
-
-        logging_middleware = create_logging_middleware()
-        await logging_middleware(session=generic_session)
-        assert "Session request: path='/generic' from=unknown" in caplog.text
 
         async with RateLimiter() as rate_limiter:
             await rate_limiter(session=generic_session)
@@ -178,9 +148,7 @@ class TestMiddlewareManager:
         middleware1.assert_awaited_once_with(session=mock_session)
         middleware2.assert_awaited_once_with(session=mock_session)
 
-    async def test_process_request_exception(
-        self, mock_session: Any, mocker: MockerFixture, caplog: LogCaptureFixture
-    ) -> None:
+    async def test_process_request_exception(self, mock_session: Any, mocker: MockerFixture) -> None:
         manager = MiddlewareManager()
         middleware1 = mocker.AsyncMock(side_effect=ValueError("Middleware error"))
         manager.add_middleware(middleware=middleware1)
@@ -188,13 +156,12 @@ class TestMiddlewareManager:
         with pytest.raises(expected_exception=MiddlewareRejected) as exc_info:
             await manager.process_request(session=mock_session)
 
-        assert exc_info.value.status_code == http.HTTPStatus.INTERNAL_SERVER_ERROR
-        assert "Middleware error: Middleware error" in caplog.text
+        assert exc_info.value.status_code == 500
 
     async def test_process_request_rejection(self, mock_session: Any, mocker: MockerFixture) -> None:
         manager = MiddlewareManager()
         middleware1 = mocker.AsyncMock(return_value=None)
-        middleware2 = mocker.AsyncMock(side_effect=MiddlewareRejected(status_code=http.HTTPStatus.FORBIDDEN))
+        middleware2 = mocker.AsyncMock(side_effect=MiddlewareRejected(status_code=403))
         middleware3 = mocker.AsyncMock(return_value=None)
         manager.add_middleware(middleware=middleware1)
         manager.add_middleware(middleware=middleware2)
@@ -203,7 +170,7 @@ class TestMiddlewareManager:
         with pytest.raises(expected_exception=MiddlewareRejected) as exc_info:
             await manager.process_request(session=mock_session)
 
-        assert exc_info.value.status_code == http.HTTPStatus.FORBIDDEN
+        assert exc_info.value.status_code == 403
         middleware1.assert_awaited_once_with(session=mock_session)
         middleware2.assert_awaited_once_with(session=mock_session)
         middleware3.assert_not_called()
@@ -262,7 +229,7 @@ class TestRateLimiter:
 
             await rl(session=session)
 
-            assert "Rate limiter IP tracking limit (2) reached" in caplog.text
+            assert "app_middleware validate exceeded actual=2 limit=2" in caplog.text
             assert "1.1.1.1" not in rl._requests
             assert "3.3.3.3" in rl._requests
 
@@ -291,7 +258,7 @@ class TestRateLimiter:
             await proceed_event.wait()
             await asyncio.sleep(delay=0)
 
-            assert "Cleaned up 2 stale IP entries" in caplog.text
+            assert "app_middleware evict count=2" in caplog.text
             assert rl._lock is not None
             async with rl._lock:
                 assert "active_ip" in rl._requests
@@ -348,16 +315,16 @@ class TestRateLimiter:
             with pytest.raises(expected_exception=asyncio.CancelledError):
                 await rate_limiter._periodic_cleanup()
 
-        assert "Error in RateLimiter cleanup task: Cleanup error" in caplog.text
+        assert "rt_task failed err=Cleanup error" in caplog.text
 
     async def test_rate_limiter_call_not_activated(self, mock_session: Any) -> None:
         limiter = RateLimiter()
 
-        with pytest.raises(expected_exception=ServerError, match="RateLimiter has not been activated"):
+        with pytest.raises(expected_exception=ServerError, match="app_middleware validate failed expected=open"):
             await limiter(session=mock_session)
 
     async def test_rate_limiting_logic(
-        self, mock_session: Any, mocker: MockerFixture, caplog: LogCaptureFixture, rate_limiter: RateLimiter
+        self, mock_session: Any, mocker: MockerFixture, rate_limiter: RateLimiter
     ) -> None:
         mock_time = mocker.patch(target="time.perf_counter")
 
@@ -371,10 +338,9 @@ class TestRateLimiter:
         with pytest.raises(expected_exception=MiddlewareRejected) as exc_info:
             await rate_limiter(session=mock_session)
 
-        assert exc_info.value.status_code == http.HTTPStatus.TOO_MANY_REQUESTS
+        assert exc_info.value.status_code == 429
         headers = cast(dict[str, str], exc_info.value.headers)
         assert headers["retry-after"] == "10"
-        assert "Rate limit exceeded for IP 1.2.3.4" in caplog.text
 
         mock_time.return_value = 110.1
         await rate_limiter(session=mock_session)
@@ -406,3 +372,70 @@ class TestRateLimiter:
         rate_limiter._start_cleanup_task()
 
         assert mock_tg.create_task.call_count == 2
+
+
+def test_find_header_str_decoding() -> None:
+    headers: Headers = {b"content-type": b"application/json"}
+
+    result = _find_header_str(headers=headers, key="content-type")
+
+    assert result == "application/json"
+
+
+def test_find_header_str_default() -> None:
+    headers: Headers = {"host": "example.com"}
+
+    result = _find_header_str(headers=headers, key="missing", default="default")
+
+    assert result == "default"
+
+
+def test_find_header_str_dual_mode_dict() -> None:
+    headers: Headers = {b"content-length": b"123", "server": "test"}
+
+    val_1 = _find_header_str(headers=headers, key="content-length")
+    val_2 = _find_header_str(headers=headers, key="server")
+
+    assert val_1 == "123"
+    assert val_2 == "test"
+
+
+def test_find_header_str_dual_mode_list() -> None:
+    headers: Headers = [(b"content-length", b"123"), ("server", "test")]
+
+    val_1 = _find_header_str(headers=headers, key="content-length")
+    val_2 = _find_header_str(headers=headers, key="server")
+
+    assert val_1 == "123"
+    assert val_2 == "test"
+
+
+def test_find_header_str_existing_string() -> None:
+    headers: Headers = {"user-agent": "test-client"}
+
+    result = _find_header_str(headers=headers, key="user-agent")
+
+    assert result == "test-client"
+
+
+def test_find_header_str_from_dict() -> None:
+    headers: Headers = {"content-type": "application/json"}
+
+    assert _find_header_str(headers=headers, key="content-type") == "application/json"
+    assert _find_header_str(headers=headers, key="Unknown") is None
+    assert _find_header_str(headers=headers, key="Unknown", default="default") == "default"
+
+
+def test_find_header_str_from_list() -> None:
+    headers: Headers = [("Content-Type", "application/json")]
+
+    assert _find_header_str(headers=headers, key="content-type") == "application/json"
+    assert _find_header_str(headers=headers, key="Unknown") is None
+
+
+def test_find_header_str_invalid_utf8() -> None:
+    headers: Headers = {b"key": b"\xff\xfe"}
+
+    result = _find_header_str(headers=headers, key="key", default="fallback")
+
+    assert result == "fallback"

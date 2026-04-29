@@ -8,14 +8,6 @@ use crate::common::constants;
 pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("DEFAULT_ALPN_PROTOCOLS", constants::DEFAULT_ALPN_PROTOCOLS)?;
     m.add("DEFAULT_BIND_HOST", constants::DEFAULT_BIND_HOST)?;
-    m.add(
-        "DEFAULT_CLIENT_MAX_CONNECTIONS",
-        constants::DEFAULT_CLIENT_MAX_CONNECTIONS,
-    )?;
-    m.add(
-        "DEFAULT_CLIENT_MAX_SESSIONS",
-        constants::DEFAULT_CLIENT_MAX_SESSIONS,
-    )?;
     m.add("DEFAULT_CLOSE_TIMEOUT", constants::DEFAULT_CLOSE_TIMEOUT)?;
     m.add(
         "DEFAULT_CONGESTION_CONTROL_ALGORITHM",
@@ -35,16 +27,20 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?;
     m.add("DEFAULT_DEV_PORT", constants::DEFAULT_DEV_PORT)?;
     m.add(
-        "DEFAULT_ENABLE_STATELESS_RETRY",
-        constants::DEFAULT_ENABLE_STATELESS_RETRY,
+        "DEFAULT_EVENT_HISTORY_CAPACITY",
+        constants::DEFAULT_EVENT_HISTORY_CAPACITY,
     )?;
     m.add(
-        "DEFAULT_FLOW_CONTROL_WINDOW_AUTO_SCALE",
-        constants::DEFAULT_FLOW_CONTROL_WINDOW_AUTO_SCALE,
+        "DEFAULT_EVENT_QUEUE_CAPACITY",
+        constants::DEFAULT_EVENT_QUEUE_CAPACITY,
     )?;
     m.add(
-        "DEFAULT_FLOW_CONTROL_WINDOW_SIZE",
-        constants::DEFAULT_FLOW_CONTROL_WINDOW_SIZE,
+        "DEFAULT_FLOW_CONTROL_WINDOW",
+        constants::DEFAULT_FLOW_CONTROL_WINDOW,
+    )?;
+    m.add(
+        "DEFAULT_FLOW_CONTROL_WINDOW_AUTO_SCALE_ENABLED",
+        constants::DEFAULT_FLOW_CONTROL_WINDOW_AUTO_SCALE_ENABLED,
     )?;
     m.add(
         "DEFAULT_INITIAL_MAX_DATA",
@@ -58,55 +54,51 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         "DEFAULT_INITIAL_MAX_STREAMS_UNI",
         constants::DEFAULT_INITIAL_MAX_STREAMS_UNI,
     )?;
-    m.add("DEFAULT_KEEP_ALIVE", constants::DEFAULT_KEEP_ALIVE)?;
+    m.add(
+        "DEFAULT_KEEP_ALIVE_INTERVAL",
+        constants::DEFAULT_KEEP_ALIVE_INTERVAL,
+    )?;
     m.add("DEFAULT_LOG_LEVEL", constants::DEFAULT_LOG_LEVEL)?;
     m.add(
         "DEFAULT_MAX_CAPSULE_SIZE",
         constants::DEFAULT_MAX_CAPSULE_SIZE,
     )?;
     m.add(
-        "DEFAULT_MAX_CONNECTION_RETRIES",
-        constants::DEFAULT_MAX_CONNECTION_RETRIES,
+        "DEFAULT_MAX_CONNECTIONS",
+        constants::DEFAULT_MAX_CONNECTIONS,
     )?;
     m.add(
         "DEFAULT_MAX_DATAGRAM_SIZE",
         constants::DEFAULT_MAX_DATAGRAM_SIZE,
     )?;
     m.add(
-        "DEFAULT_MAX_EVENT_HISTORY_SIZE",
-        constants::DEFAULT_MAX_EVENT_HISTORY_SIZE,
-    )?;
-    m.add(
         "DEFAULT_MAX_EVENT_LISTENERS",
         constants::DEFAULT_MAX_EVENT_LISTENERS,
     )?;
     m.add(
-        "DEFAULT_MAX_EVENT_QUEUE_SIZE",
-        constants::DEFAULT_MAX_EVENT_QUEUE_SIZE,
+        "DEFAULT_MAX_FIELD_SECTION_SIZE",
+        constants::DEFAULT_MAX_FIELD_SECTION_SIZE,
     )?;
     m.add(
-        "DEFAULT_MAX_MESSAGE_SIZE",
-        constants::DEFAULT_MAX_MESSAGE_SIZE,
+        "DEFAULT_MAX_SESSION_PENDING_EVENTS",
+        constants::DEFAULT_MAX_SESSION_PENDING_EVENTS,
+    )?;
+    m.add("DEFAULT_MAX_SESSIONS", constants::DEFAULT_MAX_SESSIONS)?;
+    m.add(
+        "DEFAULT_MAX_STREAM_READ_BUFFER_SIZE",
+        constants::DEFAULT_MAX_STREAM_READ_BUFFER_SIZE,
     )?;
     m.add(
-        "DEFAULT_MAX_PENDING_EVENTS_PER_SESSION",
-        constants::DEFAULT_MAX_PENDING_EVENTS_PER_SESSION,
-    )?;
-    m.add(
-        "DEFAULT_MAX_RETRY_DELAY",
-        constants::DEFAULT_MAX_RETRY_DELAY,
-    )?;
-    m.add(
-        "DEFAULT_MAX_STREAM_READ_BUFFER",
-        constants::DEFAULT_MAX_STREAM_READ_BUFFER,
-    )?;
-    m.add(
-        "DEFAULT_MAX_STREAM_WRITE_BUFFER",
-        constants::DEFAULT_MAX_STREAM_WRITE_BUFFER,
+        "DEFAULT_MAX_STREAM_WRITE_BUFFER_SIZE",
+        constants::DEFAULT_MAX_STREAM_WRITE_BUFFER_SIZE,
     )?;
     m.add(
         "DEFAULT_MAX_TOTAL_PENDING_EVENTS",
         constants::DEFAULT_MAX_TOTAL_PENDING_EVENTS,
+    )?;
+    m.add(
+        "DEFAULT_MAX_TRANSPORT_STREAMS",
+        constants::DEFAULT_MAX_TRANSPORT_STREAMS,
     )?;
     m.add(
         "DEFAULT_PENDING_EVENT_TTL",
@@ -117,41 +109,29 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         "DEFAULT_RESOURCE_CLEANUP_INTERVAL",
         constants::DEFAULT_RESOURCE_CLEANUP_INTERVAL,
     )?;
-    m.add("DEFAULT_RETRY_BACKOFF", constants::DEFAULT_RETRY_BACKOFF)?;
-    m.add("DEFAULT_RETRY_DELAY", constants::DEFAULT_RETRY_DELAY)?;
-    m.add(
-        "DEFAULT_SERVER_MAX_CONNECTIONS",
-        constants::DEFAULT_SERVER_MAX_CONNECTIONS,
-    )?;
-    m.add(
-        "DEFAULT_SERVER_MAX_SESSIONS",
-        constants::DEFAULT_SERVER_MAX_SESSIONS,
-    )?;
     m.add(
         "DEFAULT_STREAM_CREATION_TIMEOUT",
         constants::DEFAULT_STREAM_CREATION_TIMEOUT,
     )?;
-    m.add(
-        "DEFAULT_TRANSPORT_STREAMS_CAP",
-        constants::DEFAULT_TRANSPORT_STREAMS_CAP,
-    )?;
     m.add("DEFAULT_WRITE_TIMEOUT", constants::DEFAULT_WRITE_TIMEOUT)?;
-    m.add(
-        "SUPPORTED_CONGESTION_CONTROL_ALGORITHMS",
-        constants::SUPPORTED_CONGESTION_CONTROL_ALGORITHMS,
-    )?;
-    m.add("ERR_AEAD_LIMIT_REACHED", constants::ERR_AEAD_LIMIT_REACHED)?;
     m.add(
         "ERR_APP_AUTHENTICATION_FAILED",
         constants::ERR_APP_AUTHENTICATION_FAILED,
     )?;
+    m.add("ERR_APP_CANCELLED", constants::ERR_APP_CANCELLED)?;
     m.add(
         "ERR_APP_CONNECTION_TIMEOUT",
         constants::ERR_APP_CONNECTION_TIMEOUT,
     )?;
+    m.add("ERR_APP_GENERIC_ERROR", constants::ERR_APP_GENERIC_ERROR)?;
     m.add(
         "ERR_APP_INVALID_REQUEST",
         constants::ERR_APP_INVALID_REQUEST,
+    )?;
+    m.add("ERR_APP_NO_ERROR", constants::ERR_APP_NO_ERROR)?;
+    m.add(
+        "ERR_APP_OPERATION_TIMEOUT",
+        constants::ERR_APP_OPERATION_TIMEOUT,
     )?;
     m.add(
         "ERR_APP_PERMISSION_DENIED",
@@ -164,22 +144,6 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add(
         "ERR_APP_SERVICE_UNAVAILABLE",
         constants::ERR_APP_SERVICE_UNAVAILABLE,
-    )?;
-    m.add("ERR_APPLICATION_ERROR", constants::ERR_APPLICATION_ERROR)?;
-    m.add(
-        "ERR_CONNECTION_ID_LIMIT_ERROR",
-        constants::ERR_CONNECTION_ID_LIMIT_ERROR,
-    )?;
-    m.add("ERR_CONNECTION_REFUSED", constants::ERR_CONNECTION_REFUSED)?;
-    m.add(
-        "ERR_CRYPTO_BUFFER_EXCEEDED",
-        constants::ERR_CRYPTO_BUFFER_EXCEEDED,
-    )?;
-    m.add("ERR_FINAL_SIZE_ERROR", constants::ERR_FINAL_SIZE_ERROR)?;
-    m.add("ERR_FLOW_CONTROL_ERROR", constants::ERR_FLOW_CONTROL_ERROR)?;
-    m.add(
-        "ERR_FRAME_ENCODING_ERROR",
-        constants::ERR_FRAME_ENCODING_ERROR,
     )?;
     m.add(
         "ERR_H3_CLOSED_CRITICAL_STREAM",
@@ -226,9 +190,6 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         "ERR_H3_VERSION_FALLBACK",
         constants::ERR_H3_VERSION_FALLBACK,
     )?;
-    m.add("ERR_INTERNAL_ERROR", constants::ERR_INTERNAL_ERROR)?;
-    m.add("ERR_INVALID_TOKEN", constants::ERR_INVALID_TOKEN)?;
-    m.add("ERR_KEY_UPDATE_ERROR", constants::ERR_KEY_UPDATE_ERROR)?;
     m.add(
         "ERR_LIB_CONNECTION_STATE_ERROR",
         constants::ERR_LIB_CONNECTION_STATE_ERROR,
@@ -242,9 +203,6 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         "ERR_LIB_STREAM_STATE_ERROR",
         constants::ERR_LIB_STREAM_STATE_ERROR,
     )?;
-    m.add("ERR_NO_ERROR", constants::ERR_NO_ERROR)?;
-    m.add("ERR_NO_VIABLE_PATH", constants::ERR_NO_VIABLE_PATH)?;
-    m.add("ERR_PROTOCOL_VIOLATION", constants::ERR_PROTOCOL_VIOLATION)?;
     m.add(
         "ERR_QPACK_DECODER_STREAM_ERROR",
         constants::ERR_QPACK_DECODER_STREAM_ERROR,
@@ -257,11 +215,67 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         "ERR_QPACK_ENCODER_STREAM_ERROR",
         constants::ERR_QPACK_ENCODER_STREAM_ERROR,
     )?;
-    m.add("ERR_STREAM_LIMIT_ERROR", constants::ERR_STREAM_LIMIT_ERROR)?;
-    m.add("ERR_STREAM_STATE_ERROR", constants::ERR_STREAM_STATE_ERROR)?;
     m.add(
-        "ERR_TRANSPORT_PARAMETER_ERROR",
-        constants::ERR_TRANSPORT_PARAMETER_ERROR,
+        "ERR_QUIC_AEAD_LIMIT_REACHED",
+        constants::ERR_QUIC_AEAD_LIMIT_REACHED,
+    )?;
+    m.add(
+        "ERR_QUIC_APPLICATION_ERROR",
+        constants::ERR_QUIC_APPLICATION_ERROR,
+    )?;
+    m.add(
+        "ERR_QUIC_CONNECTION_ID_LIMIT_ERROR",
+        constants::ERR_QUIC_CONNECTION_ID_LIMIT_ERROR,
+    )?;
+    m.add(
+        "ERR_QUIC_CONNECTION_REFUSED",
+        constants::ERR_QUIC_CONNECTION_REFUSED,
+    )?;
+    m.add(
+        "ERR_QUIC_CRYPTO_BUFFER_EXCEEDED",
+        constants::ERR_QUIC_CRYPTO_BUFFER_EXCEEDED,
+    )?;
+    m.add(
+        "ERR_QUIC_FINAL_SIZE_ERROR",
+        constants::ERR_QUIC_FINAL_SIZE_ERROR,
+    )?;
+    m.add(
+        "ERR_QUIC_FLOW_CONTROL_ERROR",
+        constants::ERR_QUIC_FLOW_CONTROL_ERROR,
+    )?;
+    m.add(
+        "ERR_QUIC_FRAME_ENCODING_ERROR",
+        constants::ERR_QUIC_FRAME_ENCODING_ERROR,
+    )?;
+    m.add(
+        "ERR_QUIC_INTERNAL_ERROR",
+        constants::ERR_QUIC_INTERNAL_ERROR,
+    )?;
+    m.add("ERR_QUIC_INVALID_TOKEN", constants::ERR_QUIC_INVALID_TOKEN)?;
+    m.add(
+        "ERR_QUIC_KEY_UPDATE_ERROR",
+        constants::ERR_QUIC_KEY_UPDATE_ERROR,
+    )?;
+    m.add("ERR_QUIC_NO_ERROR", constants::ERR_QUIC_NO_ERROR)?;
+    m.add(
+        "ERR_QUIC_NO_VIABLE_PATH",
+        constants::ERR_QUIC_NO_VIABLE_PATH,
+    )?;
+    m.add(
+        "ERR_QUIC_PROTOCOL_VIOLATION",
+        constants::ERR_QUIC_PROTOCOL_VIOLATION,
+    )?;
+    m.add(
+        "ERR_QUIC_STREAM_LIMIT_ERROR",
+        constants::ERR_QUIC_STREAM_LIMIT_ERROR,
+    )?;
+    m.add(
+        "ERR_QUIC_STREAM_STATE_ERROR",
+        constants::ERR_QUIC_STREAM_STATE_ERROR,
+    )?;
+    m.add(
+        "ERR_QUIC_TRANSPORT_PARAMETER_ERROR",
+        constants::ERR_QUIC_TRANSPORT_PARAMETER_ERROR,
     )?;
     m.add("ERR_WT_ALPN_ERROR", constants::ERR_WT_ALPN_ERROR)?;
     m.add(
@@ -285,11 +299,8 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         constants::ERR_WT_REQUIREMENTS_NOT_MET,
     )?;
     m.add("ERR_WT_SESSION_GONE", constants::ERR_WT_SESSION_GONE)?;
-    m.add("MAX_DATAGRAM_SIZE", constants::MAX_DATAGRAM_SIZE)?;
-    m.add(
-        "MAX_PROTOCOL_STREAMS_LIMIT",
-        constants::MAX_PROTOCOL_STREAMS_LIMIT,
-    )?;
+    m.add("UDP_MAX_DATAGRAM_SIZE", constants::UDP_MAX_DATAGRAM_SIZE)?;
+    m.add("WT_STREAMS_LIMIT", constants::WT_STREAMS_LIMIT)?;
 
     Ok(())
 }

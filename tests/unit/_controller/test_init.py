@@ -12,7 +12,7 @@ class TestControllerInit:
     def test_abi_version_match(self) -> None:
         with (
             patch(target="pywebtransport._controller.abi.ABI_VERSION", new=2),
-            patch(target="pywebtransport._wtransport.ABI_VERSION", new=2),
+            patch(target="pywebtransport._pywebtransport.ABI_VERSION", new=2),
         ):
             if "pywebtransport._controller" in sys.modules:
                 controller_module = importlib.reload(sys.modules["pywebtransport._controller"])
@@ -24,9 +24,11 @@ class TestControllerInit:
     def test_abi_version_mismatch_raises_error(self) -> None:
         with (
             patch(target="pywebtransport._controller.abi.ABI_VERSION", new=2),
-            patch(target="pywebtransport._wtransport.ABI_VERSION", new=1),
+            patch(target="pywebtransport._pywebtransport.ABI_VERSION", new=1),
         ):
-            with pytest.raises(expected_exception=RuntimeError, match="ABI version mismatch: expected 2, got 1."):
+            with pytest.raises(
+                expected_exception=RuntimeError, match="abi_version validate invalid actual=1 expected=py_abi_version"
+            ):
                 if "pywebtransport._controller" in sys.modules:
                     importlib.reload(sys.modules["pywebtransport._controller"])
                 else:

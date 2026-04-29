@@ -23,19 +23,24 @@ class UserEvent[T](ProtocolEvent):
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
-class ConnectionClose(UserEvent[None]):
-    """User or internal command to close the entire connection."""
+class UserAcceptSession(UserEvent[None]):
+    """User command to accept a pending session."""
+
+    session_id: SessionId
+    wt_protocol: str | None = None
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class UserCloseConnection(UserEvent[None]):
+    """User command to close the entire connection."""
 
     error_code: ErrorCode
     reason: str | None
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
-class UserAcceptSession(UserEvent[None]):
-    """User command to accept a pending session."""
-
-    session_id: SessionId
-    subprotocol: str | None = None
+class UserCloseConnectionGracefully(UserEvent[None]):
+    """User command to gracefully close the connection."""
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -48,17 +53,12 @@ class UserCloseSession(UserEvent[None]):
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
-class UserConnectionGracefulClose(UserEvent[None]):
-    """User command to gracefully close the connection."""
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
 class UserCreateSession(UserEvent[SessionId]):
     """User command to create a new WebTransport session."""
 
     path: str
     headers: Headers
-    subprotocols: list[str] | None = None
+    wt_available_protocols: list[str] | None = None
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -116,6 +116,14 @@ class UserGrantStreamsCredit(UserEvent[None]):
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
+class UserReadStream(UserEvent[bytes]):
+    """User command to read data from a stream."""
+
+    stream_id: StreamId
+    max_bytes: int | None
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
 class UserRejectSession(UserEvent[None]):
     """User command to reject a pending session."""
 
@@ -154,11 +162,3 @@ class UserStopSending(UserEvent[None]):
 
     stream_id: StreamId
     error_code: ErrorCode
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class UserStreamRead(UserEvent[bytes]):
-    """User command to read data from a stream."""
-
-    stream_id: StreamId
-    max_bytes: int | None

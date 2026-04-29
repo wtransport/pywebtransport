@@ -3,128 +3,91 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use rstest::*;
-
 use super::*;
 
+fn assert_send_sync<T: Send + Sync>() {}
+
 #[test]
-fn test_config_clone_trait_behavior_success() {
-    let original_client = RustClientConfig {
-        verify_server_certificate: false,
-        ..Default::default()
+fn test_config_structs_are_thread_safe() {
+    assert_send_sync::<RustBaseConfig>();
+    assert_send_sync::<RustClientConfig>();
+    assert_send_sync::<RustServerConfig>();
+}
+
+#[test]
+fn test_config_memory_footprint() {
+    let base_size = size_of::<RustBaseConfig>();
+    assert!(
+        base_size <= 256,
+        "RustBaseConfig is too large ({base_size} bytes). Consider boxing large fields."
+    );
+
+    let client_size = size_of::<RustClientConfig>();
+    assert!(
+        client_size <= 512,
+        "RustClientConfig is too large ({client_size} bytes)."
+    );
+
+    let server_size = size_of::<RustServerConfig>();
+    assert!(
+        server_size <= 512,
+        "RustServerConfig is too large ({server_size} bytes)."
+    );
+}
+
+#[test]
+fn test_config_structs_instantiation_and_derives() {
+    let base = RustBaseConfig {
+        alpn_protocols: vec!["h3".to_owned()],
+        congestion_control_algorithm: "cubic".to_owned(),
+        connection_idle_timeout: Duration::from_secs(60),
+        flow_control_window: 1_048_576,
+        flow_control_window_auto_scale_enabled: true,
+        initial_max_data: 10_485_760,
+        initial_max_streams_bidi: 100,
+        initial_max_streams_uni: 100,
+        keep_alive_interval: Some(Duration::from_secs(10)),
+        max_capsule_size: 1500,
+        max_datagram_size: 1200,
+        max_field_section_size: 65536,
+        max_session_pending_events: 100,
+        max_sessions: 100,
+        max_stream_read_buffer_size: 1_048_576,
+        max_stream_write_buffer_size: 1_048_576,
+        max_total_pending_events: 1000,
+        max_transport_streams: 256,
+        pending_event_ttl: Duration::from_secs(30),
+        resource_cleanup_interval: Duration::from_secs(5),
     };
-    let cert_path = PathBuf::from("cert.pem");
-    let key_path = PathBuf::from("key.pem");
-    let original_server = RustServerConfig {
-        bind_host: "localhost".to_owned(),
+
+    let server = RustServerConfig {
+        base: base.clone(),
+        bind_host: "127.0.0.1".to_owned(),
         bind_port: 4433,
         ca_certs: None,
-        certfile: cert_path.clone(),
-        keyfile: key_path.clone(),
+        certfile: PathBuf::from("/dummy/cert.pem"),
+        keyfile: PathBuf::from("/dummy/key.pem"),
         require_client_auth: false,
-        transport: TransportConfig::default(),
     };
 
-    let cloned_client = original_client.clone();
-    let cloned_server = original_server.clone();
+    assert_eq!(server.bind_port, 4433);
+    assert!(server.certfile.ends_with("cert.pem"));
 
-    assert_eq!(
-        original_client.verify_server_certificate,
-        cloned_client.verify_server_certificate
-    );
-    assert_eq!(format!("{original_client:?}"), format!("{cloned_client:?}"));
-    assert_eq!(original_server.bind_port, cloned_server.bind_port);
-    assert_eq!(original_server.certfile, cloned_server.certfile);
-    assert_eq!(format!("{original_server:?}"), format!("{cloned_server:?}"));
-}
+    let server_debug_str = format!("{server:?}");
+    assert!(server_debug_str.contains("RustServerConfig"));
+    assert!(server_debug_str.contains("bind_port: 4433"));
 
-#[test]
-fn test_rust_client_config_default_values_sanity_check_success() {
-    let client_config = RustClientConfig::default();
-
-    assert!(client_config.verify_server_certificate);
-    assert!(client_config.ca_certs.is_none());
-    assert!(client_config.certfile.is_none());
-    assert!(client_config.keyfile.is_none());
-    assert!(client_config.transport.max_sessions > 0);
-}
-
-#[test]
-fn test_rust_client_config_modification_success() {
-    let custom_path = PathBuf::from("/tmp/cert.pem");
-    let mut config = RustClientConfig {
-        certfile: Some(custom_path.clone()),
-        verify_server_certificate: false,
-        ..Default::default()
+    let client = RustClientConfig {
+        base: base.clone(),
+        ca_certs: None,
+        certfile: None,
+        keyfile: None,
+        verify_server_certificate: true,
     };
 
-    config.transport.max_datagram_size = 1500;
+    assert!(client.verify_server_certificate);
 
-    assert_eq!(config.certfile, Some(custom_path));
-    assert!(!config.verify_server_certificate);
-    assert_eq!(config.transport.max_datagram_size, 1500);
-}
-
-#[rstest]
-#[case("0.0.0.0", 443)]
-#[case("127.0.0.1", 8080)]
-fn test_rust_server_config_manual_instantiation_success(
-    #[case] bind_host: String,
-    #[case] bind_port: u16,
-) {
-    let ca_certs = Some(PathBuf::from("ca.pem"));
-    let certfile = PathBuf::from("server.crt");
-    let keyfile = PathBuf::from("server.key");
-    let transport = TransportConfig::default();
-
-    let server_config = RustServerConfig {
-        bind_host: bind_host.clone(),
-        bind_port,
-        ca_certs: ca_certs.clone(),
-        certfile: certfile.clone(),
-        keyfile: keyfile.clone(),
-        require_client_auth: true,
-        transport,
-    };
-
-    assert_eq!(server_config.bind_host, bind_host);
-    assert_eq!(server_config.bind_port, bind_port);
-    assert_eq!(server_config.ca_certs, ca_certs);
-    assert_eq!(server_config.certfile, certfile);
-    assert_eq!(server_config.keyfile, keyfile);
-    assert!(server_config.require_client_auth);
-    assert!(server_config.transport.max_sessions > 0);
-}
-
-#[test]
-fn test_transport_config_default_values_sanity_check_success() {
-    let config = TransportConfig::default();
-
-    assert!(!config.alpn_protocols.is_empty());
-    assert!(!config.congestion_control_algorithm.is_empty());
-    assert!(config.keep_alive.is_some_and(|d| !d.is_zero()));
-    assert!(config.max_sessions > 0);
-    assert!(config.max_stream_read_buffer > 0);
-    assert!(config.transport_streams_cap > 0);
-}
-
-#[rstest]
-#[case(30.0, 2048, 65535)]
-#[case(60.0, 1024, 10000)]
-fn test_transport_config_initialization_override_success(
-    #[case] keep_alive_secs: f64,
-    #[case] max_capsule_size: u64,
-    #[case] transport_streams_cap: u64,
-) {
-    let keep_alive = Some(Duration::from_secs_f64(keep_alive_secs));
-    let config = TransportConfig {
-        keep_alive,
-        max_capsule_size,
-        transport_streams_cap,
-        ..Default::default()
-    };
-
-    assert_eq!(config.keep_alive, keep_alive);
-    assert_eq!(config.max_capsule_size, max_capsule_size);
-    assert_eq!(config.transport_streams_cap, transport_streams_cap);
+    let client_debug_str = format!("{client:?}");
+    assert!(client_debug_str.contains("RustClientConfig"));
+    assert!(client_debug_str.contains("verify_server_certificate: true"));
 }

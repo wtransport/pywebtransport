@@ -1,17 +1,25 @@
-"""Unit tests for the pywebtransport.server.app module."""
+"""Unit tests for the pywebtransport.framework.app module."""
 
 import asyncio
-import http
 import weakref
 from typing import Any, cast
+from unittest.mock import MagicMock
 
 import pytest
 from pytest_asyncio import fixture as asyncio_fixture
 from pytest_mock import MockerFixture
 
-from pywebtransport import ConnectionError, Event, ServerApp, ServerConfig, ServerError, WebTransportSession
+from pywebtransport import (
+    ConnectionError,
+    Event,
+    ServerApp,
+    ServerConfig,
+    ServerError,
+    WebTransportServer,
+    WebTransportSession,
+)
 from pywebtransport.connection import WebTransportConnection
-from pywebtransport.server import MiddlewareProtocol, MiddlewareRejected, StatefulMiddlewareProtocol, WebTransportServer
+from pywebtransport.framework import MiddlewareProtocol, MiddlewareRejected, StatefulMiddlewareProtocol
 from pywebtransport.types import EventType
 
 
@@ -26,7 +34,7 @@ class TestServerApp:
     async def mock_connection(self, mocker: MockerFixture) -> Any:
         conn = mocker.create_autospec(spec=WebTransportConnection, instance=True)
         conn.is_connected = True
-        conn.connection_id = "conn_1"
+        conn.handle = 42
 
         return conn
 
@@ -34,14 +42,14 @@ class TestServerApp:
     def mock_middleware_manager(self, mocker: MockerFixture) -> Any:
         manager_instance = mocker.MagicMock()
         manager_instance.process_request = mocker.AsyncMock(return_value=None)
-        mocker.patch(target="pywebtransport.server.app.MiddlewareManager", return_value=manager_instance)
+        mocker.patch(target="pywebtransport.framework.app.MiddlewareManager", return_value=manager_instance)
 
         return manager_instance
 
     @pytest.fixture
     def mock_router(self, mocker: MockerFixture) -> Any:
         router_instance = mocker.MagicMock()
-        mocker.patch(target="pywebtransport.server.app.RequestRouter", return_value=router_instance)
+        mocker.patch(target="pywebtransport.framework.app.RequestRouter", return_value=router_instance)
 
         return router_instance
 
@@ -54,7 +62,7 @@ class TestServerApp:
             bind_host="0.0.0.0", bind_port=4433, certfile="dummy.crt", keyfile="dummy.key"
         )
         server_instance.close = mocker.AsyncMock()
-        mocker.patch(target="pywebtransport.server.app.WebTransportServer", return_value=server_instance)
+        mocker.patch(target="pywebtransport.framework.app.WebTransportServer", return_value=server_instance)
 
         return server_instance
 
@@ -149,11 +157,11 @@ class TestServerApp:
         mock_handler = mocker.AsyncMock()
         mock_router.route_request.return_value = (mock_handler, {})
         mock_session.accept.side_effect = ValueError("Accept failed")
-        mock_logger_error = mocker.patch(target="pywebtransport.server.app._logger.error")
+        mock_logger_warning = mocker.patch(target="pywebtransport.framework.app._logger.warning")
 
         await app._dispatch_to_handler(session=mock_session)
 
-        mock_logger_error.assert_called()
+        mock_logger_warning.assert_called()
         assert not app._handler_tasks
 
     @pytest.mark.asyncio
@@ -162,7 +170,7 @@ class TestServerApp:
 
         await app._dispatch_to_handler(session=mock_session)
 
-        mock_session.reject.assert_awaited_once_with(status_code=http.HTTPStatus.NOT_FOUND)
+        mock_session.reject.assert_awaited_once_with(status_code=404)
 
     @pytest.mark.asyncio
     async def test_dispatch_to_handler_no_task_group(
@@ -170,13 +178,13 @@ class TestServerApp:
     ) -> None:
         mock_handler = mocker.AsyncMock()
         mock_router.route_request.return_value = (mock_handler, {})
-        mock_logger_error = mocker.patch(target="pywebtransport.server.app._logger.error")
+        mock_logger_warning = mocker.patch(target="pywebtransport.framework.app._logger.warning")
         app._tg = None
 
         await app._dispatch_to_handler(session=mock_session)
 
         mock_session.accept.assert_awaited_once()
-        mock_logger_error.assert_called_with("TaskGroup not initialized. Handler cannot be dispatched.")
+        mock_logger_warning.assert_called_with("app validate failed expected=open")
 
     @pytest.mark.asyncio
     async def test_dispatch_to_handler_success(
@@ -204,7 +212,7 @@ class TestServerApp:
         self, app: ServerApp, mocker: MockerFixture, mock_connection: Any, mock_session: Any
     ) -> None:
         mock_connection.is_connected = False
-        mock_logger_warning = mocker.patch(target="pywebtransport.server.app._logger.warning")
+        mock_logger_warning = mocker.patch(target="pywebtransport.framework.app._logger.warning")
         event = Event(
             type=EventType.SESSION_REQUEST,
             data={"connection": mock_connection, "session": mock_session, "session_id": 100},
@@ -243,47 +251,17 @@ class TestServerApp:
 
     @pytest.mark.asyncio
     async def test_get_session_from_event_invalid_data_type(self, app: ServerApp, mocker: MockerFixture) -> None:
-        mock_logger_warning = mocker.patch(target="pywebtransport.server.app._logger.warning")
+        mock_logger_warning = mocker.patch(target="pywebtransport.framework.app._logger.warning")
         event = Event(type=EventType.SESSION_REQUEST, data="not_a_dict")
 
         session = await app._get_session_from_event(event=event)
 
         assert session is None
-        mock_logger_warning.assert_called_with("Session request event data is not a dictionary")
-
-    @pytest.mark.asyncio
-    async def test_get_session_from_event_manager_exception(
-        self, app: ServerApp, mock_connection: Any, mock_session: Any, mock_server: Any, mocker: MockerFixture
-    ) -> None:
-        mock_server.session_manager.add_session.side_effect = ValueError("Manager error")
-        mock_logger_error = mocker.patch(target="pywebtransport.server.app._logger.error")
-        event = Event(
-            type=EventType.SESSION_REQUEST,
-            data={"connection": mock_connection, "session": mock_session, "session_id": 100},
-        )
-
-        session = await app._get_session_from_event(event=event)
-
-        assert session is mock_session
-        mock_logger_error.assert_called()
-
-    @pytest.mark.asyncio
-    async def test_get_session_from_event_no_session_manager(
-        self, app: ServerApp, mock_connection: Any, mock_session: Any
-    ) -> None:
-        cast(Any, app.server).session_manager = None
-        event = Event(
-            type=EventType.SESSION_REQUEST,
-            data={"connection": mock_connection, "session": mock_session, "session_id": 100},
-        )
-
-        session = await app._get_session_from_event(event=event)
-
-        assert session is mock_session
+        mock_logger_warning.assert_called_with("rt_event validate invalid expected=dict")
 
     @pytest.mark.asyncio
     async def test_get_session_from_event_success(
-        self, app: ServerApp, mock_connection: Any, mock_session: Any, mock_server: Any
+        self, app: ServerApp, mock_connection: Any, mock_session: Any
     ) -> None:
         event = Event(
             type=EventType.SESSION_REQUEST,
@@ -293,7 +271,6 @@ class TestServerApp:
         session = await app._get_session_from_event(event=event)
 
         assert session is mock_session
-        mock_server.session_manager.add_session.assert_awaited_once_with(session=mock_session)
 
     @pytest.mark.asyncio
     async def test_handle_session_request_exception_cleanup(
@@ -302,24 +279,24 @@ class TestServerApp:
         mocker.patch.object(target=app, attribute="_get_session_from_event", return_value=mock_session)
         mocker.patch.object(target=app, attribute="_dispatch_to_handler", side_effect=ValueError("Dispatch error"))
 
-        event = Event(type=EventType.SESSION_REQUEST, data={})
+        event = Event(type=EventType.SESSION_REQUEST, data={"session_id": 100})
 
         await app._handle_session_request(event=event)
 
-        mock_session.reject.assert_awaited_once_with(status_code=http.HTTPStatus.INTERNAL_SERVER_ERROR)
+        mock_session.reject.assert_awaited_once_with(status_code=500)
 
     @pytest.mark.asyncio
     async def test_handle_session_request_exception_cleanup_branches(
         self, app: ServerApp, mocker: MockerFixture
     ) -> None:
         mocker.patch.object(target=app, attribute="_get_session_from_event", side_effect=ValueError("Unexpected"))
-        mock_logger_error = mocker.patch(target="pywebtransport.server.app._logger.error")
+        mock_logger_warning = mocker.patch(target="pywebtransport.framework.app._logger.warning")
 
-        event_no_id = Event(type=EventType.SESSION_REQUEST, data={})
+        event_no_id = Event(type=EventType.SESSION_REQUEST, data={"session_id": 999})
 
         await app._handle_session_request(event=event_no_id)
 
-        mock_logger_error.assert_called()
+        mock_logger_warning.assert_called()
 
     @pytest.mark.asyncio
     async def test_handle_session_request_exception_cleanup_error(
@@ -328,14 +305,14 @@ class TestServerApp:
         mocker.patch.object(target=app, attribute="_get_session_from_event", return_value=mock_session)
         mocker.patch.object(target=app, attribute="_dispatch_to_handler", side_effect=ValueError("Dispatch error"))
         mock_session.reject.side_effect = ValueError("Reject failed")
-        mock_logger_error = mocker.patch(target="pywebtransport.server.app._logger.error")
+        mock_logger_warning = mocker.patch(target="pywebtransport.framework.app._logger.warning")
 
-        event = Event(type=EventType.SESSION_REQUEST, data={})
+        event = Event(type=EventType.SESSION_REQUEST, data={"session_id": 100})
 
         await app._handle_session_request(event=event)
 
-        mock_logger_error.assert_any_call(
-            "Error during session request error cleanup: %s", mocker.ANY, exc_info=mocker.ANY
+        mock_logger_warning.assert_any_call(
+            "wt_session reject failed session_id=%d err=%s", mocker.ANY, mocker.ANY, exc_info=mocker.ANY
         )
 
     @pytest.mark.asyncio
@@ -347,7 +324,7 @@ class TestServerApp:
         )
         mock_dispatch = mocker.patch.object(target=app, attribute="_dispatch_to_handler", new_callable=mocker.AsyncMock)
 
-        event = Event(type=EventType.SESSION_REQUEST, data={})
+        event = Event(type=EventType.SESSION_REQUEST, data={"session_id": 100})
 
         await app._handle_session_request(event=event)
 
@@ -362,7 +339,7 @@ class TestServerApp:
         mocker.patch.object(target=app, attribute="_get_session_from_event", return_value=mock_session)
         mock_middleware_manager.process_request.side_effect = MiddlewareRejected(status_code=403)
 
-        event = Event(type=EventType.SESSION_REQUEST, data={})
+        event = Event(type=EventType.SESSION_REQUEST, data={"session_id": 100})
 
         await app._handle_session_request(event=event)
 
@@ -375,14 +352,16 @@ class TestServerApp:
         mocker.patch.object(target=app, attribute="_get_session_from_event", return_value=mock_session)
         mock_middleware_manager.process_request.side_effect = MiddlewareRejected(status_code=403)
         mock_session.reject.side_effect = ValueError("Reject failed")
-        mock_logger_debug = mocker.patch(target="pywebtransport.server.app._logger.debug")
+        mock_logger_debug = mocker.patch(target="pywebtransport.framework.app._logger.debug")
 
-        event = Event(type=EventType.SESSION_REQUEST, data={})
+        event = Event(type=EventType.SESSION_REQUEST, data={"session_id": 100})
 
         await app._handle_session_request(event=event)
 
         mock_session.reject.assert_awaited_once_with(status_code=403)
-        mock_logger_debug.assert_called_with("Failed to reject session during middleware rejection: %s", mocker.ANY)
+        mock_logger_debug.assert_called_with(
+            "wt_session reject failed session_id=%d err=%s", mock_session.session_id, mocker.ANY
+        )
 
     @pytest.mark.asyncio
     async def test_handle_session_request_middleware_rejection_no_session(
@@ -394,9 +373,22 @@ class TestServerApp:
             side_effect=MiddlewareRejected(status_code=403),
         )
 
-        event = Event(type=EventType.SESSION_REQUEST, data={})
+        event = Event(type=EventType.SESSION_REQUEST, data={"session_id": 999})
 
         await app._handle_session_request(event=event)
+
+    @pytest.mark.asyncio
+    async def test_handle_session_request_middleware_rejection_server_error(
+        self, app: ServerApp, mock_middleware_manager: Any, mocker: MockerFixture, mock_session: Any
+    ) -> None:
+        mocker.patch.object(target=app, attribute="_get_session_from_event", return_value=mock_session)
+        mock_middleware_manager.process_request.side_effect = MiddlewareRejected(status_code=500)
+
+        event = Event(type=EventType.SESSION_REQUEST, data={"session_id": 100})
+
+        await app._handle_session_request(event=event)
+
+        mock_session.reject.assert_awaited_once_with(status_code=500)
 
     @pytest.mark.asyncio
     async def test_handle_session_request_no_session(self, app: ServerApp, mocker: MockerFixture) -> None:
@@ -405,7 +397,7 @@ class TestServerApp:
         )
         mock_middleware = mocker.patch.object(target=app, attribute="_middleware_manager")
 
-        event = Event(type=EventType.SESSION_REQUEST, data={})
+        event = Event(type=EventType.SESSION_REQUEST, data={"session_id": 999})
 
         await app._handle_session_request(event=event)
 
@@ -422,7 +414,7 @@ class TestServerApp:
         assert app.server is mock_server
         assert app._tg is None
 
-        mock_server.on.assert_called_once_with(
+        cast(MagicMock, mock_server.on).assert_called_once_with(
             event_type=EventType.SESSION_REQUEST, handler=app._handle_session_request
         )
 
@@ -478,16 +470,14 @@ class TestServerApp:
     ) -> None:
         handler_mock = mocker.AsyncMock()
         mock_session.is_closed = False
-        mock_session.close.side_effect = ConnectionError("Engine stopped")
-        mock_logger_debug = mocker.patch(target="pywebtransport.server.app._logger.debug")
+        mock_session.close.side_effect = ConnectionError(message="Engine stopped")
+        mock_logger_debug = mocker.patch(target="pywebtransport.framework.app._logger.debug")
 
         await app._run_handler_safely(handler=handler_mock, session=mock_session, params={})
 
         mock_session.close.assert_awaited_once()
         mock_logger_debug.assert_any_call(
-            "Session %s cleanup: Connection closed implicitly or Engine stopped (%s).",
-            mock_session.session_id,
-            mocker.ANY,
+            "wt_session close failed session_id=%d err=%s", mock_session.session_id, mocker.ANY
         )
 
     @pytest.mark.asyncio
@@ -530,7 +520,6 @@ class TestServerApp:
     @pytest.mark.asyncio
     async def test_run_with_keyboard_interrupt(self, app: ServerApp, mocker: MockerFixture) -> None:
         mocker.patch.object(target=app, attribute="serve", new_callable=mocker.AsyncMock)
-        mock_logger_info = mocker.patch(target="pywebtransport.server.app._logger.info")
 
         def consume_coro_and_raise(*args: Any, **kwargs: Any) -> Any:
             coro = kwargs.get("main") or (args[0] if args else None)
@@ -543,7 +532,6 @@ class TestServerApp:
         app.run()
 
         mock_asyncio_run.assert_called_once()
-        mock_logger_info.assert_called_with("Server stopped by user.")
 
     @pytest.mark.asyncio
     async def test_serve(self, app: ServerApp, mock_server: Any, mocker: MockerFixture) -> None:
@@ -556,7 +544,7 @@ class TestServerApp:
 
     @pytest.mark.asyncio
     async def test_serve_not_activated(self, app: ServerApp) -> None:
-        with pytest.raises(expected_exception=ServerError, match="ServerApp has not been activated"):
+        with pytest.raises(expected_exception=ServerError, match="app validate failed expected=open"):
             await app.serve()
 
     @pytest.mark.asyncio
@@ -586,27 +574,34 @@ class TestServerApp:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(argnames="is_async", argvalues=[True, False])
     async def test_startup_and_shutdown_handlers(self, app: ServerApp, mocker: MockerFixture, is_async: bool) -> None:
-        mocker.patch(target="asyncio.iscoroutinefunction", return_value=is_async)
-
-        startup_handler = mocker.AsyncMock() if is_async else mocker.MagicMock()
-        shutdown_handler = mocker.AsyncMock() if is_async else mocker.MagicMock()
-
-        app.on_startup(handler=startup_handler)
-        app.on_shutdown(handler=shutdown_handler)
-
-        await app.startup()
-
         if is_async:
-            startup_handler.assert_awaited_once()
-        else:
-            startup_handler.assert_called_once()
+            mock_handler = mocker.AsyncMock()
 
-        await app.shutdown()
+            async def real_async_handler() -> None:
+                await mock_handler()
 
-        if is_async:
-            shutdown_handler.assert_awaited_once()
+            app.on_startup(handler=real_async_handler)
+            app.on_shutdown(handler=real_async_handler)
+
+            await app.startup()
+            mock_handler.assert_awaited_once()
+
+            await app.shutdown()
+            assert mock_handler.await_count == 2
         else:
-            shutdown_handler.assert_called_once()
+            mock_handler = mocker.MagicMock()
+
+            def real_sync_handler() -> None:
+                mock_handler()
+
+            app.on_startup(handler=real_sync_handler)
+            app.on_shutdown(handler=real_sync_handler)
+
+            await app.startup()
+            mock_handler.assert_called_once()
+
+            await app.shutdown()
+            assert mock_handler.call_count == 2
 
     @pytest.mark.asyncio
     async def test_startup_and_shutdown_stateful_middleware(self, app: ServerApp, mocker: MockerFixture) -> None:

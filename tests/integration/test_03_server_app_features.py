@@ -1,7 +1,6 @@
 """Integration tests for high-level ServerApp features."""
 
 import asyncio
-import http
 from typing import Any
 
 import pytest
@@ -15,11 +14,25 @@ from pywebtransport import (
     WebTransportSession,
     WebTransportStream,
 )
-from pywebtransport.server import MiddlewareRejected
+from pywebtransport.framework import MiddlewareRejected
 from pywebtransport.types import EventType, SessionProtocol
-from pywebtransport.utils import find_header_str
 
 pytestmark = pytest.mark.asyncio
+
+
+def _extract_auth_token(headers: Headers) -> str | None:
+    val: str | bytes | None = None
+    if isinstance(headers, dict):
+        val = headers.get("x-auth-token") or headers.get(b"x-auth-token")
+    else:
+        for k, v in headers:
+            if k == "x-auth-token" or k == b"x-auth-token":
+                val = v
+                break
+
+    if isinstance(val, bytes):
+        return val.decode("utf-8")
+    return val
 
 
 async def test_middleware_accepts_session(
@@ -29,9 +42,9 @@ async def test_middleware_accepts_session(
     handler_was_reached = asyncio.Event()
 
     async def auth_middleware(session: SessionProtocol) -> None:
-        token = find_header_str(headers=session.headers, key="x-auth-token")
+        token = _extract_auth_token(headers=session.headers)
         if token != "valid-token":
-            raise MiddlewareRejected(status_code=http.HTTPStatus.FORBIDDEN)
+            raise MiddlewareRejected(status_code=403)
 
     server_app.add_middleware(middleware=auth_middleware)
 
@@ -55,9 +68,9 @@ async def test_middleware_rejects_session(
     host, port = server
 
     async def auth_middleware(session: SessionProtocol) -> None:
-        token = find_header_str(headers=session.headers, key="x-auth-token")
+        token = _extract_auth_token(headers=session.headers)
         if token != "valid-token":
-            raise MiddlewareRejected(status_code=http.HTTPStatus.FORBIDDEN)
+            raise MiddlewareRejected(status_code=403)
 
     server_app.add_middleware(middleware=auth_middleware)
 
@@ -70,7 +83,7 @@ async def test_middleware_rejects_session(
         await client.connect(url=f"https://{host}:{port}/protected", headers=headers)
 
     error_message = str(exc_info.value).lower()
-    assert "403" in error_message or "rejected" in error_message or "timeout" in error_message
+    assert "0x10b" in error_message
 
 
 async def test_pattern_routing_with_params(

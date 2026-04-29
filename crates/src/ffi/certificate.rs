@@ -23,7 +23,7 @@ fn generate_self_signed_cert(
 ) -> PyResult<(String, String, String)> {
     if hostname.is_empty() {
         return Err(pyo3::exceptions::PyValueError::new_err(
-            "Hostname cannot be empty",
+            "hostname validate failed",
         ));
     }
 

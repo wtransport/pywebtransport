@@ -12,7 +12,7 @@ body:
   - type: "input"
     id: "url"
     attributes:
-      label: "Page Reference"
+      label: "URL"
       description: "URL of the documentation entry."
       placeholder: "e.g., https://python.wtransport.org/en/latest/api-reference/session/"
     validations:
@@ -21,7 +21,7 @@ body:
   - type: "textarea"
     id: "description"
     attributes:
-      label: "Issue Description"
+      label: "Description"
       description: "Details regarding the inaccuracy, ambiguity, or omission."
     validations:
       required: true
@@ -29,15 +29,17 @@ body:
   - type: "textarea"
     id: "proposal"
     attributes:
-      label: "Proposed Correction"
+      label: "Proposal"
       description: "Suggested text revision or structural change."
     validations:
       required: false
 
   - type: "checkboxes"
-    id: "contribution"
+    id: "checklist"
     attributes:
-      label: "Contribution"
+      label: "Checklist"
       options:
+        - label: "Checked existing issues for duplicates."
+          required: true
         - label: "Willing to submit a Pull Request."
           required: false

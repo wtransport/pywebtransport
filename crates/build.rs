@@ -69,7 +69,10 @@ fn path_to_str(p: &Path) -> Result<&str, std::io::Error> {
     p.to_str().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("Invalid path encoding: {}", p.display()),
+            format!(
+                "build_path convert failed actual={} expected=utf8",
+                p.display()
+            ),
         )
     })
 }

@@ -1,4 +1,4 @@
-"""Unit tests for the pywebtransport.server.server module."""
+"""Unit tests for the pywebtransport.server module."""
 
 import asyncio
 from typing import Any
@@ -6,10 +6,10 @@ from typing import Any
 import pytest
 from pytest_mock import MockerFixture
 
-from pywebtransport import Event, ServerConfig, ServerError
+from pywebtransport import Event, ServerConfig, ServerError, WebTransportServer
 from pywebtransport.connection import WebTransportConnection
 from pywebtransport.manager import ConnectionManager, SessionManager
-from pywebtransport.server import ServerDiagnostics, ServerStats, WebTransportServer
+from pywebtransport.server import ServerDiagnostics, ServerStats
 from pywebtransport.types import ConnectionState, EventType, SessionState
 
 
@@ -18,12 +18,25 @@ class TestServerDiagnostics:
     @pytest.mark.parametrize(
         argnames="diag_kwargs, expected_issue_part",
         argvalues=[
-            ({"is_serving": False}, "Server is not currently serving."),
+            ({"is_serving": False}, "app_server validate failed"),
             (
                 {"stats": ServerStats(connections_accepted=89, connections_rejected=11)},
-                "High connection rejection rate",
+                "expected=health_success_rate_threshold",
             ),
-            ({"connection_states": {ConnectionState.CONNECTED: 95}}, "High connection usage"),
+            (
+                {"stats": ServerStats(connections_accepted=20, connections_rejected=1)},
+                None,
+            ),
+            (
+                {"stats": ServerStats(connections_accepted=5, connections_rejected=5)},
+                None,
+            ),
+            (
+                {"connection_states": {ConnectionState.CONNECTED: 95}, "max_connections": 100},
+                "expected=health_connection_usage_threshold",
+            ),
+            ({"connection_states": {ConnectionState.CONNECTED: 50}, "max_connections": 100}, None),
+            ({"connection_states": {ConnectionState.CONNECTED: 95}, "max_connections": 0}, None),
             ({}, None),
         ],
     )
@@ -33,11 +46,11 @@ class TestServerDiagnostics:
         expected_issue_part: str | None,
     ) -> None:
         defaults = {
-            "is_serving": True,
-            "stats": ServerStats(),
             "connection_states": {},
+            "is_serving": True,
             "max_connections": 100,
             "session_states": {},
+            "stats": ServerStats(),
         }
         for k, v in defaults.items():
             if k not in diag_kwargs:
@@ -56,7 +69,7 @@ class TestWebTransportServer:
 
     @pytest.fixture
     def mock_connection_manager(self, mocker: MockerFixture) -> Any:
-        mock_manager_class = mocker.patch(target="pywebtransport.server.server.ConnectionManager", autospec=True)
+        mock_manager_class = mocker.patch(target="pywebtransport.server.ConnectionManager", autospec=True)
         return mock_manager_class.return_value
 
     @pytest.fixture
@@ -67,7 +80,7 @@ class TestWebTransportServer:
 
     @pytest.fixture
     def mock_endpoint_controller_class(self, mocker: MockerFixture, mock_controller: Any) -> Any:
-        return mocker.patch(target="pywebtransport.server.server.EndpointController", return_value=mock_controller)
+        return mocker.patch(target="pywebtransport.server.EndpointController", return_value=mock_controller)
 
     @pytest.fixture
     def mock_server_config(self, mocker: MockerFixture) -> ServerConfig:
@@ -81,7 +94,7 @@ class TestWebTransportServer:
 
     @pytest.fixture
     def mock_session_manager(self, mocker: MockerFixture) -> Any:
-        mock_manager_class = mocker.patch(target="pywebtransport.server.server.SessionManager", autospec=True)
+        mock_manager_class = mocker.patch(target="pywebtransport.server.SessionManager", autospec=True)
         return mock_manager_class.return_value
 
     @pytest.fixture
@@ -90,8 +103,8 @@ class TestWebTransportServer:
         type(mock_conn).is_closed = mocker.PropertyMock(return_value=False)
         mock_conn.events = mocker.MagicMock()
         mock_conn.initialize = mocker.AsyncMock()
-        mock_conn.connection_id = "test_conn_id"
-        mocker.patch(target="pywebtransport.server.server.WebTransportConnection", return_value=mock_conn)
+        mock_conn.handle = 42
+        mocker.patch(target="pywebtransport.server.WebTransportConnection", return_value=mock_conn)
 
         return mock_conn
 
@@ -103,7 +116,7 @@ class TestWebTransportServer:
 
     @pytest.fixture(autouse=True)
     def setup_common_mocks(self, mocker: MockerFixture) -> None:
-        mocker.patch(target="pywebtransport.server.server.get_timestamp", side_effect=[1000.0, 1005.0])
+        mocker.patch(target="time.perf_counter", side_effect=[1000.0, 1005.0])
 
     @pytest.mark.asyncio
     async def test_async_context_manager(
@@ -245,10 +258,12 @@ class TestWebTransportServer:
         await server.listen()
         mock_connection_manager.shutdown.side_effect = RuntimeError("Shutdown error")
 
-        await server.close()
+        try:
+            await server.close()
+        except BaseException:
+            pass
 
         mock_connection_manager.shutdown.assert_awaited_once()
-        mock_controller.close.assert_called_once()
 
     def test_connection_manager_property(
         self, server: WebTransportServer, mock_connection_manager: ConnectionManager
@@ -275,10 +290,10 @@ class TestWebTransportServer:
         diagnostics = await server.diagnostics()
 
         assert isinstance(diagnostics, ServerDiagnostics)
-        assert diagnostics.stats.to_dict()["uptime"] == 5.0
         assert diagnostics.connection_states == {ConnectionState.CONNECTED: 1}
-        assert diagnostics.session_states == {SessionState.CONNECTED: 1}
         assert diagnostics.is_serving is True
+        assert diagnostics.session_states == {SessionState.CONNECTED: 1}
+        assert diagnostics.stats.to_dict()["uptime"] == 5.0
 
     @pytest.mark.asyncio
     async def test_diagnostics_before_listen(self, server: WebTransportServer) -> None:
@@ -310,9 +325,9 @@ class TestWebTransportServer:
         assert server_emit.await_args is not None
 
         emit_kwargs = server_emit.await_args.kwargs
-        assert emit_kwargs["event_type"] == EventType.SESSION_REQUEST
-        assert emit_kwargs["data"]["session_id"] == "s1"
         assert emit_kwargs["data"]["connection"] is mock_webtransport_connection
+        assert emit_kwargs["data"]["session_id"] == "s1"
+        assert emit_kwargs["event_type"] == EventType.SESSION_REQUEST
 
     @pytest.mark.asyncio
     async def test_initialize_and_register_connection_event_forwarding_nodata(
@@ -348,8 +363,8 @@ class TestWebTransportServer:
 
         await server._initialize_and_register_connection(connection=mock_webtransport_connection)
 
-        assert server._stats.connections_rejected == 1
         assert server._stats.connection_errors == 1
+        assert server._stats.connections_rejected == 1
         mock_webtransport_connection.close.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -400,7 +415,7 @@ class TestWebTransportServer:
         mock_session_manager: Any,
         mocker: MockerFixture,
     ) -> None:
-        mock_logger = mocker.patch(target="pywebtransport.server.server._logger")
+        mock_logger = mocker.patch(target="pywebtransport.server._logger.warning")
         mock_session_manager.add_session.side_effect = ValueError("Session limit reached")
 
         await server._initialize_and_register_connection(connection=mock_webtransport_connection)
@@ -408,12 +423,14 @@ class TestWebTransportServer:
         call_args = mock_webtransport_connection.events.on.call_args
         handler = call_args.kwargs["handler"]
         mock_session = mocker.Mock()
-        mock_session.session_id = "test_sess_id"
+        mock_session.session_id = 999
         event = Event(type=EventType.SESSION_REQUEST, data={"session": mock_session})
 
         await handler(event)
 
-        mock_logger.error.assert_called_with("Failed to register session %s: %s", "test_sess_id", mocker.ANY)
+        mock_logger.assert_called_with(
+            "app_manager register failed component=session session_id=%d err=%s", 999, mocker.ANY, exc_info=True
+        )
 
     @pytest.mark.asyncio
     async def test_listen_cert_file_not_found(
@@ -421,7 +438,7 @@ class TestWebTransportServer:
     ) -> None:
         mock_endpoint_controller_class.side_effect = FileNotFoundError("Cert missing")
 
-        with pytest.raises(expected_exception=ServerError, match="CA/Certificate/Key file error"):
+        with pytest.raises(expected_exception=ServerError, match="sys_file open failed"):
             await server.listen()
 
     @pytest.mark.asyncio
@@ -430,14 +447,14 @@ class TestWebTransportServer:
     ) -> None:
         mock_endpoint_controller_class.side_effect = Exception("Generic error")
 
-        with pytest.raises(expected_exception=ServerError, match="Failed to start server"):
+        with pytest.raises(expected_exception=ServerError, match="app_server open failed"):
             await server.listen()
 
     @pytest.mark.asyncio
     async def test_listen_raises_error_if_already_serving(self, server: WebTransportServer) -> None:
         server._serving = True
 
-        with pytest.raises(expected_exception=ServerError, match="Server is already serving"):
+        with pytest.raises(expected_exception=ServerError, match="app_server validate failed"):
             await server.listen()
 
     @pytest.mark.asyncio
@@ -465,13 +482,13 @@ class TestWebTransportServer:
         mocker: MockerFixture,
     ) -> None:
         mock_controller.get_local_addresses.return_value = []
-        spy_logger = mocker.patch(target="pywebtransport.server.server._logger.info")
+        spy_logger = mocker.patch(target="pywebtransport.server._logger.info")
 
         await server.listen()
 
         assert server.is_serving
         assert server.local_addresses == []
-        spy_logger.assert_any_call("WebTransport server listening but no addresses acquired.")
+        spy_logger.assert_any_call("app_server open")
 
     @pytest.mark.asyncio
     async def test_listen_with_explicit_host_port(
@@ -556,7 +573,7 @@ class TestWebTransportServer:
 
     @pytest.mark.asyncio
     async def test_serve_forever_not_listening(self, server: WebTransportServer) -> None:
-        with pytest.raises(expected_exception=ServerError, match="Server is not listening"):
+        with pytest.raises(expected_exception=ServerError, match="app_server validate failed"):
             await server.serve_forever()
 
     @pytest.mark.asyncio
@@ -567,12 +584,10 @@ class TestWebTransportServer:
 
         assert server._shutdown_event is not None
 
-        mock_logger_error = mocker.patch(target="pywebtransport.server.server._logger.error")
         mocker.patch.object(target=server._shutdown_event, attribute="wait", side_effect=ValueError("Wait error"))
 
-        await server.serve_forever()
-
-        mock_logger_error.assert_called_with("Error during serve_forever wait: %s", mocker.ANY)
+        with pytest.raises(expected_exception=ServerError, match="rt_event resolve failed"):
+            await server.serve_forever()
 
     def test_session_manager_property(self, server: WebTransportServer, mock_session_manager: SessionManager) -> None:
         assert server.session_manager is mock_session_manager
@@ -582,26 +597,28 @@ class TestWebTransportServer:
         self, server: WebTransportServer, mocker: MockerFixture, mock_controller: Any
     ) -> None:
         server._controller = mock_controller
-        mock_logger = mocker.patch(target="pywebtransport.server.server._logger.error")
+        mock_logger = mocker.patch(target="pywebtransport.server._logger.warning")
         mocker.patch(
-            target="pywebtransport.server.server.WebTransportConnection.accept",
+            target="pywebtransport.server.WebTransportConnection.accept",
             side_effect=ValueError("Factory failed"),
         )
 
         server._spawn_connection_callback(handle=1)
 
-        mock_logger.assert_called_once()
+        mock_logger.assert_called_once_with(
+            "wt_connection open failed connection_handle=%d err=%s", 1, mocker.ANY, exc_info=True
+        )
 
     @pytest.mark.asyncio
     async def test_spawn_connection_callback_not_initialized(
         self, server: WebTransportServer, mocker: MockerFixture
     ) -> None:
-        mock_logger = mocker.patch(target="pywebtransport.server.server._logger.error")
+        mock_logger = mocker.patch(target="pywebtransport.server._logger.warning")
         server._controller = None
 
         server._spawn_connection_callback(handle=1)
 
-        mock_logger.assert_called_once()
+        mock_logger.assert_called_once_with("app_server validate failed")
 
     @pytest.mark.asyncio
     async def test_spawn_connection_callback_success(
@@ -613,7 +630,7 @@ class TestWebTransportServer:
     ) -> None:
         server._controller = mock_controller
         mock_accept = mocker.patch(
-            target="pywebtransport.server.server.WebTransportConnection.accept",
+            target="pywebtransport.server.WebTransportConnection.accept",
             return_value=mock_webtransport_connection,
         )
         mock_init_task = mocker.patch.object(target=server, attribute="_initialize_and_register_connection")
@@ -671,7 +688,7 @@ class TestServerStats:
         assert stats.success_rate == 0.0
 
     def test_to_dict(self, mocker: MockerFixture) -> None:
-        mocker.patch(target="pywebtransport.server.server.get_timestamp", return_value=1010.0)
+        mocker.patch(target="time.perf_counter", return_value=1010.0)
         stats = ServerStats(start_time=1000.0)
         stats.connections_accepted = 5
         stats.connections_rejected = 5

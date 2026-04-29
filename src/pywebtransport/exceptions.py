@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Final
+from typing import Any, Final, Self
 
 from pywebtransport.constants import ErrorCodes
-from pywebtransport.types import SessionId, SessionState, StreamState
+from pywebtransport.types import URL, Address, ConnectionHandle, SessionId, StreamId
 
 __all__: list[str] = [
     "AuthenticationError",
@@ -17,7 +17,6 @@ __all__: list[str] = [
     "FlowControlError",
     "HandshakeError",
     "ProtocolError",
-    "SerializationError",
     "ServerError",
     "SessionClosedError",
     "SessionError",
@@ -28,18 +27,31 @@ __all__: list[str] = [
 
 _FATAL_ERROR_CODES: Final[frozenset[int]] = frozenset(
     {
-        ErrorCodes.INTERNAL_ERROR,
-        ErrorCodes.H3_INTERNAL_ERROR,
-        ErrorCodes.PROTOCOL_VIOLATION,
-        ErrorCodes.FRAME_ENCODING_ERROR,
-        ErrorCodes.CRYPTO_BUFFER_EXCEEDED,
         ErrorCodes.APP_AUTHENTICATION_FAILED,
         ErrorCodes.APP_PERMISSION_DENIED,
+        ErrorCodes.H3_CLOSED_CRITICAL_STREAM,
+        ErrorCodes.H3_INTERNAL_ERROR,
+        ErrorCodes.LIB_CONNECTION_STATE_ERROR,
+        ErrorCodes.LIB_INTERNAL_ERROR,
+        ErrorCodes.QUIC_AEAD_LIMIT_REACHED,
+        ErrorCodes.QUIC_CRYPTO_BUFFER_EXCEEDED,
+        ErrorCodes.QUIC_FLOW_CONTROL_ERROR,
+        ErrorCodes.QUIC_FRAME_ENCODING_ERROR,
+        ErrorCodes.QUIC_INTERNAL_ERROR,
+        ErrorCodes.QUIC_PROTOCOL_VIOLATION,
+        ErrorCodes.WT_ALPN_ERROR,
     }
 )
 
 _RETRIABLE_ERROR_CODES: Final[frozenset[int]] = frozenset(
-    {ErrorCodes.APP_CONNECTION_TIMEOUT, ErrorCodes.APP_SERVICE_UNAVAILABLE, ErrorCodes.FLOW_CONTROL_ERROR}
+    {
+        ErrorCodes.APP_CONNECTION_TIMEOUT,
+        ErrorCodes.APP_OPERATION_TIMEOUT,
+        ErrorCodes.APP_RESOURCE_EXHAUSTED,
+        ErrorCodes.APP_SERVICE_UNAVAILABLE,
+        ErrorCodes.H3_EXCESSIVE_LOAD,
+        ErrorCodes.QUIC_CONNECTION_REFUSED,
+    }
 )
 
 
@@ -50,7 +62,7 @@ class WebTransportError(Exception):
         """Initialize the instance."""
         super().__init__(message)
         self.message = message
-        self.error_code = error_code if error_code is not None else ErrorCodes.INTERNAL_ERROR
+        self.error_code = error_code if error_code is not None else ErrorCodes.APP_GENERIC_ERROR
         self.details = details if details is not None else {}
 
     @property
@@ -60,6 +72,28 @@ class WebTransportError(Exception):
         if name.endswith("Error"):
             name = name[:-5]
         return _to_snake_case(name=name)
+
+    @classmethod
+    def from_cause(
+        cls,
+        message: str,
+        *,
+        cause: Exception,
+        error_code: int | None = None,
+        details: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> Self:
+        """Instantiate a domain exception from a causal exception preserving state traits."""
+        inherited_code = getattr(cause, "error_code", None)
+        inherited_details = getattr(cause, "details", {})
+
+        final_code = error_code if error_code is not None else inherited_code
+        final_details: dict[str, Any] = inherited_details.copy() if isinstance(inherited_details, dict) else {}
+
+        if details is not None:
+            final_details.update(details)
+
+        return cls(message=message, error_code=final_code, details=final_details, **kwargs)
 
     @property
     def is_fatal(self) -> bool:
@@ -105,7 +139,7 @@ class WebTransportError(Exception):
 
     def __str__(self) -> str:
         """Return the string representation."""
-        return f"[{hex(self.error_code)}] {self.message}"
+        return f"{self.message} error_code={hex(self.error_code)}"
 
 
 class AuthenticationError(WebTransportError):
@@ -115,8 +149,8 @@ class AuthenticationError(WebTransportError):
         self,
         message: str,
         *,
+        auth_scheme: str | None = None,
         error_code: int | None = None,
-        auth_method: str | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the instance."""
@@ -125,7 +159,7 @@ class AuthenticationError(WebTransportError):
             error_code=error_code if error_code is not None else ErrorCodes.APP_AUTHENTICATION_FAILED,
             details=details,
         )
-        self.auth_method = auth_method
+        self.auth_scheme = auth_scheme
 
 
 class CertificateError(WebTransportError):
@@ -135,9 +169,8 @@ class CertificateError(WebTransportError):
         self,
         message: str,
         *,
+        path: str | None = None,
         error_code: int | None = None,
-        certificate_path: str | None = None,
-        certificate_error: str | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the instance."""
@@ -146,8 +179,7 @@ class CertificateError(WebTransportError):
             error_code=error_code if error_code is not None else ErrorCodes.APP_AUTHENTICATION_FAILED,
             details=details,
         )
-        self.certificate_path = certificate_path
-        self.certificate_error = certificate_error
+        self.path = path
 
 
 class ClientError(WebTransportError):
@@ -157,8 +189,8 @@ class ClientError(WebTransportError):
         self,
         message: str,
         *,
+        url: URL | None = None,
         error_code: int | None = None,
-        target_url: str | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the instance."""
@@ -167,7 +199,7 @@ class ClientError(WebTransportError):
             error_code=error_code if error_code is not None else ErrorCodes.APP_INVALID_REQUEST,
             details=details,
         )
-        self.target_url = target_url
+        self.url = url
 
 
 class ConfigurationError(WebTransportError):
@@ -177,9 +209,9 @@ class ConfigurationError(WebTransportError):
         self,
         message: str,
         *,
-        error_code: int | None = None,
         config_key: str | None = None,
         config_value: Any | None = None,
+        error_code: int | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the instance."""
@@ -199,16 +231,18 @@ class ConnectionError(WebTransportError):
         self,
         message: str,
         *,
+        connection_handle: ConnectionHandle | None = None,
+        remote_address: Address | None = None,
         error_code: int | None = None,
-        remote_address: tuple[str, int] | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the instance."""
         super().__init__(
             message=message,
-            error_code=error_code if error_code is not None else ErrorCodes.CONNECTION_REFUSED,
+            error_code=error_code if error_code is not None else ErrorCodes.APP_GENERIC_ERROR,
             details=details,
         )
+        self.connection_handle = connection_handle
         self.remote_address = remote_address
 
 
@@ -219,15 +253,15 @@ class DatagramError(WebTransportError):
         self,
         message: str,
         *,
-        error_code: int | None = None,
         datagram_size: int | None = None,
         max_size: int | None = None,
+        error_code: int | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the instance."""
         super().__init__(
             message=message,
-            error_code=error_code if error_code is not None else ErrorCodes.INTERNAL_ERROR,
+            error_code=error_code if error_code is not None else ErrorCodes.APP_GENERIC_ERROR,
             details=details,
         )
         self.datagram_size = datagram_size
@@ -241,21 +275,21 @@ class FlowControlError(WebTransportError):
         self,
         message: str,
         *,
+        stream_id: StreamId | None = None,
+        actual: int | None = None,
+        limit: int | None = None,
         error_code: int | None = None,
-        stream_id: int | None = None,
-        limit_exceeded: int | None = None,
-        current_value: int | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the instance."""
         super().__init__(
             message=message,
-            error_code=error_code if error_code is not None else ErrorCodes.FLOW_CONTROL_ERROR,
+            error_code=error_code if error_code is not None else ErrorCodes.WT_FLOW_CONTROL_ERROR,
             details=details,
         )
         self.stream_id = stream_id
-        self.limit_exceeded = limit_exceeded
-        self.current_value = current_value
+        self.actual = actual
+        self.limit = limit
 
 
 class HandshakeError(WebTransportError):
@@ -265,17 +299,17 @@ class HandshakeError(WebTransportError):
         self,
         message: str,
         *,
+        stage: str | None = None,
         error_code: int | None = None,
-        handshake_stage: str | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the instance."""
         super().__init__(
             message=message,
-            error_code=error_code if error_code is not None else ErrorCodes.INTERNAL_ERROR,
+            error_code=error_code if error_code is not None else ErrorCodes.APP_GENERIC_ERROR,
             details=details,
         )
-        self.handshake_stage = handshake_stage
+        self.stage = stage
 
 
 class ProtocolError(WebTransportError):
@@ -285,37 +319,17 @@ class ProtocolError(WebTransportError):
         self,
         message: str,
         *,
-        error_code: int | None = None,
         frame_type: int | None = None,
+        error_code: int | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the instance."""
         super().__init__(
             message=message,
-            error_code=error_code if error_code is not None else ErrorCodes.PROTOCOL_VIOLATION,
+            error_code=error_code if error_code is not None else ErrorCodes.H3_GENERAL_PROTOCOL_ERROR,
             details=details,
         )
         self.frame_type = frame_type
-
-
-class SerializationError(WebTransportError):
-    """Manage serialization or deserialization errors."""
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        error_code: int | None = None,
-        original_exception: Exception | None = None,
-        details: dict[str, Any] | None = None,
-    ) -> None:
-        """Initialize the instance."""
-        super().__init__(
-            message=message,
-            error_code=error_code if error_code is not None else ErrorCodes.INTERNAL_ERROR,
-            details=details,
-        )
-        self.original_exception = original_exception
 
 
 class ServerError(WebTransportError):
@@ -325,8 +339,8 @@ class ServerError(WebTransportError):
         self,
         message: str,
         *,
+        bind_address: Address | None = None,
         error_code: int | None = None,
-        bind_address: tuple[str, int] | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the instance."""
@@ -347,17 +361,15 @@ class SessionError(WebTransportError):
         *,
         session_id: SessionId | None = None,
         error_code: int | None = None,
-        session_state: SessionState | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the instance."""
         super().__init__(
             message=message,
-            error_code=error_code if error_code is not None else ErrorCodes.INTERNAL_ERROR,
+            error_code=error_code if error_code is not None else ErrorCodes.LIB_SESSION_STATE_ERROR,
             details=details,
         )
         self.session_id = session_id
-        self.session_state = session_state
 
 
 class SessionClosedError(SessionError):
@@ -365,19 +377,17 @@ class SessionClosedError(SessionError):
 
     def __init__(
         self,
-        message: str = "The WebTransport session has been closed.",
+        message: str = "wt_session close",
         *,
         session_id: SessionId | None = None,
         error_code: int | None = None,
-        session_state: SessionState | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the instance."""
         super().__init__(
             message=message,
             session_id=session_id,
-            error_code=error_code if error_code is not None else ErrorCodes.NO_ERROR,
-            session_state=session_state,
+            error_code=error_code if error_code is not None else ErrorCodes.APP_NO_ERROR,
             details=details,
         )
 
@@ -389,26 +399,17 @@ class StreamError(WebTransportError):
         self,
         message: str,
         *,
-        stream_id: int | None = None,
+        stream_id: StreamId | None = None,
         error_code: int | None = None,
-        stream_state: StreamState | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the instance."""
         super().__init__(
             message=message,
-            error_code=error_code if error_code is not None else ErrorCodes.STREAM_STATE_ERROR,
+            error_code=error_code if error_code is not None else ErrorCodes.LIB_STREAM_STATE_ERROR,
             details=details,
         )
         self.stream_id = stream_id
-        self.stream_state = stream_state
-
-    def __str__(self) -> str:
-        """Return the string representation."""
-        base_msg = super().__str__()
-        if self.stream_id is not None:
-            return f"{base_msg} (stream_id={self.stream_id})"
-        return base_msg
 
 
 class TimeoutError(WebTransportError):
@@ -418,18 +419,16 @@ class TimeoutError(WebTransportError):
         self,
         message: str,
         *,
-        error_code: int | None = None,
-        timeout_duration: float | None = None,
         operation: str | None = None,
+        error_code: int | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the instance."""
         super().__init__(
             message=message,
-            error_code=error_code if error_code is not None else ErrorCodes.APP_CONNECTION_TIMEOUT,
+            error_code=error_code if error_code is not None else ErrorCodes.APP_OPERATION_TIMEOUT,
             details=details,
         )
-        self.timeout_duration = timeout_duration
         self.operation = operation
 
 

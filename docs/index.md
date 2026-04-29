@@ -25,8 +25,7 @@ hide:
 - **Transport Primitives**: Full implementation of bidirectional streams, unidirectional streams, and unreliable datagrams.
 - **Structured Concurrency**: Deterministic lifecycle management for connections and streams via asynchronous context managers.
 - **Zero-Copy I/O**: End-to-end support for buffer protocols and `memoryview` to minimize data copying overhead.
-- **Typed Messaging**: Integrated transmission of Python objects via pluggable serializers (`JSON`, `MsgPack`, `Protobuf`).
-- **Application Framework**: Includes `ServerApp` with routing and middleware, plus a composable client suite for connection resilience and fleet management.
+- **Application Framework**: Declarative `ServerApp` featuring path-based routing and composable stateful middleware.
 
 ## Interoperability
 

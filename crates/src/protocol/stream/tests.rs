@@ -6,26 +6,15 @@ use rstest::*;
 use super::*;
 use crate::common::constants::{
     ERR_LIB_STREAM_STATE_ERROR, ERR_WT_APPLICATION_ERROR_FIRST, ERR_WT_FLOW_CONTROL_ERROR,
-    WT_DATA_BLOCKED_TYPE,
+    WT_CAPSULE_TYPE_DATA_BLOCKED,
 };
 use crate::common::types::{ErrorSource, EventType, StreamDirection, StreamState};
 use crate::protocol::events::{Effect, RequestResult};
 use crate::protocol::utils::wt_to_http_error;
 
-const MAX_READ_BUF: u64 = 1024;
-const MAX_WRITE_BUF: u64 = 1024;
-
 #[fixture]
 fn fixture_stream() -> Stream {
-    Stream::new(
-        0,
-        0,
-        StreamDirection::Bidirectional,
-        false,
-        0.0,
-        MAX_READ_BUF,
-        MAX_WRITE_BUF,
-    )
+    Stream::new(0, 0, StreamDirection::Bidirectional, false, 1024, 1024, 0.0)
 }
 
 #[rstest]
@@ -81,6 +70,11 @@ fn test_diagnose_with_close_reason(mut fixture_stream: Stream) {
     {
         assert_eq!(diag.close_reason.as_deref(), Some("Application Error"));
     }
+}
+
+#[rstest]
+fn test_direction_accessor_success(fixture_stream: Stream) {
+    assert_eq!(fixture_stream.direction(), StreamDirection::Bidirectional);
 }
 
 #[rstest]
@@ -162,6 +156,20 @@ fn test_flush_writes_varint_error(mut fixture_stream: Stream) {
 }
 
 #[rstest]
+fn test_has_pending_writes_predicate_success(mut fixture_stream: Stream) {
+    assert!(!fixture_stream.has_pending_writes());
+    fixture_stream.write_buffer_size = 1;
+    assert!(fixture_stream.has_pending_writes());
+}
+
+#[rstest]
+fn test_is_closed_predicate_success(mut fixture_stream: Stream) {
+    assert!(!fixture_stream.is_closed());
+    fixture_stream.state = StreamState::Closed;
+    assert!(fixture_stream.is_closed());
+}
+
+#[rstest]
 fn test_new_stream_initialization_success(fixture_stream: Stream) {
     let stream = fixture_stream;
 
@@ -169,7 +177,7 @@ fn test_new_stream_initialization_success(fixture_stream: Stream) {
     assert_eq!(stream.state, StreamState::Open);
     assert_eq!(stream.read_buffer_size, 0);
     assert_eq!(stream.write_buffer_size, 0);
-    assert_eq!(stream.max_read_buffer_size, MAX_READ_BUF);
+    assert_eq!(stream.max_read_buffer_size, 1024);
     assert!(!stream.is_peer_initiated);
 }
 
@@ -425,8 +433,17 @@ fn test_recv_data_on_closed_stream_ignored(mut fixture_stream: Stream) {
 }
 
 #[rstest]
+fn test_recv_data_on_reset_received_ignored(mut fixture_stream: Stream) {
+    fixture_stream.state = StreamState::ResetReceived;
+    let (effects, consumed) = fixture_stream.recv_data(Bytes::from_static(b"ignore"), false, 1.0);
+
+    assert_eq!(consumed, 0);
+    assert!(effects.is_empty());
+}
+
+#[rstest]
 fn test_recv_data_overflow_error_success(mut fixture_stream: Stream) {
-    let size = usize::try_from(MAX_READ_BUF + 1).unwrap_or(usize::MAX);
+    let size = usize::try_from(1024 + 1).unwrap_or(usize::MAX);
     let large_data = Bytes::from(vec![0u8; size]);
 
     let (effects, _) = fixture_stream.recv_data(large_data, false, 1.0);
@@ -444,6 +461,13 @@ fn test_recv_data_overflow_error_success(mut fixture_stream: Stream) {
 #[rstest]
 fn test_recv_reset_on_closed_stream_idempotency_success(mut fixture_stream: Stream) {
     fixture_stream.state = StreamState::Closed;
+    let effects = fixture_stream.recv_reset(0x100, 1.0);
+    assert!(effects.is_empty());
+}
+
+#[rstest]
+fn test_recv_reset_on_reset_received_idempotency_success(mut fixture_stream: Stream) {
+    fixture_stream.state = StreamState::ResetReceived;
     let effects = fixture_stream.recv_reset(0x100, 1.0);
     assert!(effects.is_empty());
 }
@@ -496,6 +520,33 @@ fn test_recv_reset_unknown_error_code_success(mut fixture_stream: Stream) {
 fn test_recv_reset_with_reserved_error_code(mut fixture_stream: Stream) {
     let effects = fixture_stream.recv_reset(ERR_WT_APPLICATION_ERROR_FIRST, 1.0);
     assert!(!effects.is_empty());
+}
+
+#[rstest]
+fn test_recv_stop_sending_on_closed_idempotency_success(mut fixture_stream: Stream) {
+    fixture_stream.state = StreamState::Closed;
+    let effects = fixture_stream.recv_stop_sending(0x100);
+    assert!(effects.is_empty());
+}
+
+#[rstest]
+fn test_recv_stop_sending_on_half_closed_local_success(mut fixture_stream: Stream) {
+    fixture_stream.state = StreamState::HalfClosedLocal;
+    let effects = fixture_stream.recv_stop_sending(0x100);
+    assert!(matches!(
+        effects.first(),
+        Some(Effect::EmitStreamEvent {
+            event_type: EventType::StopSendingReceived,
+            ..
+        })
+    ));
+}
+
+#[rstest]
+fn test_recv_stop_sending_on_reset_sent_idempotency_success(mut fixture_stream: Stream) {
+    fixture_stream.state = StreamState::ResetSent;
+    let effects = fixture_stream.recv_stop_sending(0x100);
+    assert!(effects.is_empty());
 }
 
 #[rstest]
@@ -601,16 +652,22 @@ fn test_reset_on_half_closed_remote_transitions_to_closed_success(mut fixture_st
 }
 
 #[rstest]
+fn test_reset_on_reset_sent_idempotency_success(mut fixture_stream: Stream) {
+    fixture_stream.state = StreamState::ResetSent;
+    let effects = fixture_stream.reset(1, 404, 1.0);
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::NotifyRequestDone {
+            result: RequestResult::None,
+            ..
+        }]
+    ));
+}
+
+#[rstest]
 fn test_reset_receive_only_fails() {
-    let mut stream = Stream::new(
-        0,
-        0,
-        StreamDirection::ReceiveOnly,
-        false,
-        0.0,
-        MAX_READ_BUF,
-        MAX_WRITE_BUF,
-    );
+    let mut stream = Stream::new(0, 0, StreamDirection::ReceiveOnly, false, 1024, 1024, 0.0);
 
     let effects = stream.reset(1, 404, 1.0);
 
@@ -710,16 +767,36 @@ fn test_stop_on_half_closed_local_transitions_to_closed_success(mut fixture_stre
 }
 
 #[rstest]
+fn test_stop_on_half_closed_remote_idempotency_success(mut fixture_stream: Stream) {
+    fixture_stream.state = StreamState::HalfClosedRemote;
+    let effects = fixture_stream.stop(1, 500, 1.0);
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::NotifyRequestDone {
+            result: RequestResult::None,
+            ..
+        }]
+    ));
+}
+
+#[rstest]
+fn test_stop_on_reset_received_idempotency_success(mut fixture_stream: Stream) {
+    fixture_stream.state = StreamState::ResetReceived;
+    let effects = fixture_stream.stop(1, 500, 1.0);
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::NotifyRequestDone {
+            result: RequestResult::None,
+            ..
+        }]
+    ));
+}
+
+#[rstest]
 fn test_stop_send_only_fails() {
-    let mut stream = Stream::new(
-        0,
-        0,
-        StreamDirection::SendOnly,
-        false,
-        0.0,
-        MAX_READ_BUF,
-        MAX_WRITE_BUF,
-    );
+    let mut stream = Stream::new(0, 0, StreamDirection::SendOnly, false, 1024, 1024, 0.0);
 
     let effects = stream.stop(1, 500, 1.0);
 
@@ -826,7 +903,7 @@ fn test_write_appends_to_existing_buffer_success(mut fixture_stream: Stream) {
 
 #[rstest]
 fn test_write_buffer_full_rejects_success(mut fixture_stream: Stream) {
-    let size = usize::try_from(MAX_WRITE_BUF).unwrap_or(usize::MAX);
+    let size = usize::try_from(1024).unwrap_or(usize::MAX);
     let data = Bytes::from(vec![0u8; size]);
     fixture_stream.write(1, data, false, 0, 1000);
 
@@ -846,7 +923,7 @@ fn test_write_buffer_full_rejects_success(mut fixture_stream: Stream) {
 #[rstest]
 fn test_write_buffer_overflow_error_success(mut fixture_stream: Stream) {
     let req_id = 1;
-    let size = usize::try_from(MAX_WRITE_BUF + 1).unwrap_or(usize::MAX);
+    let size = usize::try_from(1024 + 1).unwrap_or(usize::MAX);
     let large_data = Bytes::from(vec![0u8; size]);
 
     let (effects, sent) = fixture_stream.write(req_id, large_data, false, 0, 1000);
@@ -989,6 +1066,36 @@ fn test_write_on_closed_stream_fails_success(mut fixture_stream: Stream) {
 }
 
 #[rstest]
+fn test_write_on_half_closed_local_with_data_fails_success(mut fixture_stream: Stream) {
+    fixture_stream.state = StreamState::HalfClosedLocal;
+    let (effects, consumed) =
+        fixture_stream.write(1, Bytes::from_static(b"data"), false, 100, 1000);
+    assert_eq!(consumed, 0);
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Stream,
+            ..
+        }]
+    ));
+}
+
+#[rstest]
+fn test_write_on_reset_sent_fails_success(mut fixture_stream: Stream) {
+    fixture_stream.state = StreamState::ResetSent;
+    let (effects, consumed) =
+        fixture_stream.write(1, Bytes::from_static(b"data"), false, 100, 1000);
+    assert_eq!(consumed, 0);
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Stream,
+            ..
+        }]
+    ));
+}
+
+#[rstest]
 fn test_write_partial_credit_buffering_success(mut fixture_stream: Stream) {
     let req_id = 1;
     let data = Bytes::from_static(b"hello world");
@@ -1007,6 +1114,6 @@ fn test_write_partial_credit_buffering_success(mut fixture_stream: Stream) {
     ));
 
     if let [_, Effect::SendH3Capsule { capsule_type, .. }] = effects.as_slice() {
-        assert_eq!(*capsule_type, WT_DATA_BLOCKED_TYPE);
+        assert_eq!(*capsule_type, WT_CAPSULE_TYPE_DATA_BLOCKED);
     }
 }

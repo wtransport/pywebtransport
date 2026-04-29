@@ -14,10 +14,7 @@ fn create_dummy_socket_addr() -> SocketAddr {
 
 #[test]
 fn test_ipc_channels_creation_and_messaging() {
-    let Ok(mut channels) = IpcChannels::new() else {
-        assert_eq!("ok", "err", "Failed to create IPC channels");
-        unreachable!()
-    };
+    let mut channels = IpcChannels::new();
     let command = RuntimeCommand::Shutdown;
     let event = RuntimeEvent::ReactorShutDown;
 
@@ -47,8 +44,8 @@ fn test_runtime_command_variants_debug() {
     let addr = create_dummy_socket_addr();
     let cmd_create = RuntimeCommand::CreateConnection {
         request_id: RequestId::from(1u64),
-        remote: addr,
-        server_name: "localhost".to_owned(),
+        remote_address: addr,
+        server_name: "localhost".into(),
     };
     let cmd_protocol = RuntimeCommand::Protocol {
         handle: ConnectionHandle(0),
@@ -72,7 +69,7 @@ fn test_runtime_event_variants_debug() {
     let evt_failed = RuntimeEvent::CommandFailed {
         request_id: RequestId::from(2u64),
         error_code: Some(ErrorCode::from(0u64)),
-        reason: "error".to_owned(),
+        reason: "error".into(),
     };
     let evt_effects = RuntimeEvent::ConnectionEffects {
         handle: ConnectionHandle(0),

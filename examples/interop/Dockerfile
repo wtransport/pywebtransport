@@ -3,7 +3,7 @@
 FROM python:3.12-slim-bookworm
 
 LABEL org.opencontainers.image.source="https://github.com/wtransport/pywebtransport"
-LABEL org.opencontainers.image.description="WebTransport interoperability test server"
+LABEL org.opencontainers.image.description="WebTransport interoperability server"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

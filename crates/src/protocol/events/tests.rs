@@ -1,6 +1,7 @@
 //! Unit tests for the `crate::protocol::events` module.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::borrow::Cow;
+use std::collections::{HashSet, VecDeque};
 
 use bytes::Bytes;
 use rstest::*;
@@ -10,6 +11,7 @@ use crate::common::types::{
     ConnectionState, ErrorCode, ErrorSource, EventType, Headers, RequestId, SessionId,
     SessionState, StreamDirection, StreamId, StreamState,
 };
+use crate::protocol::H3Settings;
 use crate::protocol::{ConnectionDiagnostics, SessionDiagnostics, StreamDiagnostics};
 
 #[fixture]
@@ -57,8 +59,8 @@ fn test_effect_emit_session_event_optional_fields_none_success(fixture_session_i
         event_type: EventType::SessionClosed,
         path: None,
         headers: None,
-        subprotocols: None,
-        subprotocol: None,
+        wt_available_protocols: None,
+        wt_protocol: None,
         data: None,
         is_unidirectional: None,
         max_data: None,
@@ -72,16 +74,16 @@ fn test_effect_emit_session_event_optional_fields_none_success(fixture_session_i
 
     if let Effect::EmitSessionEvent {
         headers,
-        subprotocols,
-        subprotocol,
+        wt_available_protocols,
+        wt_protocol,
         error_code,
         reason,
         ..
     } = effect
     {
         assert!(headers.is_none());
-        assert!(subprotocols.is_none());
-        assert!(subprotocol.is_none());
+        assert!(wt_available_protocols.is_none());
+        assert!(wt_protocol.is_none());
         assert!(error_code.is_none());
         assert!(reason.is_none());
     }
@@ -99,31 +101,31 @@ fn test_effect_emit_session_event_optional_fields_some_success(
         event_type: EventType::SessionReady,
         path: Some("/test".to_owned()),
         headers: Some(fixture_headers),
-        subprotocols: Some(vec!["h3".to_owned()]),
-        subprotocol: Some("h3".to_owned()),
+        wt_available_protocols: Some(vec!["h3".to_owned()]),
+        wt_protocol: Some("h3".to_owned()),
         data: Some(fixture_bytes),
         is_unidirectional: Some(true),
         max_data: Some(1024),
         max_streams: Some(10),
         ready_at: Some(1.5),
         error_code: Some(fixture_error_code),
-        reason: Some("OK".to_owned()),
+        reason: Some(Cow::Borrowed("OK")),
     };
 
     assert!(matches!(effect, Effect::EmitSessionEvent { .. }));
 
     if let Effect::EmitSessionEvent {
         path,
-        subprotocols,
-        subprotocol,
+        wt_available_protocols,
+        wt_protocol,
         max_data,
         ready_at,
         ..
     } = effect
     {
         assert_eq!(path, Some("/test".to_owned()));
-        assert_eq!(subprotocols, Some(vec!["h3".to_owned()]));
-        assert_eq!(subprotocol, Some("h3".to_owned()));
+        assert_eq!(wt_available_protocols, Some(vec!["h3".to_owned()]));
+        assert_eq!(wt_protocol, Some("h3".to_owned()));
         assert_eq!(max_data, Some(1024));
         assert!(ready_at.is_some());
     }
@@ -184,7 +186,7 @@ fn test_effect_notify_request_failed_structure_success(
         request_id: fixture_request_id,
         source: fixture_error_source,
         error_code: Some(fixture_error_code),
-        reason: "Failed".to_owned(),
+        reason: Cow::Borrowed("Failed"),
     };
 
     assert!(matches!(effect, Effect::NotifyRequestFailed { .. }));
@@ -233,7 +235,7 @@ fn test_effect_send_h3_headers_lifecycle_success(
 
 #[rstest]
 fn test_protocol_event_clone_integrity_success(fixture_stream_id: StreamId, fixture_bytes: Bytes) {
-    let original = ProtocolEvent::DatagramReceived {
+    let original = ProtocolEvent::H3DatagramReceived {
         stream_id: fixture_stream_id,
         data: fixture_bytes.clone(),
     };
@@ -243,17 +245,17 @@ fn test_protocol_event_clone_integrity_success(fixture_stream_id: StreamId, fixt
     assert!(matches!(
         (&original, &cloned),
         (
-            ProtocolEvent::DatagramReceived { .. },
-            ProtocolEvent::DatagramReceived { .. }
+            ProtocolEvent::H3DatagramReceived { .. },
+            ProtocolEvent::H3DatagramReceived { .. }
         )
     ));
 
     if let (
-        ProtocolEvent::DatagramReceived {
+        ProtocolEvent::H3DatagramReceived {
             stream_id: id1,
             data: d1,
         },
-        ProtocolEvent::DatagramReceived {
+        ProtocolEvent::H3DatagramReceived {
             stream_id: id2,
             data: d2,
         },
@@ -262,6 +264,15 @@ fn test_protocol_event_clone_integrity_success(fixture_stream_id: StreamId, fixt
         assert_eq!(id1, id2);
         assert_eq!(d1, d2);
     }
+}
+
+#[rstest]
+fn test_protocol_event_h3_settings_received_instantiation_success() {
+    let event = ProtocolEvent::H3SettingsReceived {
+        settings: H3Settings::default(),
+    };
+
+    assert!(matches!(event, ProtocolEvent::H3SettingsReceived { .. }));
 }
 
 #[rstest]
@@ -284,29 +295,10 @@ fn test_protocol_event_internal_bind_quic_stream_debug_formatting_success(
 }
 
 #[rstest]
-fn test_protocol_event_settings_received_map_handling_success() {
-    let mut settings = HashMap::new();
-    settings.insert(1, 100);
-    settings.insert(2, 200);
-
-    let event = ProtocolEvent::SettingsReceived {
-        settings: settings.clone(),
-    };
-
-    assert!(matches!(event, ProtocolEvent::SettingsReceived { .. }));
-
-    if let ProtocolEvent::SettingsReceived { settings: map } = event {
-        assert_eq!(map.len(), 2);
-        assert_eq!(map.get(&1), Some(&100));
-    }
-}
-
-#[rstest]
 fn test_protocol_event_transport_connection_terminated_properties_success(
     fixture_error_code: ErrorCode,
 ) {
-    let reason = "Connection timeout".to_owned();
-
+    let reason: Cow<'static, str> = Cow::Owned("Connection timeout".to_owned());
     let event = ProtocolEvent::TransportConnectionTerminated {
         error_code: fixture_error_code,
         reason: reason.clone(),
@@ -350,7 +342,7 @@ fn test_protocol_event_user_accept_session_success(
     let event = ProtocolEvent::UserAcceptSession {
         request_id: fixture_request_id,
         session_id: fixture_session_id,
-        subprotocol: Some("webtransport".to_owned()),
+        wt_protocol: Some("webtransport".to_owned()),
     };
 
     let debug_output = format!("{event:?}");
@@ -367,7 +359,7 @@ fn test_protocol_event_user_create_session_success(
         request_id: fixture_request_id,
         path: "/path".to_owned(),
         headers: fixture_headers,
-        subprotocols: Some(vec!["p1".to_owned()]),
+        wt_available_protocols: Some(vec!["p1".to_owned()]),
     };
 
     let debug_output = format!("{event:?}");
@@ -423,77 +415,84 @@ fn test_request_result_read_data_content_success(fixture_bytes: Bytes) {
 }
 
 #[rstest]
-#[case::none(RequestResult::None)]
-#[case::read_data(RequestResult::ReadData(Bytes::from_static(b"data")))]
-#[case::key_mat(RequestResult::KeyingMaterial(Bytes::from_static(b"key")))]
-#[case::session(RequestResult::SessionId(1))]
-#[case::stream(RequestResult::StreamId(2))]
 #[case::conn_diag(RequestResult::ConnectionDiagnostics(Box::new(ConnectionDiagnostics {
-    connection_id: "test".to_owned(),
+    connection_handle: 42,
     is_client: true,
-    state: ConnectionState::Connected,
-    max_datagram_size: 1200,
-    remote_max_datagram_frame_size: None,
+    close_code: None,
+    close_reason: None,
+    closed_at: None,
+    connected_at: None,
     handshake_complete: true,
-    peer_settings_received: true,
     local_goaway_sent: false,
+    peer_goaway_received: false,
+    peer_settings_received: true,
+    state: ConnectionState::Connected,
+    early_event_count: 0,
+    peer_initial_max_data: 0,
+    peer_initial_max_streams_bidi: 0,
+    peer_initial_max_streams_uni: 0,
+    peer_max_datagram_frame_size: None,
+    pending_request_count: 0,
     session_count: 0,
     stream_count: 0,
-    pending_request_count: 0,
-    early_event_count: 0,
-    connected_at: None,
-    closed_at: None,
 })))]
+#[case::key_mat(RequestResult::KeyingMaterial(Bytes::from_static(b"key")))]
+#[case::none(RequestResult::None)]
+#[case::read_data(RequestResult::ReadData(Bytes::from_static(b"data")))]
 #[case::sess_diag(RequestResult::SessionDiagnostics(Box::new(SessionDiagnostics {
-    session_id: 1,
-    state: SessionState::Connected,
-    path: "/".to_owned(),
     headers: vec![],
-    subprotocol: None,
+    is_client: false,
+    path: "/".to_owned(),
+    session_id: 1,
+    wt_protocol: None,
+    close_code: None,
+    close_reason: None,
+    closed_at: None,
     created_at: 0.0,
-    local_max_data: 0,
-    local_data_sent: 0,
-    local_data_received: 0,
-    local_data_consumed: 0,
-    peer_max_data: 0,
-    local_max_streams_bidi: 0,
-    local_streams_bidi_opened: 0,
-    peer_max_streams_bidi: 0,
-    peer_streams_bidi_opened: 0,
-    peer_streams_bidi_closed: 0,
-    local_max_streams_uni: 0,
-    local_streams_uni_opened: 0,
-    peer_max_streams_uni: 0,
-    peer_streams_uni_opened: 0,
-    peer_streams_uni_closed: 0,
-    pending_bidi_stream_requests: VecDeque::new(),
-    pending_uni_stream_requests: VecDeque::new(),
-    datagrams_sent: 0,
-    datagram_bytes_sent: 0,
-    datagrams_received: 0,
-    datagram_bytes_received: 0,
+    flow_control_negotiated: true,
+    ready_at: None,
+    state: SessionState::Connected,
     active_streams: HashSet::new(),
     blocked_streams: HashSet::new(),
+    pending_bidi_stream_requests: VecDeque::new(),
+    pending_uni_stream_requests: VecDeque::new(),
+    datagram_bytes_received: 0,
+    datagram_bytes_sent: 0,
+    datagrams_received: 0,
+    datagrams_sent: 0,
+    local_data_consumed: 0,
+    local_data_received: 0,
+    local_data_sent: 0,
+    local_max_data: 0,
+    local_max_streams_bidi: 0,
+    local_max_streams_uni: 0,
+    local_streams_bidi_opened: 0,
+    local_streams_uni_opened: 0,
+    peer_max_data: 0,
+    peer_max_streams_bidi: 0,
+    peer_max_streams_uni: 0,
+    peer_streams_bidi_closed: 0,
+    peer_streams_bidi_opened: 0,
+    peer_streams_uni_closed: 0,
+    peer_streams_uni_opened: 0,
+})))]
+#[case::session(RequestResult::SessionId(1))]
+#[case::stream_diag(RequestResult::StreamDiagnostics(Box::new(StreamDiagnostics {
+    direction: StreamDirection::Bidirectional,
+    is_peer_initiated: false,
+    session_id: 1,
+    stream_id: 1,
     close_code: None,
     close_reason: None,
     closed_at: None,
-    ready_at: None,
-})))]
-#[case::stream_diag(RequestResult::StreamDiagnostics(Box::new(StreamDiagnostics {
-    stream_id: 1,
-    session_id: 1,
-    direction: StreamDirection::Bidirectional,
-    state: StreamState::Open,
-    is_peer_initiated: false,
     created_at: 0.0,
-    bytes_sent: 0,
+    state: StreamState::Open,
     bytes_received: 0,
+    bytes_sent: 0,
     read_buffer_size: 0,
     write_buffer_size: 0,
-    close_code: None,
-    close_reason: None,
-    closed_at: None,
 })))]
+#[case::stream(RequestResult::StreamId(2))]
 fn test_request_result_variants_instantiation_success(#[case] result: RequestResult) {
     let debug_str = format!("{result:?}");
 

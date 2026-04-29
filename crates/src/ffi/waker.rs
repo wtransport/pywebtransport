@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use pyo3::prelude::*;
-use tracing::error;
+use tracing::debug;
 
 #[cfg(unix)]
 mod sys {
@@ -15,12 +15,8 @@ mod sys {
 
     #[inline]
     pub(super) fn write_waker(fd: usize) -> io::Result<()> {
-        let raw_fd = RawFd::try_from(fd).map_err(|_e| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "waker file descriptor exceeds OS limits",
-            )
-        })?;
+        let raw_fd = RawFd::try_from(fd)
+            .map_err(|_e| io::Error::new(io::ErrorKind::InvalidInput, "sys_fd convert invalid "))?;
 
         let mut file = ManuallyDrop::new(unsafe { File::from_raw_fd(raw_fd) });
 
@@ -38,10 +34,7 @@ mod sys {
     #[inline]
     pub(super) fn write_waker(fd: usize) -> io::Result<()> {
         let raw_socket = RawSocket::try_from(fd).map_err(|_e| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "waker socket handle exceeds OS limits",
-            )
+            io::Error::new(io::ErrorKind::InvalidInput, "sys_socket convert invalid")
         })?;
 
         let mut stream = ManuallyDrop::new(unsafe { TcpStream::from_raw_socket(raw_socket) });
@@ -51,7 +44,7 @@ mod sys {
 }
 
 // Python-facing handle for managing the cross-language wake-up mechanism.
-#[pyclass(name = "Waker", module = "pywebtransport._wtransport")]
+#[pyclass(name = "Waker", module = "pywebtransport._pywebtransport")]
 pub(super) struct PyWaker {
     state: Arc<WakerState>,
 }
@@ -111,7 +104,7 @@ impl WakerState {
             && let Err(e) = sys::write_waker(self.fd)
             && e.kind() != std::io::ErrorKind::WouldBlock
         {
-            error!("Waker system call failed on handle {}: {}", self.fd, e);
+            debug!("rt_waker send failed err={e:?}");
         }
     }
 }

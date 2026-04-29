@@ -1,6 +1,7 @@
 //! Protocol logic and state machine implementation.
 
 pub(crate) use connection::ConnectionDiagnostics;
+pub(crate) use h3::H3Settings;
 pub(crate) use session::SessionDiagnostics;
 pub(crate) use stream::StreamDiagnostics;
 

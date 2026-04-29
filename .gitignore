@@ -20,12 +20,17 @@ Thumbs.db
 # Package building
 .eggs/
 *.egg-info/
+*.tar.gz
+*.whl
 build/
 dist/
 
 # Python
 __pycache__/
+*.dll
+*.dylib
 *.py[cod]
+*.pyd
 *.so
 
 # Rust

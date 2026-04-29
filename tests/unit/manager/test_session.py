@@ -57,7 +57,7 @@ class TestSessionManager:
 
         await manager._close_resource(resource=mock_session)
 
-        mock_session.close.assert_awaited_once_with(error_code=ErrorCodes.NO_ERROR, reason="Session manager shutdown")
+        mock_session.close.assert_awaited_once_with(error_code=ErrorCodes.APP_NO_ERROR, reason="wt_session close")
 
     def test_get_resource_id(self, manager: SessionManager, mock_session: MagicMock) -> None:
         assert manager._get_resource_id(resource=mock_session) == 1

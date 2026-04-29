@@ -12,6 +12,7 @@ from pytest_mock import MockerFixture
 from pywebtransport import (
     ClientConfig,
     ConnectionError,
+    ErrorCodes,
     Event,
     SessionClosedError,
     SessionError,
@@ -43,40 +44,42 @@ class TestSessionDiagnostics:
 
     def test_init(self) -> None:
         diag = SessionDiagnostics(
-            session_id=1,
-            state=SessionState.CONNECTED,
-            path="/",
-            headers={"Host": "example.com"},
-            subprotocols=["p1"],
-            subprotocol="p1",
-            created_at=100.0,
-            local_max_data=1000,
-            local_data_sent=50,
-            local_data_received=80,
-            local_data_consumed=40,
-            peer_max_data=2000,
-            local_max_streams_bidi=10,
-            local_streams_bidi_opened=1,
-            peer_max_streams_bidi=10,
-            peer_streams_bidi_opened=2,
-            peer_streams_bidi_closed=1,
-            local_max_streams_uni=5,
-            local_streams_uni_opened=0,
-            peer_max_streams_uni=5,
-            peer_streams_uni_opened=0,
-            peer_streams_uni_closed=0,
-            pending_bidi_stream_requests=[],
-            pending_uni_stream_requests=[],
-            datagrams_sent=5,
-            datagram_bytes_sent=500,
-            datagrams_received=3,
-            datagram_bytes_received=300,
             active_streams=[],
             blocked_streams=[],
             close_code=None,
             close_reason=None,
             closed_at=None,
+            created_at=100.0,
+            datagram_bytes_received=300,
+            datagram_bytes_sent=500,
+            datagrams_received=3,
+            datagrams_sent=5,
+            flow_control_negotiated=True,
+            headers={"Host": "example.com"},
+            is_client=True,
+            local_data_consumed=40,
+            local_data_received=80,
+            local_data_sent=50,
+            local_max_data=1000,
+            local_max_streams_bidi=10,
+            local_max_streams_uni=5,
+            local_streams_bidi_opened=1,
+            local_streams_uni_opened=0,
+            path="/",
+            peer_max_data=2000,
+            peer_max_streams_bidi=10,
+            peer_max_streams_uni=5,
+            peer_streams_bidi_closed=1,
+            peer_streams_bidi_opened=2,
+            peer_streams_uni_closed=0,
+            peer_streams_uni_opened=0,
+            pending_bidi_stream_requests=[],
+            pending_uni_stream_requests=[],
             ready_at=101.0,
+            session_id=1,
+            state=SessionState.CONNECTED,
+            wt_protocol="p1",
+            wt_available_protocols=["p1"],
         )
 
         assert diag.session_id == 1
@@ -84,8 +87,10 @@ class TestSessionDiagnostics:
         assert diag.local_data_consumed == 40
         assert diag.local_data_received == 80
         assert diag.peer_streams_bidi_closed == 1
-        assert diag.subprotocols == ["p1"]
-        assert diag.subprotocol == "p1"
+        assert diag.wt_available_protocols == ["p1"]
+        assert diag.wt_protocol == "p1"
+        assert diag.is_client is True
+        assert diag.flow_control_negotiated is True
 
         with pytest.raises(expected_exception=dataclasses.FrozenInstanceError):
             cast(Any, diag).state = SessionState.CLOSED
@@ -98,9 +103,9 @@ class TestWebTransportSession:
     @pytest.fixture
     def mock_config(self, mocker: MockerFixture) -> MagicMock:
         conf = mocker.Mock(spec=ClientConfig)
-        conf.max_event_queue_size = 100
+        conf.event_queue_capacity = 100
         conf.max_event_listeners = 100
-        conf.max_event_history_size = 100
+        conf.event_history_capacity = 100
         conf.stream_creation_timeout = 0.1
 
         return cast(MagicMock, conf)
@@ -110,7 +115,7 @@ class TestWebTransportSession:
         conn = mocker.Mock(spec=WebTransportConnection)
         conn.config = mock_config
         conn._controller = mock_controller
-        conn._handle = 42
+        conn.handle = 42
         conn.remote_address = ("127.0.0.1", 443)
         conn._stream_handles = {}
 
@@ -150,7 +155,7 @@ class TestWebTransportSession:
     async def test_accept_connection_gone(self, session: WebTransportSession) -> None:
         session._connection = lambda: None  # type: ignore[assignment]
 
-        with pytest.raises(expected_exception=ConnectionError):
+        with pytest.raises(expected_exception=ConnectionError, match="wt_connection resolve failed"):
             await session.accept()
 
     @pytest.mark.asyncio
@@ -160,7 +165,7 @@ class TestWebTransportSession:
         mock_controller._pending_manager.create_request.return_value = (1, fut)
         fut.set_result(None)
 
-        session.subprotocol = "h3"
+        session.wt_protocol = "h3"
         await session.accept()
 
         kwargs = mock_controller.send_user_event.call_args[1]
@@ -169,7 +174,7 @@ class TestWebTransportSession:
         event = kwargs["event"]
         assert isinstance(event, UserAcceptSession)
         assert event.session_id == 1
-        assert event.subprotocol == "h3"
+        assert event.wt_protocol == "h3"
         assert session.state == SessionState.CONNECTED
 
     @pytest.mark.asyncio
@@ -187,6 +192,44 @@ class TestWebTransportSession:
         result = await session.accept_unidirectional_stream()
 
         assert result is stream
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        argnames="test_error_code, test_reason, expected_code, expected_reason",
+        argvalues=[
+            (100, "Done", 100, "Done"),
+            (None, None, ErrorCodes.APP_NO_ERROR, None),
+        ],
+    )
+    async def test_close(
+        self,
+        session: WebTransportSession,
+        mock_controller: MagicMock,
+        test_error_code: int | None,
+        test_reason: str | None,
+        expected_code: int,
+        expected_reason: str | None,
+    ) -> None:
+        fut: asyncio.Future[None] = asyncio.Future()
+        mock_controller._pending_manager.create_request.side_effect = None
+        mock_controller._pending_manager.create_request.return_value = (1, fut)
+        fut.set_result(None)
+
+        if test_error_code is not None:
+            await session.close(error_code=test_error_code, reason=test_reason)
+        else:
+            await session.close()
+
+        mock_controller._pending_manager.create_request.assert_called_once()
+        mock_controller.send_user_event.assert_called_once()
+        kwargs = mock_controller.send_user_event.call_args[1]
+
+        assert kwargs["handle"] == 42
+        event = kwargs["event"]
+        assert isinstance(event, UserCloseSession)
+        assert event.session_id == 1
+        assert event.error_code == expected_code
+        assert event.reason == expected_reason
 
     @pytest.mark.asyncio
     async def test_close_already_closed(self, session: WebTransportSession, mock_controller: MagicMock) -> None:
@@ -211,32 +254,14 @@ class TestWebTransportSession:
         fut: asyncio.Future[None] = asyncio.Future()
         mock_controller._pending_manager.create_request.side_effect = None
         mock_controller._pending_manager.create_request.return_value = (1, fut)
-        fut.set_exception(ConnectionError("Gone"))
+        fut.set_exception(ConnectionError(message="Gone"))
         spy_logger = mocker.patch(target="pywebtransport.session._logger")
 
         await session.close()
 
-        spy_logger.warning.assert_called_with("Error initiating session close for %s: %s", 1, mocker.ANY, exc_info=True)
-
-    @pytest.mark.asyncio
-    async def test_close_success(self, session: WebTransportSession, mock_controller: MagicMock) -> None:
-        fut: asyncio.Future[None] = asyncio.Future()
-        mock_controller._pending_manager.create_request.side_effect = None
-        mock_controller._pending_manager.create_request.return_value = (1, fut)
-        fut.set_result(None)
-
-        await session.close(error_code=100, reason="Done")
-
-        mock_controller._pending_manager.create_request.assert_called_once()
-        mock_controller.send_user_event.assert_called_once()
-        kwargs = mock_controller.send_user_event.call_args[1]
-
-        assert kwargs["handle"] == 42
-        event = kwargs["event"]
-        assert isinstance(event, UserCloseSession)
-        assert event.session_id == 1
-        assert event.error_code == 100
-        assert event.reason == "Done"
+        spy_logger.warning.assert_called_with(
+            "wt_session close failed session_id=%d err=%s", 1, mocker.ANY, exc_info=True
+        )
 
     @pytest.mark.asyncio
     async def test_context_manager(self, session: WebTransportSession, mocker: MockerFixture) -> None:
@@ -251,7 +276,7 @@ class TestWebTransportSession:
     async def test_create_stream_connection_gone(self, session: WebTransportSession) -> None:
         session._connection = lambda: None  # type: ignore[assignment]
 
-        with pytest.raises(expected_exception=ConnectionError, match="Connection is gone"):
+        with pytest.raises(expected_exception=ConnectionError, match="wt_connection resolve failed"):
             await session.create_bidirectional_stream()
 
     @pytest.mark.asyncio
@@ -274,7 +299,7 @@ class TestWebTransportSession:
         mock_connection._stream_handles = {}
         fut.set_result(103)
 
-        with pytest.raises(expected_exception=StreamError, match="Internal error creating stream handle"):
+        with pytest.raises(expected_exception=StreamError, match="wt_stream resolve failed stream_id=103"):
             await session.create_bidirectional_stream()
 
     @pytest.mark.asyncio
@@ -292,14 +317,22 @@ class TestWebTransportSession:
         mock_connection._stream_handles = {104: mock_recv}
         fut.set_result(104)
 
-        with pytest.raises(expected_exception=StreamError, match="Invalid stream handle type"):
+        with pytest.raises(expected_exception=StreamError, match=r"wt_stream validate invalid actual=.* stream_id=104"):
             await session.create_bidirectional_stream()
 
     @pytest.mark.parametrize(
         argnames="method, wrong_type, error_msg",
         argvalues=[
-            ("create_bidirectional_stream", WebTransportSendStream, "Expected bidirectional stream"),
-            ("create_unidirectional_stream", WebTransportStream, "Expected unidirectional send stream"),
+            (
+                "create_bidirectional_stream",
+                WebTransportSendStream,
+                r"wt_stream validate invalid actual=.* expected=bidirectional",
+            ),
+            (
+                "create_unidirectional_stream",
+                WebTransportStream,
+                r"wt_stream validate invalid actual=.* expected=send_only",
+            ),
         ],
     )
     @pytest.mark.asyncio
@@ -369,28 +402,28 @@ class TestWebTransportSession:
         mock_controller._pending_manager.create_request.side_effect = None
         mock_controller._pending_manager.create_request.return_value = (1, fut)
         mocker.patch(target="asyncio.timeout", side_effect=asyncio.TimeoutError)
-        spy_logger = mocker.patch(target="pywebtransport.session._logger")
 
-        with pytest.raises(expected_exception=TimeoutError, match="timed out creating stream"):
+        with pytest.raises(
+            expected_exception=TimeoutError,
+            match="wt_stream create failed session_id=1",
+        ):
             await session.create_bidirectional_stream()
-
-        spy_logger.warning.assert_called_with("Timeout creating stream on session %s", 1)
 
     @pytest.mark.asyncio
     async def test_diagnostics_connection_error(self, session: WebTransportSession, mock_controller: MagicMock) -> None:
         fut: asyncio.Future[dict[str, Any]] = asyncio.Future()
         mock_controller._pending_manager.create_request.side_effect = None
         mock_controller._pending_manager.create_request.return_value = (1, fut)
-        fut.set_exception(ConnectionError("Closed"))
+        fut.set_exception(ConnectionError(message="Closed"))
 
-        with pytest.raises(expected_exception=SessionError, match="Connection is closed"):
+        with pytest.raises(expected_exception=SessionError, match="wt_session resolve failed session_id=1"):
             await session.diagnostics()
 
     @pytest.mark.asyncio
     async def test_diagnostics_connection_gone(self, session: WebTransportSession) -> None:
         session._connection = lambda: None  # type: ignore[assignment]
 
-        with pytest.raises(expected_exception=ConnectionError, match="Connection is gone"):
+        with pytest.raises(expected_exception=ConnectionError, match="wt_connection resolve failed"):
             await session.diagnostics()
 
     @pytest.mark.asyncio
@@ -398,50 +431,51 @@ class TestWebTransportSession:
         fut: asyncio.Future[dict[str, Any]] = asyncio.Future()
         mock_controller._pending_manager.create_request.side_effect = None
         mock_controller._pending_manager.create_request.return_value = (1, fut)
-        data = {
-            "session_id": 1,
-            "state": SessionState.CONNECTED,
-            "path": "/",
-            "headers": {},
-            "subprotocols": ["p1"],
-            "subprotocol": "p1",
-            "created_at": 0.0,
-            "local_max_data": 0,
-            "local_data_sent": 0,
-            "local_data_received": 0,
-            "local_data_consumed": 0,
-            "peer_max_data": 0,
-            "local_max_streams_bidi": 0,
-            "local_streams_bidi_opened": 0,
-            "peer_max_streams_bidi": 0,
-            "peer_streams_bidi_opened": 0,
-            "peer_streams_bidi_closed": 0,
-            "local_max_streams_uni": 0,
-            "local_streams_uni_opened": 0,
-            "peer_max_streams_uni": 0,
-            "peer_streams_uni_opened": 0,
-            "peer_streams_uni_closed": 0,
-            "pending_bidi_stream_requests": [],
-            "pending_uni_stream_requests": [],
-            "datagrams_sent": 0,
-            "datagram_bytes_sent": 0,
-            "datagrams_received": 0,
-            "datagram_bytes_received": 0,
+        data: dict[str, Any] = {
             "active_streams": [],
             "blocked_streams": [],
             "close_code": None,
             "close_reason": None,
             "closed_at": None,
+            "created_at": 0.0,
+            "datagram_bytes_received": 0,
+            "datagram_bytes_sent": 0,
+            "datagrams_received": 0,
+            "datagrams_sent": 0,
+            "flow_control_negotiated": True,
+            "headers": {},
+            "is_client": False,
+            "local_data_consumed": 0,
+            "local_data_received": 0,
+            "local_data_sent": 0,
+            "local_max_data": 0,
+            "local_max_streams_bidi": 0,
+            "local_max_streams_uni": 0,
+            "local_streams_bidi_opened": 0,
+            "local_streams_uni_opened": 0,
+            "path": "/",
+            "peer_max_data": 0,
+            "peer_max_streams_bidi": 0,
+            "peer_max_streams_uni": 0,
+            "peer_streams_bidi_closed": 0,
+            "peer_streams_bidi_opened": 0,
+            "peer_streams_uni_closed": 0,
+            "peer_streams_uni_opened": 0,
+            "pending_bidi_stream_requests": [],
+            "pending_uni_stream_requests": [],
             "ready_at": None,
+            "session_id": 1,
+            "state": SessionState.CONNECTED,
+            "wt_protocol": "p1",
         }
         fut.set_result(data)
-        session._subprotocols = ["p1"]
+        session._wt_available_protocols = ["p1"]
 
         diag = await session.diagnostics()
 
         assert isinstance(diag, SessionDiagnostics)
         assert diag.session_id == 1
-        assert diag.subprotocols == ["p1"]
+        assert diag.wt_available_protocols == ["p1"]
         kwargs = mock_controller.send_user_event.call_args[1]
 
         assert kwargs["handle"] == 42
@@ -597,8 +631,8 @@ class TestWebTransportSession:
         assert session._path == "/chat"
         assert session._headers == {"User-Agent": "TestClient"}
         assert session._cached_state == SessionState.CONNECTING
-        assert session._subprotocols is None
-        assert session._subprotocol is None
+        assert session._wt_available_protocols is None
+        assert session._wt_protocol is None
         assert session.events is not None
         assert isinstance(session._incoming_bidi_streams, asyncio.Queue)
         assert isinstance(session._incoming_uni_streams, asyncio.Queue)
@@ -631,31 +665,31 @@ class TestWebTransportSession:
         session._on_session_ready(event=Event(type=EventType.SESSION_READY, data={}))
 
         assert session.state == SessionState.CONNECTED
-        assert session.subprotocol is None
+        assert session.wt_protocol is None
 
     def test_on_session_ready_invalid_data_type(self, session: WebTransportSession) -> None:
         session._on_session_ready(event=Event(type=EventType.SESSION_READY, data="not_a_dict"))
 
         assert session.state == SessionState.CONNECTED
-        assert session.subprotocol is None
+        assert session.wt_protocol is None
 
-    def test_on_session_ready_with_subprotocol(self, session: WebTransportSession) -> None:
-        session._on_session_ready(event=Event(type=EventType.SESSION_READY, data={"subprotocol": "custom-h3"}))
+    def test_on_session_ready_with_wt_protocol(self, session: WebTransportSession) -> None:
+        session._on_session_ready(event=Event(type=EventType.SESSION_READY, data={"wt_protocol": "custom-h3"}))
 
         assert session.state == SessionState.CONNECTED
-        assert session.subprotocol == "custom-h3"
+        assert session.wt_protocol == "custom-h3"
 
     def test_properties(self, session: WebTransportSession) -> None:
         assert session.path == "/chat"
         assert session.is_closed is False
         assert session.session_id == 1
         assert session.state == SessionState.CONNECTING
-        assert session.subprotocol is None
-        assert session.subprotocols is None
+        assert session.wt_protocol is None
+        assert session.wt_available_protocols is None
 
-        session.subprotocol = "test-proto"
+        session.wt_protocol = "test-proto"
 
-        assert session.subprotocol == "test-proto"
+        assert session.wt_protocol == "test-proto"
 
     @pytest.mark.asyncio
     async def test_reject_connection_gone(self, session: WebTransportSession) -> None:

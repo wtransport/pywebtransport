@@ -64,9 +64,7 @@ class TestEndpointController:
     async def test_connect_failure(self, controller: EndpointController, mock_endpoint: MagicMock) -> None:
         mock_endpoint.connect.side_effect = ValueError("mock connection error")
 
-        with pytest.raises(
-            expected_exception=ConnectionError, match="Failed to dispatch connect command: mock connection error"
-        ):
+        with pytest.raises(expected_exception=ConnectionError, match="wt_connection open failed"):
             await controller.connect(remote_host="127.0.0.1", remote_port=443, server_name="localhost")
 
         assert not controller._pending_manager._requests
@@ -98,7 +96,7 @@ class TestEndpointController:
 
         controller._execute_effects(handle=1, effects=effects)
 
-        cb.assert_called_once_with("CONN_ERR", {"connection_id": 1, "error_code": 100, "reason": "timeout"})
+        cb.assert_called_once_with("CONN_ERR", {"connection_handle": 1, "error_code": 100, "reason": "timeout"})
 
     def test_execute_effects_emit_connection_event_minimal(self, controller: EndpointController) -> None:
         cb = MagicMock()
@@ -107,7 +105,7 @@ class TestEndpointController:
 
         controller._execute_effects(handle=1, effects=effects)
 
-        cb.assert_called_once_with("CONN_OK", {"connection_id": 1})
+        cb.assert_called_once_with("CONN_OK", {"connection_handle": 1})
 
     def test_execute_effects_emit_connection_event_no_callback(self, controller: EndpointController) -> None:
         effects = [(abi.EMIT_CONNECTION_EVENT, (1, "CONN_OK", None, None))]
@@ -134,8 +132,8 @@ class TestEndpointController:
                 "session_id": 10,
                 "path": "/p",
                 "headers": {"k": "v"},
-                "subprotocols": ["h3"],
-                "subprotocol": "h3",
+                "wt_available_protocols": ["h3"],
+                "wt_protocol": "h3",
                 "data": b"d",
                 "is_unidirectional": True,
                 "max_data": 100,
@@ -299,8 +297,10 @@ class TestEndpointController:
         controller._process_runtime_event(event_tuple=(abi.COMMAND_FAILED, payload))
 
         assert future.done()
-        assert isinstance(future.exception(), ConnectionError)
-        assert "handshake failed" in str(future.exception())
+        exc = cast(ConnectionError, future.exception())
+        assert isinstance(exc, ConnectionError)
+        assert exc.message == "handshake failed"
+        assert exc.error_code == 100
 
     def test_process_runtime_event_connection_effects(self, controller: EndpointController) -> None:
         cb = MagicMock()
@@ -309,7 +309,7 @@ class TestEndpointController:
 
         controller._process_runtime_event(event_tuple=(abi.CONNECTION_EFFECTS, payload))
 
-        cb.assert_called_once_with("OK", {"connection_id": 1})
+        cb.assert_called_once_with("OK", {"connection_handle": 1})
 
     def test_process_runtime_event_connection_spawned_no_callback(self, controller: EndpointController) -> None:
         payload: tuple[Any, ...] = (1, ("127.0.0.1", 443), [])
@@ -335,7 +335,9 @@ class TestEndpointController:
 
         assert controller._is_closed is True
 
-    def test_process_runtime_event_reactor_shutdown_unexpected(self, controller: EndpointController) -> None:
+    @pytest.mark.asyncio
+    async def test_process_runtime_event_reactor_shutdown_unexpected(self, controller: EndpointController) -> None:
+        req_id, future = controller._pending_manager.create_request()
         controller.register_connection(handle=1, callback=MagicMock())
         controller._remote_addresses[1] = ("127.0.0.1", 443)
         controller.set_spawn_callback(callback=MagicMock())
@@ -349,6 +351,11 @@ class TestEndpointController:
         assert not controller._remote_addresses
         assert controller._spawn_callback is None
         cast(MagicMock, controller._loop.remove_reader).assert_called_once_with(r_fd)
+
+        assert future.done()
+        exc = cast(ConnectionError, future.exception())
+        assert isinstance(exc, ConnectionError)
+        assert exc.message == "rt failed"
 
         with pytest.raises(expected_exception=OSError):
             os.fstat(r_fd)
@@ -385,8 +392,12 @@ class TestEndpointController:
         mock_pack = MagicMock(side_effect=ValueError("mock pack error"))
         monkeypatch.setattr("pywebtransport._controller.controller.mapper.pack_user_event", mock_pack)
 
-        controller.send_user_event(handle=1, event=event)
+        with pytest.raises(
+            expected_exception=ConnectionError, match="rt_event send failed actual=MagicMock"
+        ) as exc_info:
+            controller.send_user_event(handle=1, event=event)
 
+        assert exc_info.value.connection_handle == 1
         mock_pack.assert_called_once_with(event=event)
 
     def test_send_user_event_success(

@@ -33,7 +33,7 @@ impl<'py> IntoPyObject<'py> for Effect {
                 .into_any())
             }
             Effect::EmitConnectionEvent {
-                connection_id,
+                connection_handle,
                 event_type,
                 error_code,
                 reason,
@@ -41,7 +41,7 @@ impl<'py> IntoPyObject<'py> for Effect {
                 let payload = PyTuple::new(
                     py,
                     &[
-                        connection_id.into_pyobject(py)?.into_any(),
+                        connection_handle.into_pyobject(py)?.into_any(),
                         event_type.into_pyobject(py)?.into_any(),
                         error_code.into_pyobject(py)?.into_any(),
                         reason.into_pyobject(py)?.into_any(),
@@ -62,8 +62,8 @@ impl<'py> IntoPyObject<'py> for Effect {
                 event_type,
                 path,
                 headers,
-                subprotocols,
-                subprotocol,
+                wt_available_protocols,
+                wt_protocol,
                 data,
                 is_unidirectional,
                 max_data,
@@ -89,8 +89,8 @@ impl<'py> IntoPyObject<'py> for Effect {
                         event_type.into_pyobject(py)?.into_any(),
                         path.into_pyobject(py)?.into_any(),
                         headers,
-                        subprotocols.into_pyobject(py)?.into_any(),
-                        subprotocol.into_pyobject(py)?.into_any(),
+                        wt_available_protocols.into_pyobject(py)?.into_any(),
+                        wt_protocol.into_pyobject(py)?.into_any(),
                         data,
                         is_unidirectional.into_pyobject(py)?.into_any(),
                         max_data.into_pyobject(py)?.into_any(),
@@ -170,18 +170,18 @@ impl<'py> IntoPyObject<'py> for Effect {
             }
             Effect::NotifyRequestDone { request_id, result } => {
                 let result = match result {
-                    RequestResult::None => py.None().into_bound(py).into_any(),
-                    RequestResult::SessionId(sid) | RequestResult::StreamId(sid) => {
-                        sid.into_pyobject(py)?.into_any()
-                    }
-                    RequestResult::ReadData(bytes) | RequestResult::KeyingMaterial(bytes) => {
-                        PyBytes::new(py, &bytes).into_any()
-                    }
                     RequestResult::ConnectionDiagnostics(diag) => {
                         connection_diagnostics_to_py(py, &diag)?
                     }
+                    RequestResult::KeyingMaterial(bytes) | RequestResult::ReadData(bytes) => {
+                        PyBytes::new(py, &bytes).into_any()
+                    }
+                    RequestResult::None => py.None().into_bound(py).into_any(),
                     RequestResult::SessionDiagnostics(diag) => {
                         session_diagnostics_to_py(py, &diag)?
+                    }
+                    RequestResult::SessionId(sid) | RequestResult::StreamId(sid) => {
+                        sid.into_pyobject(py)?.into_any()
                     }
                     RequestResult::StreamDiagnostics(diag) => stream_diagnostics_to_py(py, &diag)?,
                 };
@@ -204,7 +204,7 @@ impl<'py> IntoPyObject<'py> for Effect {
                 error_code,
                 reason,
             } => {
-                let py_exc = create_py_exception(py, source, error_code, reason);
+                let py_exc = create_py_exception(py, source, error_code, &reason);
                 let payload = PyTuple::new(
                     py,
                     &[
@@ -223,7 +223,7 @@ impl<'py> IntoPyObject<'py> for Effect {
                 .into_any())
             }
             _ => Err(PyRuntimeError::new_err(format!(
-                "Internal engine error: non-FFI effect leaked to Python boundary: {self:?}"
+                "rt_event convert failed actual={self:?}"
             ))),
         }
     }
@@ -234,50 +234,56 @@ impl<'a, 'py> FromPyObject<'a, 'py> for ProtocolEvent {
 
     fn extract(ob: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
         let bound = ob.as_borrowed();
-        let tuple = bound.extract::<Bound<'_, PyTuple>>().map_err(|e| {
-            PyValueError::new_err(format!("Expected FFI tagged tuple structure: {e}"))
-        })?;
+        let tuple = bound
+            .extract::<Bound<'_, PyTuple>>()
+            .map_err(|e| PyValueError::new_err(format!("rt_event convert invalid err={e}")))?;
 
         let opcode = tuple.get_item(0)?.extract::<u8>()?;
         let payload = tuple
             .get_item(1)?
             .extract::<Bound<'_, PyTuple>>()
-            .map_err(|e| {
-                PyValueError::new_err(format!("Expected FFI payload tuple extraction: {e}"))
-            })?;
+            .map_err(|e| PyValueError::new_err(format!("rt_event convert invalid err={e}")))?;
 
         let extract_bytes_at_index = |idx: usize| -> PyResult<Bytes> {
             let val = payload.get_item(idx)?;
             extract_bytes(&val).map_err(|e| {
-                PyValueError::new_err(format!("Field at index {idx} must be bytes-like: {e}"))
+                PyValueError::new_err(format!("rt_event convert invalid actual={idx} err={e}"))
             })
         };
 
         match opcode {
-            abi::CONNECTION_CLOSE => Ok(ProtocolEvent::ConnectionClose {
-                request_id: payload.get_item(0)?.extract()?,
-                error_code: payload.get_item(1)?.extract()?,
-                reason: payload.get_item(2)?.extract()?,
-            }),
             abi::USER_ACCEPT_SESSION => Ok(ProtocolEvent::UserAcceptSession {
                 request_id: payload.get_item(0)?.extract()?,
                 session_id: payload.get_item(1)?.extract()?,
-                subprotocol: payload.get_item(2)?.extract()?,
+                wt_protocol: payload.get_item(2)?.extract()?,
             }),
+            abi::USER_CLOSE_CONNECTION => Ok(ProtocolEvent::UserCloseConnection {
+                request_id: payload.get_item(0)?.extract()?,
+                error_code: payload.get_item(1)?.extract()?,
+                reason: payload
+                    .get_item(2)?
+                    .extract::<Option<String>>()?
+                    .map(Into::into),
+            }),
+            abi::USER_CLOSE_CONNECTION_GRACEFULLY => {
+                Ok(ProtocolEvent::UserCloseConnectionGracefully {
+                    request_id: payload.get_item(0)?.extract()?,
+                })
+            }
             abi::USER_CLOSE_SESSION => Ok(ProtocolEvent::UserCloseSession {
                 request_id: payload.get_item(0)?.extract()?,
                 session_id: payload.get_item(1)?.extract()?,
                 error_code: payload.get_item(2)?.extract()?,
-                reason: payload.get_item(3)?.extract()?,
-            }),
-            abi::USER_CONNECTION_GRACEFUL_CLOSE => Ok(ProtocolEvent::UserConnectionGracefulClose {
-                request_id: payload.get_item(0)?.extract()?,
+                reason: payload
+                    .get_item(3)?
+                    .extract::<Option<String>>()?
+                    .map(Into::into),
             }),
             abi::USER_CREATE_SESSION => Ok(ProtocolEvent::UserCreateSession {
                 request_id: payload.get_item(0)?.extract()?,
                 path: payload.get_item(1)?.extract()?,
                 headers: extract_headers(&payload.get_item(2)?)?,
-                subprotocols: payload.get_item(3)?.extract()?,
+                wt_available_protocols: payload.get_item(3)?.extract()?,
             }),
             abi::USER_CREATE_STREAM => Ok(ProtocolEvent::UserCreateStream {
                 request_id: payload.get_item(0)?.extract()?,
@@ -315,6 +321,14 @@ impl<'a, 'py> FromPyObject<'a, 'py> for ProtocolEvent {
                 is_unidirectional: payload.get_item(2)?.extract()?,
                 max_streams: payload.get_item(3)?.extract()?,
             }),
+            abi::USER_READ_STREAM => Ok(ProtocolEvent::UserReadStream {
+                request_id: payload.get_item(0)?.extract()?,
+                stream_id: payload.get_item(1)?.extract()?,
+                max_bytes: payload
+                    .get_item(2)?
+                    .extract::<Option<u64>>()?
+                    .unwrap_or(u64::MAX),
+            }),
             abi::USER_REJECT_SESSION => Ok(ProtocolEvent::UserRejectSession {
                 request_id: payload.get_item(0)?.extract()?,
                 session_id: payload.get_item(1)?.extract()?,
@@ -341,16 +355,8 @@ impl<'a, 'py> FromPyObject<'a, 'py> for ProtocolEvent {
                 stream_id: payload.get_item(1)?.extract()?,
                 error_code: payload.get_item(2)?.extract()?,
             }),
-            abi::USER_STREAM_READ => Ok(ProtocolEvent::UserStreamRead {
-                request_id: payload.get_item(0)?.extract()?,
-                stream_id: payload.get_item(1)?.extract()?,
-                max_bytes: payload
-                    .get_item(2)?
-                    .extract::<Option<u64>>()?
-                    .unwrap_or(u64::MAX),
-            }),
             _ => Err(PyValueError::new_err(format!(
-                "Invalid ABI opcode from Python: {opcode}"
+                "rt_event convert invalid actual={opcode}"
             ))),
         }
     }
@@ -362,23 +368,34 @@ fn connection_diagnostics_to_py<'py>(
     diag: &ConnectionDiagnostics,
 ) -> PyResult<Bound<'py, PyAny>> {
     let dict = PyDict::new(py);
-    dict.set_item("connection_id", &diag.connection_id)?;
-    dict.set_item("is_client", diag.is_client)?;
-    dict.set_item("state", diag.state)?;
-    dict.set_item("max_datagram_size", diag.max_datagram_size)?;
-    dict.set_item(
-        "remote_max_datagram_frame_size",
-        diag.remote_max_datagram_frame_size,
-    )?;
-    dict.set_item("handshake_complete", diag.handshake_complete)?;
-    dict.set_item("peer_settings_received", diag.peer_settings_received)?;
-    dict.set_item("local_goaway_sent", diag.local_goaway_sent)?;
-    dict.set_item("session_count", diag.session_count)?;
-    dict.set_item("stream_count", diag.stream_count)?;
-    dict.set_item("pending_request_count", diag.pending_request_count)?;
-    dict.set_item("early_event_count", diag.early_event_count)?;
-    dict.set_item("connected_at", diag.connected_at)?;
+    dict.set_item("close_code", diag.close_code)?;
+    dict.set_item("close_reason", &diag.close_reason)?;
     dict.set_item("closed_at", diag.closed_at)?;
+    dict.set_item("connected_at", diag.connected_at)?;
+    dict.set_item("connection_handle", diag.connection_handle)?;
+    dict.set_item("early_event_count", diag.early_event_count)?;
+    dict.set_item("handshake_complete", diag.handshake_complete)?;
+    dict.set_item("is_client", diag.is_client)?;
+    dict.set_item("local_goaway_sent", diag.local_goaway_sent)?;
+    dict.set_item("peer_goaway_received", diag.peer_goaway_received)?;
+    dict.set_item("peer_initial_max_data", diag.peer_initial_max_data)?;
+    dict.set_item(
+        "peer_initial_max_streams_bidi",
+        diag.peer_initial_max_streams_bidi,
+    )?;
+    dict.set_item(
+        "peer_initial_max_streams_uni",
+        diag.peer_initial_max_streams_uni,
+    )?;
+    dict.set_item(
+        "peer_max_datagram_frame_size",
+        diag.peer_max_datagram_frame_size,
+    )?;
+    dict.set_item("peer_settings_received", diag.peer_settings_received)?;
+    dict.set_item("pending_request_count", diag.pending_request_count)?;
+    dict.set_item("session_count", diag.session_count)?;
+    dict.set_item("state", diag.state)?;
+    dict.set_item("stream_count", diag.stream_count)?;
 
     Ok(dict.into_any())
 }
@@ -390,9 +407,7 @@ fn extract_bytes(obj: &Bound<'_, PyAny>) -> PyResult<Bytes> {
     } else if let Ok(s) = obj.extract::<Bound<'_, PyString>>() {
         Ok(Bytes::copy_from_slice(s.to_str()?.as_bytes()))
     } else {
-        Err(PyValueError::new_err(
-            "Expected bytes, bytearray, memoryview, or str",
-        ))
+        Err(PyValueError::new_err("mem_buffer convert invalid"))
     }
 }
 
@@ -407,17 +422,20 @@ fn extract_headers(obj: &Bound<'_, PyAny>) -> PyResult<Headers> {
     } else if let Ok(list) = obj.extract::<Bound<'_, PyList>>() {
         for item in list {
             let tuple = item.extract::<Bound<'_, PyTuple>>().map_err(|e| {
-                PyValueError::new_err(format!("Headers list must contain tuples: {e}"))
+                PyValueError::new_err(format!("h3_headers convert invalid err={e}"))
             })?;
 
             if tuple.len() != 2 {
-                return Err(PyValueError::new_err("Header tuple must have 2 elements"));
+                return Err(PyValueError::new_err(format!(
+                    "h3_headers convert invalid actual={}",
+                    tuple.len()
+                )));
             }
 
             process_header_item(&tuple.get_item(0)?, &tuple.get_item(1)?, &mut headers)?;
         }
     } else {
-        return Err(PyValueError::new_err("Headers must be a dict or list"));
+        return Err(PyValueError::new_err("h3_headers convert invalid"));
     }
 
     Ok(headers)
@@ -464,44 +482,6 @@ fn session_diagnostics_to_py<'py>(
     diag: &SessionDiagnostics,
 ) -> PyResult<Bound<'py, PyAny>> {
     let dict = PyDict::new(py);
-    dict.set_item("session_id", diag.session_id)?;
-    dict.set_item("state", diag.state)?;
-    dict.set_item("path", &diag.path)?;
-    dict.set_item("headers", headers_to_py(py, &diag.headers)?)?;
-    dict.set_item("subprotocol", &diag.subprotocol)?;
-    dict.set_item("created_at", diag.created_at)?;
-    dict.set_item("local_max_data", diag.local_max_data)?;
-    dict.set_item("local_data_sent", diag.local_data_sent)?;
-    dict.set_item("local_data_received", diag.local_data_received)?;
-    dict.set_item("local_data_consumed", diag.local_data_consumed)?;
-    dict.set_item("peer_max_data", diag.peer_max_data)?;
-    dict.set_item("local_max_streams_bidi", diag.local_max_streams_bidi)?;
-    dict.set_item("local_streams_bidi_opened", diag.local_streams_bidi_opened)?;
-    dict.set_item("peer_max_streams_bidi", diag.peer_max_streams_bidi)?;
-    dict.set_item("peer_streams_bidi_opened", diag.peer_streams_bidi_opened)?;
-    dict.set_item("peer_streams_bidi_closed", diag.peer_streams_bidi_closed)?;
-    dict.set_item("local_max_streams_uni", diag.local_max_streams_uni)?;
-    dict.set_item("local_streams_uni_opened", diag.local_streams_uni_opened)?;
-    dict.set_item("peer_max_streams_uni", diag.peer_max_streams_uni)?;
-    dict.set_item("peer_streams_uni_opened", diag.peer_streams_uni_opened)?;
-    dict.set_item("peer_streams_uni_closed", diag.peer_streams_uni_closed)?;
-
-    let pending_bidi = PyList::empty(py);
-    for v in &diag.pending_bidi_stream_requests {
-        pending_bidi.append(v.into_pyobject(py)?)?;
-    }
-    dict.set_item("pending_bidi_stream_requests", pending_bidi)?;
-
-    let pending_uni = PyList::empty(py);
-    for v in &diag.pending_uni_stream_requests {
-        pending_uni.append(v.into_pyobject(py)?)?;
-    }
-    dict.set_item("pending_uni_stream_requests", pending_uni)?;
-
-    dict.set_item("datagrams_sent", diag.datagrams_sent)?;
-    dict.set_item("datagram_bytes_sent", diag.datagram_bytes_sent)?;
-    dict.set_item("datagrams_received", diag.datagrams_received)?;
-    dict.set_item("datagram_bytes_received", diag.datagram_bytes_received)?;
 
     let mut active_streams_vec: Vec<_> = diag.active_streams.iter().copied().collect();
     active_streams_vec.sort_unstable();
@@ -522,7 +502,47 @@ fn session_diagnostics_to_py<'py>(
     dict.set_item("close_code", diag.close_code)?;
     dict.set_item("close_reason", &diag.close_reason)?;
     dict.set_item("closed_at", diag.closed_at)?;
+    dict.set_item("created_at", diag.created_at)?;
+    dict.set_item("datagram_bytes_received", diag.datagram_bytes_received)?;
+    dict.set_item("datagram_bytes_sent", diag.datagram_bytes_sent)?;
+    dict.set_item("datagrams_received", diag.datagrams_received)?;
+    dict.set_item("datagrams_sent", diag.datagrams_sent)?;
+    dict.set_item("flow_control_negotiated", diag.flow_control_negotiated)?;
+    dict.set_item("headers", headers_to_py(py, &diag.headers)?)?;
+    dict.set_item("is_client", diag.is_client)?;
+    dict.set_item("local_data_consumed", diag.local_data_consumed)?;
+    dict.set_item("local_data_received", diag.local_data_received)?;
+    dict.set_item("local_data_sent", diag.local_data_sent)?;
+    dict.set_item("local_max_data", diag.local_max_data)?;
+    dict.set_item("local_max_streams_bidi", diag.local_max_streams_bidi)?;
+    dict.set_item("local_max_streams_uni", diag.local_max_streams_uni)?;
+    dict.set_item("local_streams_bidi_opened", diag.local_streams_bidi_opened)?;
+    dict.set_item("local_streams_uni_opened", diag.local_streams_uni_opened)?;
+    dict.set_item("path", &diag.path)?;
+    dict.set_item("peer_max_data", diag.peer_max_data)?;
+    dict.set_item("peer_max_streams_bidi", diag.peer_max_streams_bidi)?;
+    dict.set_item("peer_max_streams_uni", diag.peer_max_streams_uni)?;
+    dict.set_item("peer_streams_bidi_closed", diag.peer_streams_bidi_closed)?;
+    dict.set_item("peer_streams_bidi_opened", diag.peer_streams_bidi_opened)?;
+    dict.set_item("peer_streams_uni_closed", diag.peer_streams_uni_closed)?;
+    dict.set_item("peer_streams_uni_opened", diag.peer_streams_uni_opened)?;
+
+    let pending_bidi = PyList::empty(py);
+    for v in &diag.pending_bidi_stream_requests {
+        pending_bidi.append(v.into_pyobject(py)?)?;
+    }
+    dict.set_item("pending_bidi_stream_requests", pending_bidi)?;
+
+    let pending_uni = PyList::empty(py);
+    for v in &diag.pending_uni_stream_requests {
+        pending_uni.append(v.into_pyobject(py)?)?;
+    }
+    dict.set_item("pending_uni_stream_requests", pending_uni)?;
+
     dict.set_item("ready_at", diag.ready_at)?;
+    dict.set_item("session_id", diag.session_id)?;
+    dict.set_item("state", diag.state)?;
+    dict.set_item("wt_protocol", &diag.wt_protocol)?;
 
     Ok(dict.into_any())
 }
@@ -533,19 +553,19 @@ fn stream_diagnostics_to_py<'py>(
     diag: &StreamDiagnostics,
 ) -> PyResult<Bound<'py, PyAny>> {
     let dict = PyDict::new(py);
-    dict.set_item("stream_id", diag.stream_id)?;
-    dict.set_item("session_id", diag.session_id)?;
-    dict.set_item("direction", diag.direction)?;
-    dict.set_item("state", diag.state)?;
-    dict.set_item("is_peer_initiated", diag.is_peer_initiated)?;
-    dict.set_item("created_at", diag.created_at)?;
-    dict.set_item("bytes_sent", diag.bytes_sent)?;
     dict.set_item("bytes_received", diag.bytes_received)?;
-    dict.set_item("read_buffer_size", diag.read_buffer_size)?;
-    dict.set_item("write_buffer_size", diag.write_buffer_size)?;
+    dict.set_item("bytes_sent", diag.bytes_sent)?;
     dict.set_item("close_code", diag.close_code)?;
     dict.set_item("close_reason", &diag.close_reason)?;
     dict.set_item("closed_at", diag.closed_at)?;
+    dict.set_item("created_at", diag.created_at)?;
+    dict.set_item("direction", diag.direction)?;
+    dict.set_item("is_peer_initiated", diag.is_peer_initiated)?;
+    dict.set_item("read_buffer_size", diag.read_buffer_size)?;
+    dict.set_item("session_id", diag.session_id)?;
+    dict.set_item("state", diag.state)?;
+    dict.set_item("stream_id", diag.stream_id)?;
+    dict.set_item("write_buffer_size", diag.write_buffer_size)?;
 
     Ok(dict.into_any())
 }

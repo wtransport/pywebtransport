@@ -8,21 +8,21 @@ use quinn_proto::{
     ClientConfig, ConnectionHandle, DatagramEvent, Endpoint as QuinnEndpoint, Transmit,
 };
 use rustc_hash::FxHashMap;
+use tracing::debug;
 
-use crate::common::config::RustServerConfig;
-use crate::common::config::TransportConfig as WtTransportConfig;
+use crate::common::config::{RustBaseConfig, RustServerConfig};
 use crate::common::constants;
 use crate::common::error::WebTransportError;
-use crate::protocol::engine::WebTransportEngine;
+use crate::protocol::engine::{EngineParams, WebTransportEngine};
 use crate::protocol::events::{Effect, ProtocolEvent};
 use crate::transport::connection::TransportConnection;
 
 // L4 UDP router and WebTransport connection multiplexer.
 pub(crate) struct TransportEndpoint {
-    endpoint: QuinnEndpoint,
-    connections: FxHashMap<ConnectionHandle, TransportConnection>,
-    transport_config: WtTransportConfig,
+    base_config: RustBaseConfig,
     client_config: Option<ClientConfig>,
+    connections: FxHashMap<ConnectionHandle, TransportConnection>,
+    endpoint: QuinnEndpoint,
     server_config: Option<RustServerConfig>,
     transmit_workspace: Vec<u8>,
 }
@@ -31,21 +31,23 @@ impl TransportEndpoint {
     // Creates a new endpoint for a client used for active outbound connections.
     pub(crate) fn new_client(
         endpoint: QuinnEndpoint,
-        transport_config: WtTransportConfig,
+        base_config: RustBaseConfig,
         client_config: ClientConfig,
     ) -> Result<Self, WebTransportError> {
-        let workspace_capacity = usize::try_from(constants::MAX_DATAGRAM_SIZE).map_err(|e| {
-            WebTransportError::Unknown(
-                Some(constants::ERR_LIB_INTERNAL_ERROR),
-                format!("MAX_DATAGRAM_SIZE exceeds system pointer size: {e}"),
-            )
-        })?;
+        let workspace_capacity =
+            usize::try_from(constants::UDP_MAX_DATAGRAM_SIZE).map_err(|e| {
+                debug!("udp_max_datagram_size convert failed expected=usize err={e:?}");
+                WebTransportError::Unknown(
+                    Some(constants::ERR_LIB_INTERNAL_ERROR),
+                    "udp_max_datagram_size convert failed".into(),
+                )
+            })?;
 
         Ok(Self {
-            endpoint,
-            connections: FxHashMap::default(),
-            transport_config,
+            base_config,
             client_config: Some(client_config),
+            connections: FxHashMap::default(),
+            endpoint,
             server_config: None,
             transmit_workspace: Vec::with_capacity(workspace_capacity),
         })
@@ -54,21 +56,23 @@ impl TransportEndpoint {
     // Creates a new endpoint for a server capable of accepting passive connections.
     pub(crate) fn new_server(
         endpoint: QuinnEndpoint,
-        transport_config: WtTransportConfig,
+        base_config: RustBaseConfig,
         server_config: RustServerConfig,
     ) -> Result<Self, WebTransportError> {
-        let workspace_capacity = usize::try_from(constants::MAX_DATAGRAM_SIZE).map_err(|e| {
-            WebTransportError::Unknown(
-                Some(constants::ERR_LIB_INTERNAL_ERROR),
-                format!("MAX_DATAGRAM_SIZE exceeds system pointer size: {e}"),
-            )
-        })?;
+        let workspace_capacity =
+            usize::try_from(constants::UDP_MAX_DATAGRAM_SIZE).map_err(|e| {
+                debug!("udp_max_datagram_size convert failed expected=usize err={e:?}");
+                WebTransportError::Unknown(
+                    Some(constants::ERR_LIB_INTERNAL_ERROR),
+                    "udp_max_datagram_size convert failed".into(),
+                )
+            })?;
 
         Ok(Self {
-            endpoint,
-            connections: FxHashMap::default(),
-            transport_config,
+            base_config,
             client_config: None,
+            connections: FxHashMap::default(),
+            endpoint,
             server_config: Some(server_config),
             transmit_workspace: Vec::with_capacity(workspace_capacity),
         })
@@ -81,41 +85,46 @@ impl TransportEndpoint {
         server_name: &str,
         now_instant: Instant,
     ) -> Result<(ConnectionHandle, SocketAddr), WebTransportError> {
-        let config = self.client_config.as_ref().ok_or_else(|| {
-            WebTransportError::Unknown(
+        let Some(config) = &self.client_config else {
+            return Err(WebTransportError::Unknown(
                 Some(constants::ERR_LIB_INTERNAL_ERROR),
-                "Endpoint is not configured as a client".to_owned(),
-            )
-        })?;
+                "quic_endpoint validate failed".into(),
+            ));
+        };
 
         let (handle, quic_conn) = self
             .endpoint
             .connect(now_instant, config.clone(), remote, server_name)
             .map_err(|e| {
+                debug!("quic_connection create failed err={e:?}");
                 WebTransportError::Connection(
                     Some(constants::ERR_LIB_CONNECTION_STATE_ERROR),
-                    format!("QUIC connection failed: {e}"),
+                    "quic_connection create failed".into(),
                 )
             })?;
 
         let remote_address = quic_conn.remote_address();
-        let t_cfg = &self.transport_config;
+        let t_cfg = &self.base_config;
+
         let engine = WebTransportEngine::new(
-            handle.0.to_string(),
+            handle.0 as u64,
             true,
-            t_cfg.max_datagram_size,
-            t_cfg.flow_control_window_size,
-            t_cfg.max_sessions,
-            t_cfg.initial_max_data,
-            t_cfg.initial_max_streams_bidi,
-            t_cfg.initial_max_streams_uni,
-            t_cfg.max_stream_read_buffer,
-            t_cfg.max_stream_write_buffer,
-            t_cfg.flow_control_window_auto_scale,
-            t_cfg.max_capsule_size,
-            t_cfg.max_pending_events_per_session,
-            t_cfg.max_total_pending_events,
-            t_cfg.pending_event_ttl.as_secs_f64(),
+            EngineParams {
+                early_event_ttl: t_cfg.pending_event_ttl.as_secs_f64(),
+                flow_control_window: t_cfg.flow_control_window,
+                flow_control_window_auto_scale_enabled: t_cfg
+                    .flow_control_window_auto_scale_enabled,
+                initial_max_data: t_cfg.initial_max_data,
+                initial_max_streams_bidi: t_cfg.initial_max_streams_bidi,
+                initial_max_streams_uni: t_cfg.initial_max_streams_uni,
+                max_capsule_size: t_cfg.max_capsule_size,
+                max_field_section_size: t_cfg.max_field_section_size,
+                max_session_pending_events: t_cfg.max_session_pending_events,
+                max_sessions: t_cfg.max_sessions,
+                max_stream_read_buffer_size: t_cfg.max_stream_read_buffer_size,
+                max_stream_write_buffer_size: t_cfg.max_stream_write_buffer_size,
+                max_total_pending_events: t_cfg.max_total_pending_events,
+            },
         )?;
 
         let gc_interval = if t_cfg.resource_cleanup_interval.is_zero() {
@@ -123,11 +132,13 @@ impl TransportEndpoint {
         } else {
             Some(t_cfg.resource_cleanup_interval)
         };
+
         let early_event_ttl = if t_cfg.pending_event_ttl.is_zero() {
             None
         } else {
             Some(t_cfg.pending_event_ttl)
         };
+
         let mut transport_conn =
             TransportConnection::new(quic_conn, engine, gc_interval, early_event_ttl, now_instant);
 
@@ -143,9 +154,9 @@ impl TransportEndpoint {
     // Processes an incoming UDP datagram and routes it to the appropriate state machine.
     pub(crate) fn handle_datagram(
         &mut self,
-        data: BytesMut,
         remote: SocketAddr,
         local: Option<SocketAddr>,
+        data: BytesMut,
         now: f64,
         now_instant: Instant,
     ) -> TransportEvent {
@@ -197,23 +208,27 @@ impl TransportEndpoint {
                 ) {
                     Ok((handle, quic_conn)) => {
                         let remote_address = quic_conn.remote_address();
-                        let t_cfg = &self.transport_config;
+                        let t_cfg = &self.base_config;
+
                         let Ok(engine) = WebTransportEngine::new(
-                            handle.0.to_string(),
+                            handle.0 as u64,
                             false,
-                            t_cfg.max_datagram_size,
-                            t_cfg.flow_control_window_size,
-                            t_cfg.max_sessions,
-                            t_cfg.initial_max_data,
-                            t_cfg.initial_max_streams_bidi,
-                            t_cfg.initial_max_streams_uni,
-                            t_cfg.max_stream_read_buffer,
-                            t_cfg.max_stream_write_buffer,
-                            t_cfg.flow_control_window_auto_scale,
-                            t_cfg.max_capsule_size,
-                            t_cfg.max_pending_events_per_session,
-                            t_cfg.max_total_pending_events,
-                            t_cfg.pending_event_ttl.as_secs_f64(),
+                            EngineParams {
+                                early_event_ttl: t_cfg.pending_event_ttl.as_secs_f64(),
+                                flow_control_window: t_cfg.flow_control_window,
+                                flow_control_window_auto_scale_enabled: t_cfg
+                                    .flow_control_window_auto_scale_enabled,
+                                initial_max_data: t_cfg.initial_max_data,
+                                initial_max_streams_bidi: t_cfg.initial_max_streams_bidi,
+                                initial_max_streams_uni: t_cfg.initial_max_streams_uni,
+                                max_capsule_size: t_cfg.max_capsule_size,
+                                max_field_section_size: t_cfg.max_field_section_size,
+                                max_session_pending_events: t_cfg.max_session_pending_events,
+                                max_sessions: t_cfg.max_sessions,
+                                max_stream_read_buffer_size: t_cfg.max_stream_read_buffer_size,
+                                max_stream_write_buffer_size: t_cfg.max_stream_write_buffer_size,
+                                max_total_pending_events: t_cfg.max_total_pending_events,
+                            },
                         ) else {
                             return TransportEvent::Consumed;
                         };
@@ -223,11 +238,13 @@ impl TransportEndpoint {
                         } else {
                             Some(t_cfg.resource_cleanup_interval)
                         };
+
                         let early_event_ttl = if t_cfg.pending_event_ttl.is_zero() {
                             None
                         } else {
                             Some(t_cfg.pending_event_ttl)
                         };
+
                         let mut transport_conn = TransportConnection::new(
                             quic_conn,
                             engine,
@@ -261,8 +278,8 @@ impl TransportEndpoint {
     // Evaluates timeouts across the entire multiplexer and triggers necessary logic.
     pub(crate) fn handle_timeout(
         &mut self,
-        now_instant: Instant,
         now: f64,
+        now_instant: Instant,
     ) -> Vec<(ConnectionHandle, Vec<Effect>)> {
         let mut results = Vec::new();
         let mut drained_handles = Vec::new();
@@ -273,7 +290,7 @@ impl TransportEndpoint {
         for handle in handles {
             if let Some(conn) = self.connections.get_mut(&handle) {
                 if conn.timeout().is_some_and(|t| now_instant >= t) {
-                    conn.handle_timeout(now_instant, now);
+                    conn.handle_timeout(now, now_instant);
 
                     let effects = Self::collect_effects(conn);
 
@@ -347,7 +364,7 @@ impl TransportEndpoint {
         for handle in handles {
             if let Some(conn) = self.connections.get_mut(&handle)
                 && let Some(transmit) =
-                    conn.poll_transmit(now_instant, &mut self.transmit_workspace)
+                    conn.poll_transmit(&mut self.transmit_workspace, now_instant)
             {
                 return Some(transmit);
             }

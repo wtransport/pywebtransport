@@ -8,56 +8,53 @@ import types
 from abc import ABC
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Self, Union, get_args, get_origin, get_type_hints
+from typing import Any, Final, Self, Union, get_args, get_origin, get_type_hints
 
 from pywebtransport.constants import (
     DEFAULT_ALPN_PROTOCOLS,
     DEFAULT_BIND_HOST,
-    DEFAULT_CLIENT_MAX_CONNECTIONS,
-    DEFAULT_CLIENT_MAX_SESSIONS,
     DEFAULT_CLOSE_TIMEOUT,
     DEFAULT_CONGESTION_CONTROL_ALGORITHM,
     DEFAULT_CONNECT_TIMEOUT,
     DEFAULT_CONNECTION_ATTEMPT_DELAY,
     DEFAULT_CONNECTION_IDLE_TIMEOUT,
     DEFAULT_DEV_PORT,
-    DEFAULT_FLOW_CONTROL_WINDOW_AUTO_SCALE,
-    DEFAULT_FLOW_CONTROL_WINDOW_SIZE,
+    DEFAULT_EVENT_HISTORY_CAPACITY,
+    DEFAULT_EVENT_QUEUE_CAPACITY,
+    DEFAULT_FLOW_CONTROL_WINDOW,
+    DEFAULT_FLOW_CONTROL_WINDOW_AUTO_SCALE_ENABLED,
     DEFAULT_INITIAL_MAX_DATA,
     DEFAULT_INITIAL_MAX_STREAMS_BIDI,
     DEFAULT_INITIAL_MAX_STREAMS_UNI,
-    DEFAULT_KEEP_ALIVE,
+    DEFAULT_KEEP_ALIVE_INTERVAL,
     DEFAULT_LOG_LEVEL,
     DEFAULT_MAX_CAPSULE_SIZE,
-    DEFAULT_MAX_CONNECTION_RETRIES,
+    DEFAULT_MAX_CONNECTIONS,
     DEFAULT_MAX_DATAGRAM_SIZE,
-    DEFAULT_MAX_EVENT_HISTORY_SIZE,
     DEFAULT_MAX_EVENT_LISTENERS,
-    DEFAULT_MAX_EVENT_QUEUE_SIZE,
-    DEFAULT_MAX_MESSAGE_SIZE,
-    DEFAULT_MAX_PENDING_EVENTS_PER_SESSION,
-    DEFAULT_MAX_RETRY_DELAY,
-    DEFAULT_MAX_STREAM_READ_BUFFER,
-    DEFAULT_MAX_STREAM_WRITE_BUFFER,
+    DEFAULT_MAX_FIELD_SECTION_SIZE,
+    DEFAULT_MAX_SESSION_PENDING_EVENTS,
+    DEFAULT_MAX_SESSIONS,
+    DEFAULT_MAX_STREAM_READ_BUFFER_SIZE,
+    DEFAULT_MAX_STREAM_WRITE_BUFFER_SIZE,
     DEFAULT_MAX_TOTAL_PENDING_EVENTS,
+    DEFAULT_MAX_TRANSPORT_STREAMS,
     DEFAULT_PENDING_EVENT_TTL,
     DEFAULT_READ_TIMEOUT,
     DEFAULT_RESOURCE_CLEANUP_INTERVAL,
-    DEFAULT_RETRY_BACKOFF,
-    DEFAULT_RETRY_DELAY,
-    DEFAULT_SERVER_MAX_CONNECTIONS,
-    DEFAULT_SERVER_MAX_SESSIONS,
     DEFAULT_STREAM_CREATION_TIMEOUT,
-    DEFAULT_TRANSPORT_STREAMS_CAP,
     DEFAULT_WRITE_TIMEOUT,
-    MAX_DATAGRAM_SIZE,
-    MAX_PROTOCOL_STREAMS_LIMIT,
-    SUPPORTED_CONGESTION_CONTROL_ALGORITHMS,
+    UDP_MAX_DATAGRAM_SIZE,
+    WT_STREAMS_LIMIT,
 )
 from pywebtransport.exceptions import ConfigurationError
 from pywebtransport.types import Headers
 
 __all__: list[str] = ["BaseConfig", "ClientConfig", "ServerConfig"]
+
+_CONGESTION_CONTROL_ALGORITHMS: Final[list[str]] = ["bbr", "cubic", "reno"]
+_MAX_FIELD_SECTION_SIZE: Final[int] = 16 * 1024 * 1024
+_VERIFY_MODES: Final[list[ssl.VerifyMode]] = [ssl.CERT_NONE, ssl.CERT_OPTIONAL, ssl.CERT_REQUIRED]
 
 
 @dataclass(kw_only=True)
@@ -68,30 +65,30 @@ class BaseConfig(ABC):
     close_timeout: float = DEFAULT_CLOSE_TIMEOUT
     congestion_control_algorithm: str = DEFAULT_CONGESTION_CONTROL_ALGORITHM
     connection_idle_timeout: float = DEFAULT_CONNECTION_IDLE_TIMEOUT
-    flow_control_window_auto_scale: bool = DEFAULT_FLOW_CONTROL_WINDOW_AUTO_SCALE
-    flow_control_window_size: int = DEFAULT_FLOW_CONTROL_WINDOW_SIZE
+    event_history_capacity: int = DEFAULT_EVENT_HISTORY_CAPACITY
+    event_queue_capacity: int = DEFAULT_EVENT_QUEUE_CAPACITY
+    flow_control_window: int = DEFAULT_FLOW_CONTROL_WINDOW
+    flow_control_window_auto_scale_enabled: bool = DEFAULT_FLOW_CONTROL_WINDOW_AUTO_SCALE_ENABLED
     initial_max_data: int = DEFAULT_INITIAL_MAX_DATA
     initial_max_streams_bidi: int = DEFAULT_INITIAL_MAX_STREAMS_BIDI
     initial_max_streams_uni: int = DEFAULT_INITIAL_MAX_STREAMS_UNI
-    keep_alive: float | None = DEFAULT_KEEP_ALIVE
+    keep_alive_interval: float | None = DEFAULT_KEEP_ALIVE_INTERVAL
     log_level: str = DEFAULT_LOG_LEVEL
     max_capsule_size: int = DEFAULT_MAX_CAPSULE_SIZE
-    max_connections: int
+    max_connections: int = DEFAULT_MAX_CONNECTIONS
     max_datagram_size: int = DEFAULT_MAX_DATAGRAM_SIZE
-    max_event_history_size: int = DEFAULT_MAX_EVENT_HISTORY_SIZE
     max_event_listeners: int = DEFAULT_MAX_EVENT_LISTENERS
-    max_event_queue_size: int = DEFAULT_MAX_EVENT_QUEUE_SIZE
-    max_message_size: int = DEFAULT_MAX_MESSAGE_SIZE
-    max_pending_events_per_session: int = DEFAULT_MAX_PENDING_EVENTS_PER_SESSION
-    max_sessions: int
-    max_stream_read_buffer: int = DEFAULT_MAX_STREAM_READ_BUFFER
-    max_stream_write_buffer: int = DEFAULT_MAX_STREAM_WRITE_BUFFER
+    max_field_section_size: int = DEFAULT_MAX_FIELD_SECTION_SIZE
+    max_session_pending_events: int = DEFAULT_MAX_SESSION_PENDING_EVENTS
+    max_sessions: int = DEFAULT_MAX_SESSIONS
+    max_stream_read_buffer_size: int = DEFAULT_MAX_STREAM_READ_BUFFER_SIZE
+    max_stream_write_buffer_size: int = DEFAULT_MAX_STREAM_WRITE_BUFFER_SIZE
     max_total_pending_events: int = DEFAULT_MAX_TOTAL_PENDING_EVENTS
+    max_transport_streams: int = DEFAULT_MAX_TRANSPORT_STREAMS
     pending_event_ttl: float = DEFAULT_PENDING_EVENT_TTL
     read_timeout: float | None = DEFAULT_READ_TIMEOUT
     resource_cleanup_interval: float = DEFAULT_RESOURCE_CLEANUP_INTERVAL
     stream_creation_timeout: float = DEFAULT_STREAM_CREATION_TIMEOUT
-    transport_streams_cap: int = DEFAULT_TRANSPORT_STREAMS_CAP
     write_timeout: float | None = DEFAULT_WRITE_TIMEOUT
 
     def copy(self) -> Self:
@@ -151,7 +148,7 @@ class BaseConfig(ABC):
                 setattr(new_config, key, value)
             else:
                 raise ConfigurationError(
-                    message=f"Unknown configuration key: '{key}'", config_key=key, config_value=value
+                    message=f"cfg validate invalid actual={key}", config_key=key, config_value=value
                 )
         new_config.validate()
         return new_config
@@ -160,141 +157,190 @@ class BaseConfig(ABC):
         """Validate the configuration state."""
         if not self.alpn_protocols:
             raise ConfigurationError(
-                message="Invalid value for 'alpn_protocols': cannot be empty",
+                message=f"cfg_alpn_protocols validate invalid actual={self.alpn_protocols}",
                 config_key="alpn_protocols",
                 config_value=self.alpn_protocols,
             )
 
-        if self.congestion_control_algorithm not in SUPPORTED_CONGESTION_CONTROL_ALGORITHMS:
+        try:
+            _validate_timeout(timeout=self.close_timeout)
+        except (ValueError, TypeError) as e:
+            raise ConfigurationError(
+                message=f"cfg_close_timeout validate invalid actual={self.close_timeout}",
+                config_key="close_timeout",
+                config_value=self.close_timeout,
+            ) from e
+
+        if self.congestion_control_algorithm not in _CONGESTION_CONTROL_ALGORITHMS:
             raise ConfigurationError(
                 message=(
-                    f"Invalid value for 'congestion_control_algorithm': "
-                    f"must be one of {SUPPORTED_CONGESTION_CONTROL_ALGORITHMS}"
+                    f"cfg_congestion_control_algorithm validate invalid "
+                    f"actual={self.congestion_control_algorithm} expected=congestion_control_algorithms"
                 ),
                 config_key="congestion_control_algorithm",
                 config_value=self.congestion_control_algorithm,
             )
 
-        timeouts_to_check = [
-            "close_timeout",
-            "connection_idle_timeout",
-            "keep_alive",
-            "pending_event_ttl",
-            "read_timeout",
-            "resource_cleanup_interval",
-            "stream_creation_timeout",
-            "write_timeout",
-        ]
-
-        for timeout_name in timeouts_to_check:
-            try:
-                _validate_timeout(timeout=getattr(self, timeout_name))
-            except (ValueError, TypeError) as e:
-                raise ConfigurationError(
-                    message=f"Invalid value for '{timeout_name}': {e}",
-                    config_key=timeout_name,
-                    config_value=getattr(self, timeout_name),
-                ) from e
-
-        if self.flow_control_window_size <= 0:
+        try:
+            _validate_timeout(timeout=self.connection_idle_timeout)
+        except (ValueError, TypeError) as e:
             raise ConfigurationError(
-                message="Invalid value for 'flow_control_window_size': must be positive",
-                config_key="flow_control_window_size",
-                config_value=self.flow_control_window_size,
+                message=f"cfg_connection_idle_timeout validate invalid actual={self.connection_idle_timeout}",
+                config_key="connection_idle_timeout",
+                config_value=self.connection_idle_timeout,
+            ) from e
+
+        if self.event_history_capacity < 0:
+            raise ConfigurationError(
+                message=f"cfg_event_history_capacity validate invalid actual={self.event_history_capacity}",
+                config_key="event_history_capacity",
+                config_value=self.event_history_capacity,
             )
+
+        if self.event_queue_capacity <= 0:
+            raise ConfigurationError(
+                message=f"cfg_event_queue_capacity validate invalid actual={self.event_queue_capacity}",
+                config_key="event_queue_capacity",
+                config_value=self.event_queue_capacity,
+            )
+
+        if self.flow_control_window <= 0:
+            raise ConfigurationError(
+                message=f"cfg_flow_control_window validate invalid actual={self.flow_control_window}",
+                config_key="flow_control_window",
+                config_value=self.flow_control_window,
+            )
+
+        try:
+            _validate_timeout(timeout=self.keep_alive_interval)
+        except (ValueError, TypeError) as e:
+            raise ConfigurationError(
+                message=f"cfg_keep_alive_interval validate invalid actual={self.keep_alive_interval}",
+                config_key="keep_alive_interval",
+                config_value=self.keep_alive_interval,
+            ) from e
 
         if self.max_capsule_size <= 0:
             raise ConfigurationError(
-                message="Invalid value for 'max_capsule_size': must be positive",
+                message=f"cfg_max_capsule_size validate invalid actual={self.max_capsule_size}",
                 config_key="max_capsule_size",
                 config_value=self.max_capsule_size,
             )
 
         if self.max_connections <= 0:
             raise ConfigurationError(
-                message="Invalid value for 'max_connections': must be positive",
+                message=f"cfg_max_connections validate invalid actual={self.max_connections}",
                 config_key="max_connections",
                 config_value=self.max_connections,
             )
 
-        if self.max_sessions <= 0:
+        if self.max_datagram_size <= 0 or self.max_datagram_size > UDP_MAX_DATAGRAM_SIZE:
             raise ConfigurationError(
-                message="Invalid value for 'max_sessions': must be positive",
-                config_key="max_sessions",
-                config_value=self.max_sessions,
-            )
-
-        if self.max_datagram_size <= 0 or self.max_datagram_size > MAX_DATAGRAM_SIZE:
-            raise ConfigurationError(
-                message=f"Invalid value for 'max_datagram_size': must be between 1 and {MAX_DATAGRAM_SIZE}",
+                message=f"cfg_max_datagram_size validate invalid actual={self.max_datagram_size}",
                 config_key="max_datagram_size",
                 config_value=self.max_datagram_size,
             )
 
-        if self.max_event_history_size < 0:
-            raise ConfigurationError(
-                message="Invalid value for 'max_event_history_size': must be non-negative",
-                config_key="max_event_history_size",
-                config_value=self.max_event_history_size,
-            )
-
         if self.max_event_listeners <= 0:
             raise ConfigurationError(
-                message="Invalid value for 'max_event_listeners': must be positive",
+                message=f"cfg_max_event_listeners validate invalid actual={self.max_event_listeners}",
                 config_key="max_event_listeners",
                 config_value=self.max_event_listeners,
             )
 
-        if self.max_event_queue_size <= 0:
+        if self.max_field_section_size <= 0 or self.max_field_section_size > _MAX_FIELD_SECTION_SIZE:
             raise ConfigurationError(
-                message="Invalid value for 'max_event_queue_size': must be positive",
-                config_key="max_event_queue_size",
-                config_value=self.max_event_queue_size,
+                message=f"cfg_max_field_section_size validate invalid actual={self.max_field_section_size}",
+                config_key="max_field_section_size",
+                config_value=self.max_field_section_size,
             )
 
-        if self.max_message_size <= 0:
+        if self.max_session_pending_events <= 0:
             raise ConfigurationError(
-                message="Invalid value for 'max_message_size': must be positive",
-                config_key="max_message_size",
-                config_value=self.max_message_size,
+                message=f"cfg_max_session_pending_events validate invalid actual={self.max_session_pending_events}",
+                config_key="max_session_pending_events",
+                config_value=self.max_session_pending_events,
             )
 
-        if self.max_pending_events_per_session <= 0:
+        if self.max_sessions <= 0:
             raise ConfigurationError(
-                message="Invalid value for 'max_pending_events_per_session': must be positive",
-                config_key="max_pending_events_per_session",
-                config_value=self.max_pending_events_per_session,
+                message=f"cfg_max_sessions validate invalid actual={self.max_sessions}",
+                config_key="max_sessions",
+                config_value=self.max_sessions,
+            )
+
+        if self.max_stream_read_buffer_size <= 0:
+            raise ConfigurationError(
+                message=f"cfg_max_stream_read_buffer_size validate invalid actual={self.max_stream_read_buffer_size}",
+                config_key="max_stream_read_buffer_size",
+                config_value=self.max_stream_read_buffer_size,
+            )
+
+        if self.max_stream_write_buffer_size <= 0:
+            raise ConfigurationError(
+                message=f"cfg_max_stream_write_buffer_size validate invalid actual={self.max_stream_write_buffer_size}",
+                config_key="max_stream_write_buffer_size",
+                config_value=self.max_stream_write_buffer_size,
             )
 
         if self.max_total_pending_events <= 0:
             raise ConfigurationError(
-                message="Invalid value for 'max_total_pending_events': must be positive",
+                message=f"cfg_max_total_pending_events validate invalid actual={self.max_total_pending_events}",
                 config_key="max_total_pending_events",
                 config_value=self.max_total_pending_events,
             )
 
-        if self.max_stream_read_buffer <= 0:
+        if self.max_transport_streams <= 0 or self.max_transport_streams > WT_STREAMS_LIMIT:
             raise ConfigurationError(
-                message="Invalid value for 'max_stream_read_buffer': must be positive",
-                config_key="max_stream_read_buffer",
-                config_value=self.max_stream_read_buffer,
+                message=f"cfg_max_transport_streams validate invalid actual={self.max_transport_streams}",
+                config_key="max_transport_streams",
+                config_value=self.max_transport_streams,
             )
 
-        if self.max_stream_write_buffer <= 0:
+        try:
+            _validate_timeout(timeout=self.pending_event_ttl)
+        except (ValueError, TypeError) as e:
             raise ConfigurationError(
-                message="Invalid value for 'max_stream_write_buffer': must be positive",
-                config_key="max_stream_write_buffer",
-                config_value=self.max_stream_write_buffer,
-            )
+                message=f"cfg_pending_event_ttl validate invalid actual={self.pending_event_ttl}",
+                config_key="pending_event_ttl",
+                config_value=self.pending_event_ttl,
+            ) from e
 
-        if self.transport_streams_cap <= 0 or self.transport_streams_cap > MAX_PROTOCOL_STREAMS_LIMIT:
+        try:
+            _validate_timeout(timeout=self.read_timeout)
+        except (ValueError, TypeError) as e:
             raise ConfigurationError(
-                message=(
-                    f"Invalid value for 'transport_streams_cap': " f"must be between 1 and {MAX_PROTOCOL_STREAMS_LIMIT}"
-                ),
-                config_key="transport_streams_cap",
-                config_value=self.transport_streams_cap,
-            )
+                message=f"cfg_read_timeout validate invalid actual={self.read_timeout}",
+                config_key="read_timeout",
+                config_value=self.read_timeout,
+            ) from e
+
+        try:
+            _validate_timeout(timeout=self.resource_cleanup_interval)
+        except (ValueError, TypeError) as e:
+            raise ConfigurationError(
+                message=f"cfg_resource_cleanup_interval validate invalid actual={self.resource_cleanup_interval}",
+                config_key="resource_cleanup_interval",
+                config_value=self.resource_cleanup_interval,
+            ) from e
+
+        try:
+            _validate_timeout(timeout=self.stream_creation_timeout)
+        except (ValueError, TypeError) as e:
+            raise ConfigurationError(
+                message=f"cfg_stream_creation_timeout validate invalid actual={self.stream_creation_timeout}",
+                config_key="stream_creation_timeout",
+                config_value=self.stream_creation_timeout,
+            ) from e
+
+        try:
+            _validate_timeout(timeout=self.write_timeout)
+        except (ValueError, TypeError) as e:
+            raise ConfigurationError(
+                message=f"cfg_write_timeout validate invalid actual={self.write_timeout}",
+                config_key="write_timeout",
+                config_value=self.write_timeout,
+            ) from e
 
 
 @dataclass(kw_only=True)
@@ -307,34 +353,26 @@ class ClientConfig(BaseConfig):
     connection_attempt_delay: float = DEFAULT_CONNECTION_ATTEMPT_DELAY
     headers: Headers = field(default_factory=dict)
     keyfile: str | None = None
-    max_connection_retries: int = DEFAULT_MAX_CONNECTION_RETRIES
-    max_connections: int = DEFAULT_CLIENT_MAX_CONNECTIONS
-    max_retry_delay: float = DEFAULT_MAX_RETRY_DELAY
-    max_sessions: int = DEFAULT_CLIENT_MAX_SESSIONS
-    retry_backoff: float = DEFAULT_RETRY_BACKOFF
-    retry_delay: float = DEFAULT_RETRY_DELAY
-    subprotocols: list[str] | None = None
     user_agent: str | None = None
     verify_mode: ssl.VerifyMode = ssl.CERT_REQUIRED
+    wt_available_protocols: list[str] | None = None
 
     def validate(self) -> None:
         """Validate the client configuration state."""
         super().validate()
 
-        has_certfile = self.certfile is not None
-        has_keyfile = self.keyfile is not None
-        if has_certfile != has_keyfile:
+        if self.keyfile is not None and self.certfile is None:
             raise ConfigurationError(
-                message="TLS configuration error: 'certfile' and 'keyfile' must be provided together",
-                config_key="certfile/keyfile",
-                config_value=f"certfile={self.certfile}, keyfile={self.keyfile}",
+                message=f"cfg_certfile validate invalid actual={self.certfile}",
+                config_key="certfile",
+                config_value=self.certfile,
             )
 
         try:
             _validate_timeout(timeout=self.connect_timeout)
         except (ValueError, TypeError) as e:
             raise ConfigurationError(
-                message=f"Invalid value for 'connect_timeout': {e}",
+                message=f"cfg_connect_timeout validate invalid actual={self.connect_timeout}",
                 config_key="connect_timeout",
                 config_value=self.connect_timeout,
             ) from e
@@ -343,51 +381,34 @@ class ClientConfig(BaseConfig):
             _validate_timeout(timeout=self.connection_attempt_delay)
         except (ValueError, TypeError) as e:
             raise ConfigurationError(
-                message=f"Invalid value for 'connection_attempt_delay': {e}",
+                message=f"cfg_connection_attempt_delay validate invalid actual={self.connection_attempt_delay}",
                 config_key="connection_attempt_delay",
                 config_value=self.connection_attempt_delay,
             ) from e
 
-        if self.max_connection_retries < 0:
+        if self.certfile is not None and self.keyfile is None:
             raise ConfigurationError(
-                message="Invalid value for 'max_connection_retries': must be non-negative",
-                config_key="max_connection_retries",
-                config_value=self.max_connection_retries,
-            )
-        if self.max_retry_delay <= 0:
-            raise ConfigurationError(
-                message="Invalid value for 'max_retry_delay': must be positive",
-                config_key="max_retry_delay",
-                config_value=self.max_retry_delay,
-            )
-        if self.retry_backoff < 1.0:
-            raise ConfigurationError(
-                message="Invalid value for 'retry_backoff': must be >= 1.0",
-                config_key="retry_backoff",
-                config_value=self.retry_backoff,
-            )
-        if self.retry_delay <= 0:
-            raise ConfigurationError(
-                message="Invalid value for 'retry_delay': must be positive",
-                config_key="retry_delay",
-                config_value=self.retry_delay,
+                message=f"cfg_keyfile validate invalid actual={self.keyfile}",
+                config_key="keyfile",
+                config_value=self.keyfile,
             )
 
-        if self.subprotocols is not None:
-            if not isinstance(self.subprotocols, list) or not all(isinstance(p, str) for p in self.subprotocols):
-                raise ConfigurationError(
-                    message="Invalid value for 'subprotocols': must be a list of strings",
-                    config_key="subprotocols",
-                    config_value=self.subprotocols,
-                )
-
-        allowed_verify_modes: list[ssl.VerifyMode] = [ssl.CERT_NONE, ssl.CERT_OPTIONAL, ssl.CERT_REQUIRED]
-        if self.verify_mode not in allowed_verify_modes:
+        if self.verify_mode not in _VERIFY_MODES:
             raise ConfigurationError(
-                message="Invalid value for 'verify_mode': unknown SSL verify mode",
+                message=f"cfg_verify_mode validate invalid actual={self.verify_mode}",
                 config_key="verify_mode",
                 config_value=self.verify_mode,
             )
+
+        if self.wt_available_protocols is not None:
+            if not isinstance(self.wt_available_protocols, list) or not all(
+                isinstance(p, str) for p in self.wt_available_protocols
+            ):
+                raise ConfigurationError(
+                    message=f"cfg_wt_available_protocols validate invalid actual={self.wt_available_protocols}",
+                    config_key="wt_available_protocols",
+                    config_value=self.wt_available_protocols,
+                )
 
 
 @dataclass(kw_only=True)
@@ -399,8 +420,6 @@ class ServerConfig(BaseConfig):
     ca_certs: str | None = None
     certfile: str
     keyfile: str
-    max_connections: int = DEFAULT_SERVER_MAX_CONNECTIONS
-    max_sessions: int = DEFAULT_SERVER_MAX_SESSIONS
     verify_mode: ssl.VerifyMode = ssl.CERT_NONE
 
     @classmethod
@@ -420,7 +439,7 @@ class ServerConfig(BaseConfig):
 
         if not self.bind_host:
             raise ConfigurationError(
-                message="Invalid value for 'bind_host': cannot be empty",
+                message=f"cfg_bind_host validate invalid actual={self.bind_host}",
                 config_key="bind_host",
                 config_value=self.bind_host,
             )
@@ -429,42 +448,50 @@ class ServerConfig(BaseConfig):
             _validate_port(port=self.bind_port)
         except ValueError as e:
             raise ConfigurationError(
-                message=f"Invalid value for 'bind_port': {e}", config_key="bind_port", config_value=self.bind_port
+                message=f"cfg_bind_port validate invalid actual={self.bind_port}",
+                config_key="bind_port",
+                config_value=self.bind_port,
             ) from e
-
-        if self.certfile is None or self.keyfile is None:
-            raise ConfigurationError(
-                message="TLS configuration error: Server requires both certificate and key files",
-                config_key="certfile/keyfile",
-                config_value=f"certfile={self.certfile}, keyfile={self.keyfile}",
-            )
-
-        allowed_verify_modes: list[ssl.VerifyMode | None] = [ssl.CERT_NONE, ssl.CERT_OPTIONAL, ssl.CERT_REQUIRED]
-        if self.verify_mode not in allowed_verify_modes:
-            raise ConfigurationError(
-                message="Invalid value for 'verify_mode': unknown SSL verify mode",
-                config_key="verify_mode",
-                config_value=self.verify_mode,
-            )
 
         if self.verify_mode in (ssl.CERT_REQUIRED, ssl.CERT_OPTIONAL) and not self.ca_certs:
             raise ConfigurationError(
-                message="TLS configuration error: Server requires 'ca_certs' for mTLS",
+                message=f"cfg_ca_certs validate invalid actual={self.ca_certs}",
                 config_key="ca_certs",
                 config_value=self.ca_certs,
+            )
+
+        if self.certfile is None:
+            raise ConfigurationError(
+                message=f"cfg_certfile validate invalid actual={self.certfile}",
+                config_key="certfile",
+                config_value=self.certfile,
+            )
+
+        if self.keyfile is None:
+            raise ConfigurationError(
+                message=f"cfg_keyfile validate invalid actual={self.keyfile}",
+                config_key="keyfile",
+                config_value=self.keyfile,
+            )
+
+        if self.verify_mode not in _VERIFY_MODES:
+            raise ConfigurationError(
+                message=f"cfg_verify_mode validate invalid actual={self.verify_mode}",
+                config_key="verify_mode",
+                config_value=self.verify_mode,
             )
 
 
 def _validate_port(*, port: Any) -> None:
     """Validate the network port."""
     if not isinstance(port, int) or not (1 <= port <= 65535):
-        raise ValueError(f"Port must be an integer between 1 and 65535, got {port}")
+        raise ValueError()
 
 
 def _validate_timeout(*, timeout: float | None) -> None:
     """Validate the timeout value."""
     if timeout is not None:
         if not isinstance(timeout, (int, float)):
-            raise TypeError("Timeout must be a number or None")
+            raise TypeError()
         if timeout <= 0:
-            raise ValueError("Timeout must be positive")
+            raise ValueError()

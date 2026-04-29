@@ -5,10 +5,10 @@ from typing import Any
 import pytest
 
 from pywebtransport._protocol.events import (
-    ConnectionClose,
     UserAcceptSession,
+    UserCloseConnection,
+    UserCloseConnectionGracefully,
     UserCloseSession,
-    UserConnectionGracefulClose,
     UserCreateSession,
     UserCreateStream,
     UserEvent,
@@ -18,12 +18,12 @@ from pywebtransport._protocol.events import (
     UserGetStreamDiagnostics,
     UserGrantDataCredit,
     UserGrantStreamsCredit,
+    UserReadStream,
     UserRejectSession,
     UserResetStream,
     UserSendDatagram,
     UserSendStreamData,
     UserStopSending,
-    UserStreamRead,
 )
 
 
@@ -33,35 +33,35 @@ class TestUserEvents:
         argnames="event_class, kwargs, expected_attrs",
         argvalues=[
             (
-                ConnectionClose,
-                {"request_id": 1, "error_code": 100, "reason": "closing"},
-                {"request_id": 1, "error_code": 100, "reason": "closing"},
-            ),
-            (
                 UserAcceptSession,
                 {"request_id": 1, "session_id": 1},
-                {"request_id": 1, "session_id": 1, "subprotocol": None},
+                {"request_id": 1, "session_id": 1, "wt_protocol": None},
             ),
             (
                 UserAcceptSession,
-                {"request_id": 1, "session_id": 1, "subprotocol": "h3"},
-                {"request_id": 1, "session_id": 1, "subprotocol": "h3"},
+                {"request_id": 1, "session_id": 1, "wt_protocol": "h3"},
+                {"request_id": 1, "session_id": 1, "wt_protocol": "h3"},
             ),
+            (
+                UserCloseConnection,
+                {"request_id": 1, "error_code": 100, "reason": "closing"},
+                {"request_id": 1, "error_code": 100, "reason": "closing"},
+            ),
+            (UserCloseConnectionGracefully, {"request_id": 1}, {"request_id": 1}),
             (
                 UserCloseSession,
                 {"request_id": 1, "session_id": 1, "error_code": 100, "reason": "test"},
                 {"request_id": 1, "session_id": 1, "error_code": 100, "reason": "test"},
             ),
-            (UserConnectionGracefulClose, {"request_id": 1}, {"request_id": 1}),
             (
                 UserCreateSession,
                 {"request_id": 1, "path": "/test", "headers": {b":path": b"/test"}},
-                {"request_id": 1, "path": "/test", "headers": {b":path": b"/test"}, "subprotocols": None},
+                {"request_id": 1, "path": "/test", "headers": {b":path": b"/test"}, "wt_available_protocols": None},
             ),
             (
                 UserCreateSession,
-                {"request_id": 1, "path": "/test", "headers": {}, "subprotocols": ["p1", "p2"]},
-                {"request_id": 1, "path": "/test", "headers": {}, "subprotocols": ["p1", "p2"]},
+                {"request_id": 1, "path": "/test", "headers": {}, "wt_available_protocols": ["p1", "p2"]},
+                {"request_id": 1, "path": "/test", "headers": {}, "wt_available_protocols": ["p1", "p2"]},
             ),
             (
                 UserCreateStream,
@@ -87,6 +87,11 @@ class TestUserEvents:
                 {"request_id": 1, "session_id": 1, "is_unidirectional": False, "max_streams": 10},
             ),
             (
+                UserReadStream,
+                {"request_id": 1, "stream_id": 4, "max_bytes": 1024},
+                {"request_id": 1, "stream_id": 4, "max_bytes": 1024},
+            ),
+            (
                 UserRejectSession,
                 {"request_id": 1, "session_id": 1, "status_code": 404},
                 {"request_id": 1, "session_id": 1, "status_code": 404},
@@ -110,11 +115,6 @@ class TestUserEvents:
                 UserStopSending,
                 {"request_id": 1, "stream_id": 4, "error_code": 100},
                 {"request_id": 1, "stream_id": 4, "error_code": 100},
-            ),
-            (
-                UserStreamRead,
-                {"request_id": 1, "stream_id": 4, "max_bytes": 1024},
-                {"request_id": 1, "stream_id": 4, "max_bytes": 1024},
             ),
         ],
     )

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import fnmatch
 import http
+import logging
 import time
 from collections import deque
 from types import TracebackType
@@ -12,7 +13,6 @@ from typing import Final, Protocol, Self, runtime_checkable
 
 from pywebtransport.exceptions import ServerError
 from pywebtransport.types import Headers, SessionProtocol
-from pywebtransport.utils import find_header_str, get_logger
 
 __all__: list[str] = [
     "AuthHandlerProtocol",
@@ -23,26 +23,25 @@ __all__: list[str] = [
     "StatefulMiddlewareProtocol",
     "create_auth_middleware",
     "create_cors_middleware",
-    "create_logging_middleware",
     "create_rate_limit_middleware",
 ]
 
-_DEFAULT_RATE_LIMIT_CLEANUP_INTERVAL: Final[int] = 300
-_DEFAULT_RATE_LIMIT_MAX_REQUESTS: Final[int] = 100
-_DEFAULT_RATE_LIMIT_MAX_TRACKED_IPS: Final[int] = 10000
-_DEFAULT_RATE_LIMIT_WINDOW: Final[int] = 60
+_CLEANUP_INTERVAL: Final[int] = 300
+_TRACKED_IP_CAPACITY: Final[int] = 10000
+_WINDOW_REQUEST_LIMIT: Final[int] = 100
+_WINDOW_TTL: Final[int] = 60
 
-_logger = get_logger(name=__name__)
+_logger = logging.getLogger(name=__name__)
 
 
 class MiddlewareRejected(Exception):
     """Indicate a session request rejection by middleware."""
 
-    __slots__ = ("status_code", "headers")
+    __slots__ = ("headers", "status_code")
 
-    def __init__(self, status_code: int = http.HTTPStatus.FORBIDDEN, headers: Headers | None = None) -> None:
+    def __init__(self, *, status_code: int = http.HTTPStatus.FORBIDDEN, headers: Headers | None = None) -> None:
         """Initialize the instance."""
-        super().__init__(f"Request rejected with status {status_code}")
+        super().__init__(f"app_middleware reject err={status_code}")
 
         self.status_code = status_code
         self.headers = headers if headers is not None else {}
@@ -104,7 +103,6 @@ class MiddlewareManager:
             except MiddlewareRejected:
                 raise
             except Exception as e:
-                _logger.error("Middleware error: %s", e, exc_info=True)
                 raise MiddlewareRejected(status_code=http.HTTPStatus.INTERNAL_SERVER_ERROR) from e
 
     def remove_middleware(self, *, middleware: MiddlewareProtocol) -> None:
@@ -119,10 +117,10 @@ class RateLimiter:
     def __init__(
         self,
         *,
-        max_requests: int = _DEFAULT_RATE_LIMIT_MAX_REQUESTS,
-        window_seconds: int = _DEFAULT_RATE_LIMIT_WINDOW,
-        cleanup_interval: int = _DEFAULT_RATE_LIMIT_CLEANUP_INTERVAL,
-        max_tracked_ips: int = _DEFAULT_RATE_LIMIT_MAX_TRACKED_IPS,
+        max_requests: int = _WINDOW_REQUEST_LIMIT,
+        window_seconds: int = _WINDOW_TTL,
+        cleanup_interval: int = _CLEANUP_INTERVAL,
+        max_tracked_ips: int = _TRACKED_IP_CAPACITY,
     ) -> None:
         """Initialize the instance."""
         self._max_requests = max_requests
@@ -182,12 +180,12 @@ class RateLimiter:
                         del self._requests[ip]
 
                     if ips_to_remove:
-                        _logger.debug("Cleaned up %d stale IP entries.", len(ips_to_remove))
+                        _logger.debug("app_middleware evict count=%d", len(ips_to_remove))
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                _logger.error("Error in RateLimiter cleanup task: %s", e, exc_info=True)
+                _logger.warning("rt_task failed err=%s", e, exc_info=True)
                 await asyncio.sleep(delay=1.0)
 
     def _start_cleanup_task(self) -> None:
@@ -198,12 +196,7 @@ class RateLimiter:
     async def __call__(self, *, session: SessionProtocol) -> None:
         """Apply rate limiting to an incoming session."""
         if self._tg is None:
-            raise ServerError(
-                message=(
-                    "RateLimiter has not been activated. It must be used as an "
-                    "asynchronous context manager (`async with ...`)."
-                )
-            )
+            raise ServerError(message="app_middleware validate failed expected=open")
 
         client_ip = "unknown"
         if session.remote_address is not None:
@@ -214,10 +207,12 @@ class RateLimiter:
         async with self._lock:
             if client_ip not in self._requests:
                 if len(self._requests) >= self._max_tracked_ips:
-                    self._requests.clear()
                     _logger.warning(
-                        "Rate limiter IP tracking limit (%d) reached. Flushed all records.", self._max_tracked_ips
+                        "app_middleware validate exceeded actual=%d limit=%d",
+                        len(self._requests),
+                        self._max_tracked_ips,
                     )
+                    self._requests.clear()
                 self._requests[client_ip] = deque()
 
             client_timestamps = self._requests[client_ip]
@@ -227,7 +222,6 @@ class RateLimiter:
                 client_timestamps.popleft()
 
             if len(client_timestamps) >= self._max_requests:
-                _logger.warning("Rate limit exceeded for IP %s", client_ip)
                 raise MiddlewareRejected(
                     status_code=http.HTTPStatus.TOO_MANY_REQUESTS, headers={"retry-after": str(self._window_seconds)}
                 )
@@ -245,7 +239,6 @@ def create_auth_middleware(*, auth_handler: AuthHandlerProtocol) -> MiddlewarePr
         except MiddlewareRejected:
             raise
         except Exception as e:
-            _logger.error("Authentication handler error: %s", e, exc_info=True)
             raise MiddlewareRejected(status_code=http.HTTPStatus.INTERNAL_SERVER_ERROR) from e
 
     return middleware
@@ -255,9 +248,8 @@ def create_cors_middleware(*, allowed_origins: list[str]) -> MiddlewareProtocol:
     """Instantiate CORS middleware to validate the Origin header."""
 
     async def cors_middleware(*, session: SessionProtocol) -> None:
-        origin = find_header_str(headers=session.headers, key="origin")
+        origin = _find_header_str(headers=session.headers, key="origin")
         if origin is None or not origin:
-            _logger.warning("CORS check failed: 'Origin' header missing.")
             raise MiddlewareRejected(status_code=http.HTTPStatus.FORBIDDEN)
 
         match_found = False
@@ -267,32 +259,17 @@ def create_cors_middleware(*, allowed_origins: list[str]) -> MiddlewareProtocol:
                 break
 
         if not match_found:
-            _logger.warning("CORS check failed: Origin '%s' not allowed.", origin)
             raise MiddlewareRejected(status_code=http.HTTPStatus.FORBIDDEN)
 
     return cors_middleware
 
 
-def create_logging_middleware() -> MiddlewareProtocol:
-    """Instantiate simple request logging middleware."""
-
-    async def middleware(*, session: SessionProtocol) -> None:
-        remote_address_str = "unknown"
-        if session.remote_address is not None:
-            addr = session.remote_address
-            remote_address_str = f"{addr[0]}:{addr[1]}"
-
-        _logger.info("Session request: path='%s' from=%s", session.path, remote_address_str)
-
-    return middleware
-
-
 def create_rate_limit_middleware(
     *,
-    max_requests: int = _DEFAULT_RATE_LIMIT_MAX_REQUESTS,
-    window_seconds: int = _DEFAULT_RATE_LIMIT_WINDOW,
-    cleanup_interval: int = _DEFAULT_RATE_LIMIT_CLEANUP_INTERVAL,
-    max_tracked_ips: int = _DEFAULT_RATE_LIMIT_MAX_TRACKED_IPS,
+    max_requests: int = _WINDOW_REQUEST_LIMIT,
+    window_seconds: int = _WINDOW_TTL,
+    cleanup_interval: int = _CLEANUP_INTERVAL,
+    max_tracked_ips: int = _TRACKED_IP_CAPACITY,
 ) -> RateLimiter:
     """Instantiate a stateful rate-limiting middleware."""
     return RateLimiter(
@@ -301,3 +278,37 @@ def create_rate_limit_middleware(
         cleanup_interval=cleanup_interval,
         max_tracked_ips=max_tracked_ips,
     )
+
+
+def _find_header_str(*, headers: Headers, key: str, default: str | None = None) -> str | None:
+    """Search for a header value case-insensitively and return as a decoded string."""
+    target_key = key.lower()
+    target_key_bytes = target_key.encode("utf-8")
+
+    value: str | bytes | None = None
+
+    if isinstance(headers, dict):
+        if target_key in headers:
+            value = headers[target_key]
+        else:
+            value = headers.get(target_key_bytes)
+    else:
+        for k, v in headers:
+            if isinstance(k, bytes):
+                if k.lower() == target_key_bytes:
+                    value = v
+                    break
+            elif k.lower() == target_key:
+                value = v
+                break
+
+    if value is None:
+        return default
+
+    if isinstance(value, str):
+        return value
+
+    try:
+        return value.decode("utf-8")
+    except UnicodeDecodeError:
+        return default

@@ -17,6 +17,7 @@ from pywebtransport import (
     TimeoutError,
     WebTransportClient,
 )
+from pywebtransport.utils import init_tracing
 
 SERVER_HOST: Final[str] = "127.0.0.1"
 SERVER_PORT: Final[int] = 4433
@@ -26,6 +27,7 @@ DEBUG_MODE: Final[bool] = "--debug" in sys.argv
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 if DEBUG_MODE:
     logging.getLogger().setLevel(logging.DEBUG)
+    init_tracing()
 
 logger = logging.getLogger(name="test_error_handling")
 
@@ -140,7 +142,7 @@ async def test_session_closure_handling() -> bool:
     try:
         async with WebTransportClient(config=config) as client:
             session = await client.connect(url=SERVER_URL)
-            logger.info("Connected, session ID: %s", session.session_id)
+            logger.info("Connected, session ID: %d", session.session_id)
             await session.close()
             logger.info("Session closed.")
 
@@ -174,7 +176,7 @@ async def test_session_closure_handling() -> bool:
 
 async def test_malformed_operations() -> bool:
     """Test handling of malformed API operations."""
-    logger.info("--- Test 06H: Malformed Operations ---")
+    logger.info("--- Test 06F: Malformed Operations ---")
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
@@ -187,8 +189,8 @@ async def test_malformed_operations() -> bool:
                 await stream.write(data=None)  # type: ignore
                 logger.error("FAILURE: Writing None should have failed.")
                 return False
-            except TypeError:
-                logger.info("   - SUCCESS: Writing None correctly failed with TypeError.")
+            except StreamError:
+                logger.info("   - SUCCESS: Writing None correctly failed with StreamError.")
             except Exception as e:
                 logger.error("   - FAILURE: Unexpected error for None write: %s", e)
                 return False

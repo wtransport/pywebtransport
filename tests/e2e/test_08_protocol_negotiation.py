@@ -1,4 +1,4 @@
-"""E2E test for Application-Layer Protocol Negotiation (ALPN) / Subprotocols."""
+"""E2E test for Application-Layer Protocol Negotiation (ALPN)."""
 
 import asyncio
 import logging
@@ -8,32 +8,34 @@ from collections.abc import Awaitable, Callable
 from typing import Final
 
 from pywebtransport import ClientConfig, WebTransportClient
+from pywebtransport.utils import init_tracing
 
 SERVER_HOST: Final[str] = "127.0.0.1"
 SERVER_PORT: Final[int] = 4433
 SERVER_URL: Final[str] = f"https://{SERVER_HOST}:{SERVER_PORT}/"
-TEST_URL: Final[str] = SERVER_URL + "subprotocol"
+TEST_URL: Final[str] = SERVER_URL + "protocol-negotiation"
 DEBUG_MODE: Final[bool] = "--debug" in sys.argv
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 if DEBUG_MODE:
     logging.getLogger().setLevel(logging.DEBUG)
+    init_tracing()
 
-logger = logging.getLogger(name="test_subprotocols")
+logger = logging.getLogger(name="test_protocol_negotiation")
 
 
 async def test_exact_match() -> bool:
     """Test successful negotiation when exact matching protocols are provided."""
-    logger.info("--- Test 09A: Exact Match ---")
+    logger.info("--- Test 08A: Exact Match ---")
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
-            session = await client.connect(url=TEST_URL, subprotocols=["chat-v2", "chat-v1"])
-            agreed_protocol = session.subprotocol
+            session = await client.connect(url=TEST_URL, wt_available_protocols=["chat-v2", "chat-v1"])
+            agreed_protocol = session.wt_protocol
 
             if agreed_protocol == "chat-v2":
-                logger.info("SUCCESS: Negotiated correct subprotocol: %s", agreed_protocol)
+                logger.info("SUCCESS: Negotiated correct protocol: %s", agreed_protocol)
                 return True
             else:
                 logger.error("FAILURE: Expected 'chat-v2', got '%s'", agreed_protocol)
@@ -45,13 +47,13 @@ async def test_exact_match() -> bool:
 
 async def test_fallback_downgrade() -> bool:
     """Test successful negotiation utilizing fallback/downgrade to a lower protocol version."""
-    logger.info("--- Test 09B: Fallback Downgrade ---")
+    logger.info("--- Test 08B: Fallback Downgrade ---")
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
-            session = await client.connect(url=TEST_URL, subprotocols=["chat-v3", "chat-v1"])
-            agreed_protocol = session.subprotocol
+            session = await client.connect(url=TEST_URL, wt_available_protocols=["chat-v3", "chat-v1"])
+            agreed_protocol = session.wt_protocol
 
             if agreed_protocol == "chat-v1":
                 logger.info("SUCCESS: Successfully downgraded and negotiated: %s", agreed_protocol)
@@ -65,13 +67,13 @@ async def test_fallback_downgrade() -> bool:
 
 
 async def test_mismatch_rejection() -> bool:
-    """Test that connection is correctly rejected when no subprotocols match."""
-    logger.info("--- Test 09C: Mismatch Rejection ---")
+    """Test that connection is correctly rejected when no protocols match."""
+    logger.info("--- Test 08C: Mismatch Rejection ---")
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
-            await client.connect(url=TEST_URL, subprotocols=["unknown-proto"])
+            await client.connect(url=TEST_URL, wt_available_protocols=["unknown-proto"])
             logger.error("FAILURE: Connection succeeded but should have been rejected.")
             return False
     except Exception as e:
@@ -80,13 +82,13 @@ async def test_mismatch_rejection() -> bool:
 
 
 async def test_missing_required() -> bool:
-    """Test that connection is correctly rejected when no subprotocols are offered but are required."""
-    logger.info("--- Test 09D: Missing Required Subprotocol ---")
+    """Test that connection is correctly rejected when no protocols are offered but are required."""
+    logger.info("--- Test 08D: Missing Required Protocol ---")
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
-            await client.connect(url=TEST_URL, subprotocols=None)
+            await client.connect(url=TEST_URL, wt_available_protocols=None)
             logger.error("FAILURE: Connection succeeded but should have been rejected.")
             return False
     except Exception as e:
@@ -95,19 +97,19 @@ async def test_missing_required() -> bool:
 
 
 async def test_rogue_missing() -> bool:
-    """Test that client aborts with WT_ALPN_ERROR when server fails to send a required subprotocol."""
-    logger.info("--- Test 09E: Rogue Server Missing Subprotocol ---")
+    """Test that client aborts with WT_ALPN_ERROR when server fails to send a required protocol."""
+    logger.info("--- Test 08E: Rogue Server Missing Protocol ---")
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
-            await client.connect(url=TEST_URL, subprotocols=["trigger-missing"])
+            await client.connect(url=TEST_URL, wt_available_protocols=["trigger-missing"])
             logger.error("FAILURE: Connection succeeded but should have been aborted by client.")
             return False
     except Exception as e:
         error_msg = str(e).lower()
-        if "0x817b3dd" in error_msg or "subprotocol" in error_msg:
-            logger.info("SUCCESS: Client aborted connection correctly due to missing subprotocol. (%s)", e)
+        if "0x817b3dd" in error_msg or "protocol" in error_msg:
+            logger.info("SUCCESS: Client aborted connection correctly due to missing protocol. (%s)", e)
             return True
         else:
             logger.error("FAILURE: Connection rejected, but unexpected error: %s", e)
@@ -115,19 +117,19 @@ async def test_rogue_missing() -> bool:
 
 
 async def test_rogue_mismatch() -> bool:
-    """Test that client aborts with WT_ALPN_ERROR when server negotiates an unrequested subprotocol."""
-    logger.info("--- Test 09F: Rogue Server Mismatched Subprotocol ---")
+    """Test that client aborts with WT_ALPN_ERROR when server negotiates an unrequested protocol."""
+    logger.info("--- Test 08F: Rogue Server Mismatched Protocol ---")
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
-            await client.connect(url=TEST_URL, subprotocols=["trigger-mismatch"])
+            await client.connect(url=TEST_URL, wt_available_protocols=["trigger-mismatch"])
             logger.error("FAILURE: Connection succeeded but should have been aborted by client.")
             return False
     except Exception as e:
         error_msg = str(e).lower()
-        if "0x817b3dd" in error_msg or "alien-proto" in error_msg or "subprotocol" in error_msg:
-            logger.info("SUCCESS: Client aborted connection correctly due to mismatched subprotocol. (%s)", e)
+        if "0x817b3dd" in error_msg or "alien-proto" in error_msg or "protocol" in error_msg:
+            logger.info("SUCCESS: Client aborted connection correctly due to mismatched protocol. (%s)", e)
             return True
         else:
             logger.error("FAILURE: Connection rejected, but unexpected error: %s", e)
@@ -135,16 +137,16 @@ async def test_rogue_mismatch() -> bool:
 
 
 async def main() -> int:
-    """Run the main entry point for the subprotocols test suite."""
-    logger.info("--- Starting Test 09: Application-Layer Protocol Negotiation ---")
+    """Run the main entry point for the protocol negotiation test suite."""
+    logger.info("--- Starting Test 08: Application-Layer Protocol Negotiation ---")
 
     tests: list[tuple[str, Callable[[], Awaitable[bool]]]] = [
         ("Exact Match", test_exact_match),
         ("Fallback Downgrade", test_fallback_downgrade),
         ("Mismatch Rejection", test_mismatch_rejection),
-        ("Missing Required Subprotocol", test_missing_required),
-        ("Rogue Missing Subprotocol", test_rogue_missing),
-        ("Rogue Mismatched Subprotocol", test_rogue_mismatch),
+        ("Missing Required Protocol", test_missing_required),
+        ("Rogue Missing Protocol", test_rogue_missing),
+        ("Rogue Mismatched Protocol", test_rogue_mismatch),
     ]
     passed = 0
     total = len(tests)
@@ -163,13 +165,13 @@ async def main() -> int:
 
     logger.info("")
     logger.info("=" * 60)
-    logger.info("Test 09 Results: %d/%d passed", passed, total)
+    logger.info("Test 08 Results: %d/%d passed", passed, total)
 
     if passed == total:
-        logger.info("TEST 09 PASSED: All subprotocol negotiation tests successful!")
+        logger.info("TEST 08 PASSED: All protocol negotiation tests successful!")
         return 0
     else:
-        logger.error("TEST 09 FAILED: Some subprotocol negotiation tests failed!")
+        logger.error("TEST 08 FAILED: Some protocol negotiation tests failed!")
         return 1
 
 

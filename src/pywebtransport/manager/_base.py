@@ -11,11 +11,10 @@ from typing import Any, ClassVar, Protocol, Self, runtime_checkable
 
 from pywebtransport.events import Event, EventEmitter
 from pywebtransport.types import EventType
-from pywebtransport.utils import get_logger
 
 __all__: list[str] = []
 
-_logger = get_logger(name=__name__)
+_logger = logging.getLogger(name=__name__)
 
 
 @runtime_checkable
@@ -63,36 +62,32 @@ class BaseResourceManager[ResourceId, ResourceType: ManageableResource](ABC):
     async def add_resource(self, *, resource: ResourceType) -> None:
         """Add a new resource and subscribe to its closure event."""
         if not self._active:
-            raise RuntimeError(f"{self.__class__.__name__} is not activated. Use 'async with'.")
+            raise RuntimeError("app_manager validate failed expected=active")
 
         if resource.is_closed:
-            raise RuntimeError(f"Cannot add closed {self._resource_name}")
+            raise RuntimeError(f"app_manager validate invalid component={self._resource_name} expected=open")
 
         resource_id = self._get_resource_id(resource=resource)
         emitter = resource.events
 
         async with self._lock:
             if self._is_shutting_down:
-                self._log.warning("Attempted to add resource %s during shutdown.", resource_id)
                 await self._close_resource(resource=resource)
-                raise RuntimeError(f"{self.__class__.__name__} is shutting down")
+                raise RuntimeError("app_manager validate failed expected=active")
 
             if resource.is_closed:
-                raise RuntimeError(f"Cannot add closed {self._resource_name}")
+                raise RuntimeError(f"app_manager validate invalid component={self._resource_name} expected=open")
 
             if resource_id in self._resources:
-                self._log.debug("Resource %s already managed.", resource_id)
+                self._log.debug("app_manager validate invalid component=%s", self._resource_name)
                 return
 
             if 0 < self._max_resources <= len(self._resources):
-                self._log.error(
-                    "Maximum %s limit (%d) reached. Cannot add %s.",
-                    self._resource_name,
-                    self._max_resources,
-                    resource_id,
-                )
                 await self._close_resource(resource=resource)
-                raise RuntimeError(f"Maximum {self._resource_name} limit reached")
+                raise RuntimeError(
+                    f"app_manager validate exceeded actual={len(self._resources)} component={self._resource_name} "
+                    f"limit={self._max_resources}"
+                )
 
             async def closed_handler_wrapper(event: Event) -> None:
                 """Handle resource closure event."""
@@ -101,11 +96,8 @@ class BaseResourceManager[ResourceId, ResourceType: ManageableResource](ABC):
                     event_resource_id = event.data.get(f"{self._resource_name}_id")
 
                 if event_resource_id is not None and event_resource_id != resource_id:
-                    self._log.error(
-                        "Resource ID mismatch in close event for %s (Expected %s, Got: %s).",
-                        self._resource_name,
-                        resource_id,
-                        event_resource_id,
+                    self._log.warning(
+                        "app_manager validate invalid component=%s expected=identity_match", self._resource_name
                     )
 
                 await self._handle_resource_closed(resource_id=resource_id)
@@ -119,12 +111,14 @@ class BaseResourceManager[ResourceId, ResourceType: ManageableResource](ABC):
                 except (ValueError, KeyError):
                     pass
                 del self._event_handlers[resource_id]
-                raise RuntimeError(f"Cannot add {self._resource_name}: closed during registration")
+                raise RuntimeError(f"app_manager validate invalid component={self._resource_name} expected=open")
 
             self._resources[resource_id] = resource
             self._stats["total_created"] += 1
             self._update_stats_unsafe()
-            self._log.debug("Added %s %s (total: %d)", self._resource_name, resource_id, self._stats["current_count"])
+            self._log.debug(
+                "app_manager register component=%s count=%d", self._resource_name, self._stats["current_count"]
+            )
 
     async def get_all_resources(self) -> list[ResourceType]:
         """Retrieve a list of all current resources."""
@@ -157,10 +151,10 @@ class BaseResourceManager[ResourceId, ResourceType: ManageableResource](ABC):
             return
 
         self._is_shutting_down = True
-        self._log.info("Shutting down %s manager", self._resource_name)
+        self._log.info("app_manager drain")
 
         await self._close_all_resources()
-        self._log.info("%s manager shutdown complete", self._resource_name)
+        self._log.info("app_manager close")
 
     def _check_is_closed(self, *, resource: ResourceType) -> bool:
         """Internal check for resource closure status to aid static analysis."""
@@ -176,7 +170,7 @@ class BaseResourceManager[ResourceId, ResourceType: ManageableResource](ABC):
             if not self._resources:
                 return
             resources_to_close = list(self._resources.values())
-            self._log.info("Closing %d managed %ss", len(resources_to_close), self._resource_name)
+            self._log.debug("app_manager close component=%s count=%d", self._resource_name, len(resources_to_close))
 
             for _, (emitter, handler) in self._event_handlers.items():
                 try:
@@ -191,14 +185,14 @@ class BaseResourceManager[ResourceId, ResourceType: ManageableResource](ABC):
                 for resource in resources_to_close:
                     tg.create_task(coro=self._close_resource(resource=resource))
         except* Exception as eg:
-            self._log.error(
-                "Errors occurred while closing managed %ss: %s", self._resource_name, eg.exceptions, exc_info=eg
+            self._log.warning(
+                "app_manager close failed component=%s err=%s", self._resource_name, eg.exceptions, exc_info=eg
             )
 
         async with self._lock:
             self._stats["total_closed"] += len(resources_to_close)
             self._update_stats_unsafe()
-        self._log.info("All managed %ss processed for closure.", self._resource_name)
+        self._log.debug("app_manager destroy component=%s", self._resource_name)
 
     @abstractmethod
     async def _close_resource(self, *, resource: ResourceType) -> None:
@@ -224,7 +218,7 @@ class BaseResourceManager[ResourceId, ResourceType: ManageableResource](ABC):
                 self._stats["total_closed"] += 1
                 self._update_stats_unsafe()
                 self._log.debug(
-                    "Removed closed %s %s (total: %d)", self._resource_name, resource_id, self._stats["current_count"]
+                    "app_manager evict component=%s count=%d", self._resource_name, self._stats["current_count"]
                 )
 
     def _update_stats_unsafe(self) -> None:

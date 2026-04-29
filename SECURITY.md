@@ -15,7 +15,7 @@ We advocate for **Responsible Disclosure**. If you discover a vulnerability, ple
 
 - **GitHub Security Advisories (Preferred)**: Navigate to the **[Security tab](https://github.com/wtransport/pywebtransport/security)** and click **"Report a vulnerability"** to open an encrypted draft.
 
-- **Email (Alternative)**: Send an encrypted message to `security@wtransport.org` with the subject `[SECURITY] PyWebTransport Vulnerability Report`.
+- **Email (Alternative)**: Send a message to `security@wtransport.org` with the subject `[SECURITY] PyWebTransport Vulnerability Report`.
 
 ### Report Contents
 
@@ -28,7 +28,7 @@ We advocate for **Responsible Disclosure**. If you discover a vulnerability, ple
 
 - **Acknowledgment**: Within 48 hours.
 - **Assessment**: Initial severity assessment within 5 business days.
-- **Resolution**: Critical vulnerabilities aim to be patched within 30 days.
+- **Resolution**: Mitigation or remediation of critical vulnerabilities within 30 days.
 
 ## Shared Responsibility Model
 

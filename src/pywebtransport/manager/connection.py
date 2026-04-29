@@ -3,20 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import defaultdict
 from typing import Any, ClassVar
 
 from pywebtransport.connection import WebTransportConnection
 from pywebtransport.manager._base import BaseResourceManager
-from pywebtransport.types import ConnectionId, EventType
-from pywebtransport.utils import get_logger
+from pywebtransport.types import ConnectionHandle, EventType
 
 __all__: list[str] = ["ConnectionManager"]
 
-_logger = get_logger(name=__name__)
+_logger = logging.getLogger(name=__name__)
 
 
-class ConnectionManager(BaseResourceManager[ConnectionId, WebTransportConnection]):
+class ConnectionManager(BaseResourceManager[ConnectionHandle, WebTransportConnection]):
     """Manage multiple WebTransport connections using event-driven cleanup."""
 
     _log = _logger
@@ -27,10 +27,10 @@ class ConnectionManager(BaseResourceManager[ConnectionId, WebTransportConnection
         super().__init__(resource_name="connection", max_resources=max_connections)
         self._closing_tasks: set[asyncio.Task[None]] = set()
 
-    async def add_connection(self, *, connection: WebTransportConnection) -> ConnectionId:
+    async def add_connection(self, *, connection: WebTransportConnection) -> ConnectionHandle:
         """Add a new connection and subscribe to its closure event."""
         await super().add_resource(resource=connection)
-        return connection.connection_id
+        return connection.handle
 
     async def get_stats(self) -> dict[str, Any]:
         """Get detailed statistics about the managed connections."""
@@ -45,23 +45,25 @@ class ConnectionManager(BaseResourceManager[ConnectionId, WebTransportConnection
             stats["states"] = dict(states)
         return stats
 
-    async def remove_connection(self, *, connection_id: ConnectionId) -> WebTransportConnection | None:
+    async def remove_connection(self, *, connection_handle: ConnectionHandle) -> WebTransportConnection | None:
         """Manually remove a connection from management."""
         if not self._active:
             return None
 
         removed_connection: WebTransportConnection | None = None
         async with self._lock:
-            if connection_id in self._event_handlers:
-                self._event_handlers.pop(connection_id)
+            if connection_handle in self._event_handlers:
+                self._event_handlers.pop(connection_handle)
 
-            removed_connection = self._resources.pop(connection_id, None)
+            removed_connection = self._resources.pop(connection_handle, None)
             if removed_connection is not None:
                 self._stats["total_closed"] += 1
                 self._update_stats_unsafe()
                 self._schedule_close(connection=removed_connection)
                 self._log.debug(
-                    "Manually removed connection %s (total: %d)", connection_id, self._stats["current_count"]
+                    "app_manager evict component=connection connection_handle=%d count=%d",
+                    connection_handle,
+                    self._stats["current_count"],
                 )
 
         return removed_connection
@@ -71,7 +73,7 @@ class ConnectionManager(BaseResourceManager[ConnectionId, WebTransportConnection
         await super().shutdown()
 
         if self._closing_tasks:
-            self._log.debug("Waiting for %d closing tasks to complete", len(self._closing_tasks))
+            self._log.debug("rt_task drain count=%d", len(self._closing_tasks))
             await asyncio.gather(*self._closing_tasks, return_exceptions=True)
 
     async def _close_resource(self, *, resource: WebTransportConnection) -> None:
@@ -79,11 +81,11 @@ class ConnectionManager(BaseResourceManager[ConnectionId, WebTransportConnection
         if not resource.is_closed:
             await resource.close()
 
-    def _get_resource_id(self, *, resource: WebTransportConnection) -> ConnectionId:
+    def _get_resource_id(self, *, resource: WebTransportConnection) -> ConnectionHandle:
         """Get the unique ID from a connection object."""
-        return resource.connection_id
+        return resource.handle
 
-    async def _handle_resource_closed(self, *, resource_id: ConnectionId) -> None:
+    async def _handle_resource_closed(self, *, resource_id: ConnectionHandle) -> None:
         """Handle the closure event for a managed resource."""
         if not self._active:
             return
@@ -98,7 +100,11 @@ class ConnectionManager(BaseResourceManager[ConnectionId, WebTransportConnection
                 self._stats["total_closed"] += 1
                 self._update_stats_unsafe()
                 self._schedule_close(connection=conn)
-                self._log.debug("Passive cleanup: Connection %s removed and close scheduled.", resource_id)
+                self._log.debug(
+                    "app_manager evict component=connection connection_handle=%d count=%d",
+                    resource_id,
+                    self._stats["current_count"],
+                )
 
     def _schedule_close(self, *, connection: WebTransportConnection) -> None:
         """Schedule an asynchronous close task for a connection."""

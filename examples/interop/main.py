@@ -1,10 +1,16 @@
 """WebTransport interoperability test server."""
 
 import asyncio
+import base64
 import http
+import json
 import logging
 import random
+import uuid
 from collections import deque
+from dataclasses import asdict, is_dataclass
+from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any, Final, Optional, Union
 from urllib.parse import parse_qs, urlparse
@@ -23,8 +29,7 @@ from pywebtransport import (
     WebTransportStream,
 )
 from pywebtransport import __version__ as LIB_VERSION
-from pywebtransport.serializer import JSONSerializer
-from pywebtransport.server.middleware import MiddlewareRejected
+from pywebtransport.framework.middleware import MiddlewareRejected
 from pywebtransport.types import EventType, SessionProtocol
 from pywebtransport.utils import generate_self_signed_cert
 
@@ -52,20 +57,12 @@ logging.basicConfig(
 logger = logging.getLogger(name="interop")
 
 
-def deque_converter(o: Any) -> Any:
-    """Convert deque to list for JSON serialization."""
-    if isinstance(o, deque):
-        return list(o)
-    raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
-
-
 class InteropServer(ServerApp):
     """High-performance WebTransport interoperability server."""
 
     def __init__(self, config: ServerConfig) -> None:
-        """Initialize server with JSON serializer and route registration."""
+        """Initialize server with route registration."""
         super().__init__(config=config)
-        self._serializer = JSONSerializer(dump_kwargs={"default": deque_converter})
         self.add_middleware(middleware=self._validate_baton_params)
         self._register_routes()
         logger.info("InteropServer initialized (v%s)", LIB_VERSION)
@@ -77,7 +74,7 @@ class InteropServer(ServerApp):
         baton_arg = query.get("baton", [None])[0]
         initial_baton = int(baton_arg) if baton_arg is not None else random.randint(1, 255)
 
-        logger.info("Session %s: devious baton started (count=%d)", session.session_id, count)
+        logger.info("Session %d: devious baton started (count=%d)", session.session_id, count)
 
         state = {"active_batons": count}
 
@@ -86,7 +83,7 @@ class InteropServer(ServerApp):
                 try:
                     stream: WebTransportSendStream = await session.create_unidirectional_stream()
                 except (TimeoutError, StreamError):
-                    logger.warning("Session %s: failed to create initial stream", session.session_id)
+                    logger.warning("Session %d: failed to create initial stream", session.session_id)
                     await session.close(error_code=ERR_DA_YAMN, reason="Insufficient stream credit")
                     return
 
@@ -139,7 +136,7 @@ class InteropServer(ServerApp):
 
         try:
             await session.events.wait_for(event_type=EventType.SESSION_CLOSED)
-            logger.info("Session %s: closed", session.session_id)
+            logger.info("Session %d: closed", session.session_id)
         except Exception:
             pass
         finally:
@@ -149,7 +146,7 @@ class InteropServer(ServerApp):
     async def handle_echo(self, session: WebTransportSession, **kwargs: Any) -> None:
         """Handle bidirectional stream and datagram echo."""
         sid = session.session_id
-        logger.info("Session %s: echo started", sid)
+        logger.info("Session %d: echo started", sid)
 
         async def on_datagram(event: Any) -> None:
             if isinstance(event.data, dict) and (data := event.data.get("data")):
@@ -172,7 +169,7 @@ class InteropServer(ServerApp):
 
         try:
             await session.events.wait_for(event_type=EventType.SESSION_CLOSED)
-            logger.info("Session %s: closed", sid)
+            logger.info("Session %d: closed", sid)
         except Exception:
             pass
         finally:
@@ -181,7 +178,7 @@ class InteropServer(ServerApp):
     async def handle_stats(self, session: WebTransportSession, **kwargs: Any) -> None:
         """Respond with current session diagnostics."""
         sid = session.session_id
-        logger.info("Session %s: stats started", sid)
+        logger.info("Session %d: stats started", sid)
 
         async def accept_bidi() -> None:
             try:
@@ -189,11 +186,12 @@ class InteropServer(ServerApp):
                     stream = await session.accept_bidirectional_stream()
                     try:
                         await stream.read_all()
-                        payload = self._serializer.serialize(obj=await session.diagnostics())
+                        diag = await session.diagnostics()
+                        payload = json.dumps(obj=asdict(diag), default=_json_default_encoder).encode("utf-8")
                         await stream.write(data=payload)
                         await stream.write(data=b"", end_stream=True)
                     except Exception as e:
-                        logger.error("Session %s: stats stream error: %s", sid, e)
+                        logger.error("Session %d: stats stream error: %s", sid, e)
             except SessionClosedError:
                 pass
 
@@ -201,7 +199,7 @@ class InteropServer(ServerApp):
 
         try:
             await session.events.wait_for(event_type=EventType.SESSION_CLOSED)
-            logger.info("Session %s: closed", sid)
+            logger.info("Session %d: closed", sid)
         except Exception:
             pass
         finally:
@@ -210,7 +208,7 @@ class InteropServer(ServerApp):
     async def handle_status(self, session: WebTransportSession, **kwargs: Any) -> None:
         """Respond with global server diagnostics."""
         sid = session.session_id
-        logger.info("Session %s: status started", sid)
+        logger.info("Session %d: status started", sid)
 
         async def accept_bidi() -> None:
             try:
@@ -218,11 +216,12 @@ class InteropServer(ServerApp):
                     stream = await session.accept_bidirectional_stream()
                     try:
                         await stream.read_all()
-                        payload = self._serializer.serialize(obj=await self.server.diagnostics())
+                        diag = await self.server.diagnostics()
+                        payload = json.dumps(obj=asdict(diag), default=_json_default_encoder).encode("utf-8")
                         await stream.write(data=payload)
                         await stream.write(data=b"", end_stream=True)
                     except Exception as e:
-                        logger.error("Session %s: status stream error: %s", sid, e)
+                        logger.error("Session %d: status stream error: %s", sid, e)
             except SessionClosedError:
                 pass
 
@@ -230,7 +229,7 @@ class InteropServer(ServerApp):
 
         try:
             await session.events.wait_for(event_type=EventType.SESSION_CLOSED)
-            logger.info("Session %s: closed", sid)
+            logger.info("Session %d: closed", sid)
         except Exception:
             pass
         finally:
@@ -499,6 +498,25 @@ class InteropServer(ServerApp):
             raise MiddlewareRejected(status_code=http.HTTPStatus.BAD_REQUEST)
 
 
+def _json_default_encoder(o: Any) -> Any:
+    """Convert complex Python objects into JSON-serializable primitives."""
+    match o:
+        case bytes() | bytearray() | memoryview():
+            return base64.b64encode(o).decode("ascii")
+        case deque() | set() | frozenset():
+            return list(o)
+        case uuid.UUID():
+            return str(o)
+        case Enum():
+            return o.value
+        case datetime():
+            return o.isoformat()
+        case _ if is_dataclass(o) and not isinstance(o, type):
+            return asdict(obj=o)
+        case _:
+            raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
+
+
 async def main() -> None:
     """Configure and start the server."""
     if not CERT_PATH.exists() or not KEY_PATH.exists():
@@ -507,7 +525,7 @@ async def main() -> None:
     config = ServerConfig(bind_host=HOST, bind_port=PORT, certfile=str(CERT_PATH), keyfile=str(KEY_PATH))
 
     app = InteropServer(config=config)
-    logger.info("Server starting on https://[%s]:%s", HOST, PORT)
+    logger.info("Server starting on https://[%s]:%d", HOST, PORT)
 
     async with app:
         await app.serve()

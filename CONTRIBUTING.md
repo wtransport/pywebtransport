@@ -60,7 +60,7 @@ All contributions must adhere to the following style requirements:
 - **imports**: `isort`
 - **linting**: `flake8`, `clippy`
 - **typing**: `mypy`
-- **documentation**: Google-style docstrings and mandatory type hints for public APIs.
+- **documentation**: Concise single-line docstrings and mandatory type hints for public APIs.
 
 ## Testing
 
@@ -78,7 +78,7 @@ Execute `pytest` to validate full-stack behavior including the underlying Rust e
 
 _(Maintainers Only)_
 
-Releases follow **Semantic Versioning** and are automated via **Trusted Publishers (OIDC)**. Update the version source of truth and finalize `CHANGELOG.md` before merging to `main`.
+Releases follow **Semantic Versioning**. Update the version source of truth and finalize `CHANGELOG.md` before merging to `main`.
 
 ## Protocol Compliance
 

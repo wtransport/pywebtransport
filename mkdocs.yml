@@ -40,20 +40,31 @@ theme:
     - search.share
     - toc.follow
 
+extra:
+  social:
+    - icon: fontawesome/solid/globe
+      link: https://wtransport.org
+      name: WTransport Official Website
+    - icon: fontawesome/brands/github
+      link: https://github.com/wtransport
+      name: The WTransport Authors on GitHub
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/pywebtransport/
+      name: PyWebTransport on PyPI
+
 nav:
   - Home: index.md
   - API Reference:
       - Overview: api-reference/index.md
       - Client: api-reference/client.md
       - Server: api-reference/server.md
+      - Framework: api-reference/framework.md
       - Connection: api-reference/connection.md
       - Session: api-reference/session.md
       - Stream: api-reference/stream.md
-      - Messaging: api-reference/messaging.md
       - Manager: api-reference/manager.md
       - Configuration: api-reference/config.md
       - Events: api-reference/events.md
-      - Serializer: api-reference/serializer.md
       - Exceptions: api-reference/exceptions.md
       - Types: api-reference/types.md
       - Constants: api-reference/constants.md
@@ -65,7 +76,7 @@ plugins:
       default_handler: python
       handlers:
         python:
-          paths: [src]
+          paths: [ src ]
           options:
             docstring_style: google
             show_symbol_type_heading: true

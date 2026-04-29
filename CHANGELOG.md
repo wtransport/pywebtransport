@@ -11,6 +11,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(No planned changes for the next release yet.)_
 
+## [0.17.0] - 2026-04-29
+
+This release advances the core protocol engine by extending zero-copy constraints to exception payload transmission across the FFI boundary and HTTP/3 frame ingestion. It further fortifies memory safety boundaries and deterministic observability, eliminating residual application-layer abstractions to establish a strictly functional, side-effect-free observation layer.
+
+### Added
+
+- **Runtime Support**: Extended continuous integration infrastructure and test matrices to support the Python 3.14 execution environment.
+
+### Changed
+
+- **Zero-Copy Expansion**: Extended the existing zero-copy architecture to encompass exception payload transmission across the FFI boundary and the HTTP/3 data plane (`Cow<'static, str>`, `BytesMut`). Minimized avoidable dynamic heap allocations across the protocol state machine to reduce exposure to allocation-based DoS amplification vectors.
+- **Architectural Encapsulation**: Relocated core client and server implementations to the root namespace. Deepened data hiding by privatizing internal fields within Rust protocol entities (`Stream`, `Session`, `Connection`) and consolidating initialization via `SessionParams` and `ConnectionParams`.
+- **State Machine Refinement**: Pruned obsolete connection states (`Failed`, `Draining`) and transitioned to an orthogonal `peer_goaway_received` evaluation matrix. Upgraded H3 settings parsing to utilize a strongly typed `H3Settings` struct. Synchronized FFI event opcodes utilizing a strict "Verb + Noun" semantic taxonomy.
+- **Telemetry & Observability**: Advanced system-wide telemetry by enforcing a structured Domain-Specific Language (DSL) for all system events. Realigned the Rust observation layer to a purely side-effect-free model, strictly deferring error evaluations and string formatting to the FFI boundary to ensure constant-cardinality observability.
+- **Identifier Semantics**: Migrated runtime resource identifiers from dynamic strings (`connection_id`) to scalar integers (`connection_handle` as `u64`), enforcing structural decoupling from network-layer concepts and inherently eliminating associated instantiation overhead.
+- **Protocol Nomenclature**: Transitioned stack-wide terminology from the generic `subprotocol` field to `wt_protocol` and `wt_available_protocols` to explicitly differentiate application-layer negotiation from underlying TLS ALPN mechanisms.
+- **Namespace Alignment**: Renamed the internal Rust crate to `pywebtransport-engine` and the FFI extension to `_pywebtransport` to strictly conform with PEP 8 C-extension encapsulation standards.
+- **Repository Infrastructure**: Updated continuous integration pipelines, repository configurations, and documentation templates to maintain structural consistency.
+
+### Removed
+
+- **Application-Layer Abstractions**: Purged legacy `messaging/` and `serializer/` sub-packages, orchestration modules (`cluster`, `fleet`, `reconnecting`), and associated optional dependencies (`msgpack`, `protobuf`) to enforce a minimalist, transport-focused scope.
+- **Legacy Wrappers & Configurations**: Removed internal dependencies on `pywebtransport.utils`. Stripped transient state snapshots, redundant middleware configurations (`create_logging_middleware`), and retry-specific attributes from the `ClientConfig` contract.
+
+### Fixed
+
+- **QPACK Memory Safety**: Mitigated Use-After-Free (UAF) and Out-Of-Bounds (OOB) memory access conditions during FFI buffer reallocation. Integrated `abandon_header_block` synchronization to prevent memory leaks and state corruption during anomalous stream resets.
+- **Memory Exhaustion Defenses**: Enforced `SETTINGS_MAX_FIELD_SECTION_SIZE` (0x06) and `CONTROL_FRAME_SIZE_LIMIT` to synchronously abort oversized payloads, preventing Parser Amplification and Allocation DoS vectors within the HTTP/3 setting parsing logic.
+- **Protocol Injection Protection**: Enforced strict printable ASCII validation across the subprotocol encoding phase, explicitly rejecting non-compliant payloads to prevent protocol injection and state desynchronization.
+
 ## [0.16.1] - 2026-03-16
 
 This release streamlines the FFI configuration boundary, resolves mTLS trust chain configuration issues, and delegates connection lifecycle management to the Python asynchronous runtime. It requires explicit configuration instantiation, corrects HTTP header prioritization, and removes runtime I/O from diagnostic paths.

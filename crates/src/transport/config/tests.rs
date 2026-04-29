@@ -1,20 +1,64 @@
 //! Unit tests for the `crate::transport::config` module.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use rstest::rstest;
 
 use super::*;
-use crate::common::config::{
-    RustClientConfig, RustServerConfig, TransportConfig as WtTransportConfig,
-};
+use crate::common::config::{RustBaseConfig, RustClientConfig, RustServerConfig};
+
+fn mock_base_config() -> RustBaseConfig {
+    RustBaseConfig {
+        alpn_protocols: vec!["h3".to_owned()],
+        congestion_control_algorithm: "cubic".to_owned(),
+        connection_idle_timeout: Duration::from_secs(60),
+        flow_control_window: 1_048_576,
+        flow_control_window_auto_scale_enabled: true,
+        initial_max_data: 10_485_760,
+        initial_max_streams_bidi: 100,
+        initial_max_streams_uni: 100,
+        keep_alive_interval: Some(Duration::from_secs(10)),
+        max_capsule_size: 1500,
+        max_datagram_size: 1200,
+        max_field_section_size: 65536,
+        max_session_pending_events: 100,
+        max_sessions: 100,
+        max_stream_read_buffer_size: 1_048_576,
+        max_stream_write_buffer_size: 1_048_576,
+        max_total_pending_events: 1000,
+        max_transport_streams: 256,
+        pending_event_ttl: Duration::from_secs(30),
+        resource_cleanup_interval: Duration::from_secs(5),
+    }
+}
+
+fn mock_client_config() -> RustClientConfig {
+    RustClientConfig {
+        base: mock_base_config(),
+        ca_certs: None,
+        certfile: None,
+        keyfile: None,
+        verify_server_certificate: true,
+    }
+}
+
+fn mock_server_config() -> RustServerConfig {
+    RustServerConfig {
+        base: mock_base_config(),
+        bind_host: "127.0.0.1".to_owned(),
+        bind_port: 4433,
+        ca_certs: None,
+        certfile: PathBuf::from("dummy.crt"),
+        keyfile: PathBuf::from("dummy.key"),
+        require_client_auth: false,
+    }
+}
 
 #[rstest]
 fn test_build_client_config_with_verify_server_certificate_succeeds() {
-    let config = RustClientConfig {
-        verify_server_certificate: true,
-        ..Default::default()
-    };
+    let mut config = mock_client_config();
+    config.verify_server_certificate = true;
 
     let result = build_client_config(&config);
 
@@ -26,10 +70,8 @@ fn test_build_client_config_with_verify_server_certificate_succeeds() {
 
 #[rstest]
 fn test_build_client_config_without_certs_succeeds() {
-    let config = RustClientConfig {
-        verify_server_certificate: false,
-        ..Default::default()
-    };
+    let mut config = mock_client_config();
+    config.verify_server_certificate = false;
 
     let result = build_client_config(&config);
 
@@ -51,12 +93,10 @@ fn test_build_client_config_fails_with_invalid_paths(
     #[case] certfile: Option<PathBuf>,
     #[case] keyfile: Option<PathBuf>,
 ) {
-    let config = RustClientConfig {
-        ca_certs,
-        certfile,
-        keyfile,
-        ..Default::default()
-    };
+    let mut config = mock_client_config();
+    config.ca_certs = ca_certs;
+    config.certfile = certfile;
+    config.keyfile = keyfile;
 
     let result = build_client_config(&config);
 
@@ -68,15 +108,9 @@ fn test_build_client_config_fails_with_invalid_paths(
 
 #[rstest]
 fn test_build_endpoint_config_returns_default() {
-    let config = RustServerConfig {
-        bind_host: String::new(),
-        bind_port: 0,
-        ca_certs: None,
-        certfile: PathBuf::new(),
-        keyfile: PathBuf::new(),
-        require_client_auth: false,
-        transport: WtTransportConfig::default(),
-    };
+    let mut config = mock_server_config();
+    config.bind_host = String::new();
+    config.bind_port = 0;
 
     let endpoint_config = build_endpoint_config(&config);
 
@@ -91,15 +125,11 @@ fn test_build_server_config_fails_with_invalid_cert_paths(
     #[case] require_client_auth: bool,
     #[case] ca_certs: Option<PathBuf>,
 ) {
-    let config = RustServerConfig {
-        bind_host: "127.0.0.1".to_owned(),
-        bind_port: 4433,
-        ca_certs,
-        certfile: PathBuf::from("/non/existent/path/cert.pem"),
-        keyfile: PathBuf::from("/non/existent/path/key.pem"),
-        require_client_auth,
-        transport: WtTransportConfig::default(),
-    };
+    let mut config = mock_server_config();
+    config.ca_certs = ca_certs;
+    config.certfile = PathBuf::from("/non/existent/path/cert.pem");
+    config.keyfile = PathBuf::from("/non/existent/path/key.pem");
+    config.require_client_auth = require_client_auth;
 
     let result = build_server_config(&config);
 
@@ -111,7 +141,7 @@ fn test_build_server_config_fails_with_invalid_cert_paths(
 
 #[rstest]
 fn test_build_transport_config_with_default_succeeds() {
-    let config = WtTransportConfig::default();
+    let config = mock_base_config();
 
     let result = build_transport_config(&config);
 
@@ -123,10 +153,8 @@ fn test_build_transport_config_with_default_succeeds() {
 
 #[rstest]
 fn test_build_transport_config_with_invalid_congestion_control_fails() {
-    let config = WtTransportConfig {
-        congestion_control_algorithm: "invalid_algo".to_owned(),
-        ..Default::default()
-    };
+    let mut config = mock_base_config();
+    config.congestion_control_algorithm = "invalid_algo".to_owned();
 
     let result = build_transport_config(&config);
 
@@ -141,10 +169,8 @@ fn test_build_transport_config_with_invalid_congestion_control_fails() {
 #[case("cubic")]
 #[case("reno")]
 fn test_build_transport_config_with_valid_congestion_control(#[case] algo: &str) {
-    let config = WtTransportConfig {
-        congestion_control_algorithm: algo.to_owned(),
-        ..Default::default()
-    };
+    let mut config = mock_base_config();
+    config.congestion_control_algorithm = algo.to_owned();
 
     let result = build_transport_config(&config);
 
@@ -156,10 +182,8 @@ fn test_build_transport_config_with_valid_congestion_control(#[case] algo: &str)
 
 #[rstest]
 fn test_build_transport_config_with_zero_max_datagram_size() {
-    let config = WtTransportConfig {
-        max_datagram_size: 0,
-        ..Default::default()
-    };
+    let mut config = mock_base_config();
+    config.max_datagram_size = 0;
 
     let result = build_transport_config(&config);
 

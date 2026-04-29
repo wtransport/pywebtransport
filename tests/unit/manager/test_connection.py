@@ -22,7 +22,7 @@ class TestConnectionManager:
     @pytest.fixture
     def mock_connection(self, mocker: MockerFixture) -> MagicMock:
         conn = mocker.Mock(spec=WebTransportConnection)
-        conn.connection_id = "conn-1"
+        conn.handle = 1
         conn.state = ConnectionState.CONNECTED
         conn.is_closed = False
         conn.events = EventEmitter()
@@ -32,11 +32,11 @@ class TestConnectionManager:
     @pytest.mark.asyncio
     async def test_add_connection(self, manager: ConnectionManager, mock_connection: MagicMock) -> None:
         async with manager:
-            conn_id = await manager.add_connection(connection=mock_connection)
+            conn_handle = await manager.add_connection(connection=mock_connection)
 
-            assert conn_id == "conn-1"
+            assert conn_handle == 1
             assert len(manager) == 1
-            assert await manager.get_resource(resource_id="conn-1") is mock_connection
+            assert await manager.get_resource(resource_id=1) is mock_connection
 
     @pytest.mark.asyncio
     async def test_close_resource_idempotency(self, manager: ConnectionManager, mock_connection: MagicMock) -> None:
@@ -47,18 +47,18 @@ class TestConnectionManager:
         mock_connection.close.assert_not_called()
 
     def test_get_resource_id(self, manager: ConnectionManager, mock_connection: MagicMock) -> None:
-        assert manager._get_resource_id(resource=mock_connection) == "conn-1"
+        assert manager._get_resource_id(resource=mock_connection) == 1
 
     @pytest.mark.asyncio
     async def test_get_stats_includes_states(self, manager: ConnectionManager, mocker: MockerFixture) -> None:
         c1 = mocker.Mock(spec=WebTransportConnection)
-        c1.connection_id = "c1"
+        c1.handle = 10
         c1.events = EventEmitter()
         c1.state = ConnectionState.CONNECTED
         c1.is_closed = False
 
         c2 = mocker.Mock(spec=WebTransportConnection)
-        c2.connection_id = "c2"
+        c2.handle = 20
         c2.events = EventEmitter()
         c2.state = ConnectionState.CONNECTING
         c2.is_closed = False
@@ -81,7 +81,7 @@ class TestConnectionManager:
 
     @pytest.mark.asyncio
     async def test_handle_resource_closed_guards_not_active(self, manager: ConnectionManager) -> None:
-        await manager._handle_resource_closed(resource_id="c1")
+        await manager._handle_resource_closed(resource_id=1)
 
     @pytest.mark.asyncio
     async def test_handle_resource_closed_schedules_close(
@@ -90,7 +90,7 @@ class TestConnectionManager:
         async with manager:
             await manager.add_connection(connection=mock_connection)
 
-            await manager._handle_resource_closed(resource_id="conn-1")
+            await manager._handle_resource_closed(resource_id=1)
 
             assert len(manager) == 0
             await asyncio.sleep(delay=0)
@@ -110,7 +110,7 @@ class TestConnectionManager:
         async with manager:
             await manager.add_connection(connection=mock_connection)
 
-            await manager._handle_resource_closed(resource_id="conn-1")
+            await manager._handle_resource_closed(resource_id=1)
 
             assert len(manager._closing_tasks) == 1
 
@@ -128,7 +128,7 @@ class TestConnectionManager:
         self, manager: ConnectionManager, mock_connection: MagicMock
     ) -> None:
         async with manager:
-            await manager._handle_resource_closed(resource_id="conn-1")
+            await manager._handle_resource_closed(resource_id=1)
 
             mock_connection.close.assert_not_awaited()
 
@@ -137,7 +137,7 @@ class TestConnectionManager:
         async with manager:
             await manager.add_connection(connection=mock_connection)
 
-            removed = await manager.remove_connection(connection_id="conn-1")
+            removed = await manager.remove_connection(connection_handle=1)
 
             assert removed is mock_connection
             assert len(manager) == 0
@@ -147,13 +147,13 @@ class TestConnectionManager:
     @pytest.mark.asyncio
     async def test_remove_connection_missing(self, manager: ConnectionManager) -> None:
         async with manager:
-            removed = await manager.remove_connection(connection_id="missing")
+            removed = await manager.remove_connection(connection_handle=999)
 
             assert removed is None
 
     @pytest.mark.asyncio
     async def test_remove_connection_not_active(self, manager: ConnectionManager) -> None:
-        assert await manager.remove_connection(connection_id="c1") is None
+        assert await manager.remove_connection(connection_handle=1) is None
 
     def test_schedule_close_idempotency(self, manager: ConnectionManager, mock_connection: MagicMock) -> None:
         mock_connection.is_closed = True
@@ -175,7 +175,7 @@ class TestConnectionManager:
 
         async with manager:
             await manager.add_connection(connection=mock_connection)
-            await manager.remove_connection(connection_id="conn-1")
+            await manager.remove_connection(connection_handle=1)
 
             assert len(manager._closing_tasks) == 1
 

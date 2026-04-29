@@ -50,7 +50,7 @@ async def test_max_connections_limit_rejection(
 
 @pytest.mark.parametrize(
     argnames="server_app",
-    argvalues=[{"initial_max_streams_bidi": 2, "flow_control_window_auto_scale": False}],
+    argvalues=[{"initial_max_streams_bidi": 2, "flow_control_window_auto_scale_enabled": False}],
     indirect=True,
 )
 async def test_max_streams_limit(server_app: ServerApp, server: tuple[str, int], client_config: ClientConfig) -> None:

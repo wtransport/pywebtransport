@@ -1,5 +1,4 @@
 {
-  "files.autoSave": "afterDelay",
   "git.alwaysSignOff": true,
   "python.analysis.autoImportCompletions": false,
   "python.analysis.typeCheckingMode": "off",

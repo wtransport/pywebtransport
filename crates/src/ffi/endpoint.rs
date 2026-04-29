@@ -8,7 +8,7 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyList, PyTuple};
 use quinn_proto::Endpoint as QuinnEndpoint;
-use tracing::error;
+use tracing::debug;
 
 use crate::common::config::{RustClientConfig, RustServerConfig};
 use crate::ffi::abi;
@@ -27,7 +27,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 // FFI proxy for the threaded Tokio reactor.
-#[pyclass(name = "Endpoint", module = "pywebtransport._wtransport")]
+#[pyclass(name = "Endpoint", module = "pywebtransport._pywebtransport")]
 struct PyEndpoint {
     local_addrs: Vec<SocketAddr>,
     command_tx: RuntimeCommandTx,
@@ -42,12 +42,12 @@ impl PyEndpoint {
     fn new(is_client: bool, config: &Bound<'_, PyAny>, waker: &PyWaker) -> PyResult<Self> {
         let (endpoint, std_sockets) = if is_client {
             let rust_config = RustClientConfig::try_from(config)?;
-            let quic_crypto = build_client_config(&rust_config)?;
+            let quic_config = build_client_config(&rust_config)?;
             let endpoint_config = Arc::new(quinn_proto::EndpointConfig::default());
             let quinn_endpoint = QuinnEndpoint::new(endpoint_config, None, false, None);
 
             let transport_endpoint =
-                TransportEndpoint::new_client(quinn_endpoint, rust_config.transport, quic_crypto)?;
+                TransportEndpoint::new_client(quinn_endpoint, rust_config.base, quic_config)?;
 
             let mut sockets = Vec::new();
 
@@ -62,9 +62,7 @@ impl PyEndpoint {
             }
 
             if sockets.is_empty() {
-                return Err(PyRuntimeError::new_err(
-                    "Failed to bind any client sockets (IPv4 or IPv6)",
-                ));
+                return Err(PyRuntimeError::new_err("sys_socket create failed"));
             }
 
             (transport_endpoint, sockets)
@@ -78,7 +76,7 @@ impl PyEndpoint {
 
             let transport_endpoint = TransportEndpoint::new_server(
                 quinn_endpoint,
-                rust_config.transport.clone(),
+                rust_config.base.clone(),
                 rust_config,
             )?;
 
@@ -110,16 +108,13 @@ impl PyEndpoint {
                 }
                 Err(e) => {
                     return Err(PyRuntimeError::new_err(format!(
-                        "DNS resolution failed for bind host: {e}"
+                        "hostname resolve failed err={e}"
                     )));
                 }
             }
 
             if sockets.is_empty() {
-                return Err(PyRuntimeError::new_err(format!(
-                    "Failed to bind server to any resolved address for {}:{}",
-                    bind_addr_tuple.0, bind_addr_tuple.1
-                )));
+                return Err(PyRuntimeError::new_err("sys_socket create failed"));
             }
 
             (transport_endpoint, sockets)
@@ -131,18 +126,16 @@ impl PyEndpoint {
             .collect();
 
         let IpcChannels {
-            command_tx,
             command_rx,
-            event_tx,
+            command_tx,
             event_rx,
-        } = IpcChannels::new().map_err(|e| {
-            PyRuntimeError::new_err(format!("Failed to initialize IPC channels: {e}"))
-        })?;
+            event_tx,
+        } = IpcChannels::new();
 
         let waker_callback = waker.clone_waker_callback();
 
         std::thread::Builder::new()
-            .name("wtransport-reactor".into())
+            .name("pywebtransport-reactor".into())
             .spawn(move || {
                 match tokio::runtime::Builder::new_current_thread()
                     .enable_all()
@@ -155,12 +148,14 @@ impl PyEndpoint {
                             for s in std_sockets {
                                 match tokio::net::UdpSocket::from_std(s) {
                                     Ok(ts) => tokio_sockets.push(ts),
-                                    Err(e) => error!("Failed to convert std socket to tokio: {e}"),
+                                    Err(e) => {
+                                        debug!("sys_socket convert failed err={e:?}");
+                                    }
                                 }
                             }
 
                             if tokio_sockets.is_empty() {
-                                error!("No valid tokio sockets could be created.");
+                                debug!("sys_socket convert failed");
                                 return;
                             }
 
@@ -170,21 +165,17 @@ impl PyEndpoint {
                                 event_tx,
                                 tokio_sockets,
                                 waker_callback,
-                            )
-                            .unwrap_or_else(|e| {
-                                error!("Failed to initialize the Tokio reactor: {e}");
-                                std::process::exit(1);
-                            });
+                            );
 
                             reactor.run().await;
                         });
                     }
                     Err(e) => {
-                        error!("Failed to build Tokio runtime: {e}");
+                        debug!("rt_engine create failed err={e:?}");
                     }
                 }
             })
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to spawn reactor thread: {e}")))?;
+            .map_err(|e| PyRuntimeError::new_err(format!("sys_thread create failed err={e}")))?;
 
         Ok(Self {
             local_addrs,
@@ -208,9 +199,7 @@ impl PyEndpoint {
         server_name: String,
     ) -> PyResult<()> {
         if self.event_rx.len() > (self.event_rx.capacity() * 9) / 10 {
-            return Err(PyRuntimeError::new_err(
-                "IPC event queue is dangerously full. The Python event loop is severely lagging. Please yield.",
-            ));
+            return Err(PyRuntimeError::new_err("rt_channel validate exceeded"));
         }
 
         let remote_addr = extract_socket_addr(remote)?;
@@ -218,12 +207,10 @@ impl PyEndpoint {
         self.command_tx
             .try_send(RuntimeCommand::CreateConnection {
                 request_id,
-                remote: remote_addr,
+                remote_address: remote_addr,
                 server_name,
             })
-            .map_err(|e| {
-                PyRuntimeError::new_err(format!("Failed to dispatch command to reactor: {e}"))
-            })?;
+            .map_err(|e| PyRuntimeError::new_err(format!("rt_event send failed err={e}")))?;
 
         Ok(())
     }
@@ -232,9 +219,7 @@ impl PyEndpoint {
     #[pyo3(signature = (handle, event))]
     fn handle_user_event(&self, handle: usize, event: &Bound<'_, PyAny>) -> PyResult<()> {
         if self.event_rx.len() > (self.event_rx.capacity() * 9) / 10 {
-            return Err(PyRuntimeError::new_err(
-                "IPC event queue is dangerously full. The Python event loop is severely lagging. Please yield.",
-            ));
+            return Err(PyRuntimeError::new_err("rt_channel validate exceeded"));
         }
 
         let protocol_event: ProtocolEvent = event.extract()?;
@@ -245,9 +230,7 @@ impl PyEndpoint {
                 handle: conn_handle,
                 event: protocol_event,
             })
-            .map_err(|e| {
-                PyRuntimeError::new_err(format!("Failed to dispatch protocol event: {e}"))
-            })?;
+            .map_err(|e| PyRuntimeError::new_err(format!("rt_event send failed err={e}")))?;
 
         Ok(())
     }
@@ -409,7 +392,7 @@ fn extract_socket_addr(ob: &Bound<'_, PyAny>) -> PyResult<SocketAddr> {
     if let Ok((ip_str, port, flowinfo, scope_id)) = ob.extract::<(String, u16, u32, u32)>() {
         let ip: std::net::Ipv6Addr = ip_str
             .parse()
-            .map_err(|e| PyValueError::new_err(format!("Invalid IPv6 address: {e}")))?;
+            .map_err(|e| PyValueError::new_err(format!("ipv6_address convert failed err={e}")))?;
 
         Ok(SocketAddr::V6(std::net::SocketAddrV6::new(
             ip, port, flowinfo, scope_id,
@@ -417,12 +400,10 @@ fn extract_socket_addr(ob: &Bound<'_, PyAny>) -> PyResult<SocketAddr> {
     } else if let Ok((ip_str, port)) = ob.extract::<(String, u16)>() {
         let ip = ip_str
             .parse()
-            .map_err(|e| PyValueError::new_err(format!("Invalid IP address: {e}")))?;
+            .map_err(|e| PyValueError::new_err(format!("ip_address convert failed err={e}")))?;
 
         Ok(SocketAddr::new(ip, port))
     } else {
-        Err(PyValueError::new_err(
-            "Expected a tuple of (ip_str, port) or (ip_str, port, flowinfo, scope_id) for network address",
-        ))
+        Err(PyValueError::new_err("socket_address validate invalid"))
     }
 }

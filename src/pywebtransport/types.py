@@ -15,7 +15,7 @@ __all__: list[str] = [
     "AsyncGenerator",
     "AsyncIterator",
     "Buffer",
-    "ConnectionId",
+    "ConnectionHandle",
     "ConnectionState",
     "Data",
     "ErrorCode",
@@ -26,7 +26,6 @@ __all__: list[str] = [
     "Priority",
     "RequestId",
     "SSLContext",
-    "Serializer",
     "SessionId",
     "SessionProtocol",
     "SessionState",
@@ -43,7 +42,7 @@ __all__: list[str] = [
 
 type Address = tuple[str, int]
 type Buffer = bytes | bytearray | memoryview
-type ConnectionId = str
+type ConnectionHandle = int
 type Data = bytes | bytearray | memoryview | str
 type ErrorCode = int
 type EventData = Any
@@ -64,27 +63,19 @@ type Weight = int
 class ConnectionState(StrEnum):
     """Enumeration of connection states."""
 
-    IDLE = "idle"
-    CONNECTING = "connecting"
-    CONNECTED = "connected"
-    CLOSING = "closing"
-    DRAINING = "draining"
     CLOSED = "closed"
-    FAILED = "failed"
+    CLOSING = "closing"
+    CONNECTED = "connected"
+    CONNECTING = "connecting"
+    IDLE = "idle"
 
 
 class EventType(StrEnum):
     """Enumeration of system event types."""
 
-    CAPSULE_RECEIVED = "capsule_received"
     CONNECTION_CLOSED = "connection_closed"
     CONNECTION_ESTABLISHED = "connection_established"
-    CONNECTION_FAILED = "connection_failed"
-    CONNECTION_LOST = "connection_lost"
-    DATAGRAM_ERROR = "datagram_error"
     DATAGRAM_RECEIVED = "datagram_received"
-    DATAGRAM_SENT = "datagram_sent"
-    PROTOCOL_ERROR = "protocol_error"
     SESSION_CLOSED = "session_closed"
     SESSION_DATA_BLOCKED = "session_data_blocked"
     SESSION_DRAINING = "session_draining"
@@ -94,29 +85,10 @@ class EventType(StrEnum):
     SESSION_READY = "session_ready"
     SESSION_REQUEST = "session_request"
     SESSION_STREAMS_BLOCKED = "session_streams_blocked"
-    SETTINGS_RECEIVED = "settings_received"
     STOP_SENDING_RECEIVED = "stop_sending_received"
     STREAM_CLOSED = "stream_closed"
-    STREAM_DATA_RECEIVED = "stream_data_received"
-    STREAM_ERROR = "stream_error"
     STREAM_OPENED = "stream_opened"
     STREAM_RESET_RECEIVED = "stream_reset_received"
-    TIMEOUT_ERROR = "timeout_error"
-
-
-@runtime_checkable
-class Serializer(Protocol):
-    """Define the interface for serializing and deserializing structured data."""
-
-    __slots__ = ()
-
-    def deserialize(self, *, data: Buffer, obj_type: Any = None) -> Any:
-        """Deserialize the buffer into an object."""
-        ...
-
-    def serialize(self, *, obj: Any) -> bytes:
-        """Serialize the object into bytes."""
-        ...
 
 
 @runtime_checkable
@@ -151,18 +123,18 @@ class SessionProtocol(Protocol):
         ...
 
     @property
-    def subprotocol(self) -> str | None:
-        """Return the negotiated subprotocol."""
-        ...
-
-    @subprotocol.setter
-    def subprotocol(self, value: str | None) -> None:
-        """Set the negotiated subprotocol."""
+    def wt_available_protocols(self) -> list[str] | None:
+        """Return the requested wt_available_protocols."""
         ...
 
     @property
-    def subprotocols(self) -> list[str] | None:
-        """Return the requested subprotocols."""
+    def wt_protocol(self) -> str | None:
+        """Return the negotiated wt_protocol."""
+        ...
+
+    @wt_protocol.setter
+    def wt_protocol(self, value: str | None) -> None:
+        """Set the negotiated wt_protocol."""
         ...
 
     async def close(self, *, error_code: int = 0, reason: str | None = None) -> None:
@@ -173,30 +145,30 @@ class SessionProtocol(Protocol):
 class SessionState(StrEnum):
     """Enumeration of WebTransport session states."""
 
-    CONNECTING = "connecting"
-    CONNECTED = "connected"
-    CLOSING = "closing"
-    DRAINING = "draining"
     CLOSED = "closed"
+    CLOSING = "closing"
+    CONNECTED = "connected"
+    CONNECTING = "connecting"
+    DRAINING = "draining"
 
 
 class StreamDirection(StrEnum):
     """Enumeration of stream directions."""
 
     BIDIRECTIONAL = "bidirectional"
-    SEND_ONLY = "send_only"
     RECEIVE_ONLY = "receive_only"
+    SEND_ONLY = "send_only"
 
 
 class StreamState(StrEnum):
     """Enumeration of WebTransport stream states."""
 
-    OPEN = "open"
+    CLOSED = "closed"
     HALF_CLOSED_LOCAL = "half_closed_local"
     HALF_CLOSED_REMOTE = "half_closed_remote"
-    RESET_SENT = "reset_sent"
+    OPEN = "open"
     RESET_RECEIVED = "reset_received"
-    CLOSED = "closed"
+    RESET_SENT = "reset_sent"
 
 
 @runtime_checkable

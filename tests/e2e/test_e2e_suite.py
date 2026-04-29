@@ -42,17 +42,15 @@ from .test_07_advanced_features import test_server_diagnostics as run_07_server_
 from .test_07_advanced_features import test_session_lifecycle_events as run_07_session_lifecycle_events
 from .test_07_advanced_features import test_session_statistics as run_07_session_statistics
 from .test_07_advanced_features import test_stream_management_diagnostics as run_07_stream_management_diagnostics
-from .test_08_structured_messaging import test_json_messaging as run_08_json_messaging
-from .test_08_structured_messaging import test_msgpack_messaging as run_08_msgpack_messaging
-from .test_09_subprotocols import test_exact_match as run_09_exact_match
-from .test_09_subprotocols import test_fallback_downgrade as run_09_fallback_downgrade
-from .test_09_subprotocols import test_mismatch_rejection as run_09_mismatch_rejection
-from .test_09_subprotocols import test_missing_required as run_09_missing_required
-from .test_09_subprotocols import test_rogue_mismatch as run_09_rogue_mismatch
-from .test_09_subprotocols import test_rogue_missing as run_09_rogue_missing
-from .test_10_tls_export import test_context_and_label_isolation as run_10_context_and_label_isolation
-from .test_10_tls_export import test_e2e_symmetry as run_10_e2e_symmetry
-from .test_10_tls_export import test_error_handling as run_10_error_handling
+from .test_08_protocol_negotiation import test_exact_match as run_08_exact_match
+from .test_08_protocol_negotiation import test_fallback_downgrade as run_08_fallback_downgrade
+from .test_08_protocol_negotiation import test_mismatch_rejection as run_08_mismatch_rejection
+from .test_08_protocol_negotiation import test_missing_required as run_08_missing_required
+from .test_08_protocol_negotiation import test_rogue_mismatch as run_08_rogue_mismatch
+from .test_08_protocol_negotiation import test_rogue_missing as run_08_rogue_missing
+from .test_09_tls_export import test_context_and_label_isolation as run_09_context_and_label_isolation
+from .test_09_tls_export import test_e2e_symmetry as run_09_e2e_symmetry
+from .test_09_tls_export import test_error_handling as run_09_error_handling
 
 
 async def _is_server_ready() -> bool:
@@ -199,35 +197,29 @@ class TestE2eSuite:
     async def test_07_server_diagnostics(self) -> None:
         assert await run_07_server_diagnostics() is True, "Server diagnostics retrieval failed"
 
-    async def test_08_json_messaging(self) -> None:
-        assert await run_08_json_messaging() is True, "Structured JSON messaging test failed"
+    async def test_08_exact_match(self) -> None:
+        assert await run_08_exact_match() is True, "Exact match protocol negotiation failed"
 
-    async def test_08_msgpack_messaging(self) -> None:
-        assert await run_08_msgpack_messaging() is True, "Structured MsgPack messaging test failed"
+    async def test_08_fallback_downgrade(self) -> None:
+        assert await run_08_fallback_downgrade() is True, "Fallback downgrade protocol negotiation failed"
 
-    async def test_09_exact_match(self) -> None:
-        assert await run_09_exact_match() is True, "Exact match subprotocol negotiation failed"
+    async def test_08_mismatch_rejection(self) -> None:
+        assert await run_08_mismatch_rejection() is True, "Mismatch rejection protocol test failed"
 
-    async def test_09_fallback_downgrade(self) -> None:
-        assert await run_09_fallback_downgrade() is True, "Fallback downgrade subprotocol negotiation failed"
+    async def test_08_missing_required(self) -> None:
+        assert await run_08_missing_required() is True, "Missing required protocol test failed"
 
-    async def test_09_mismatch_rejection(self) -> None:
-        assert await run_09_mismatch_rejection() is True, "Mismatch rejection subprotocol test failed"
+    async def test_08_rogue_missing(self) -> None:
+        assert await run_08_rogue_missing() is True, "Rogue server missing protocol test failed"
 
-    async def test_09_missing_required(self) -> None:
-        assert await run_09_missing_required() is True, "Missing required subprotocol test failed"
+    async def test_08_rogue_mismatch(self) -> None:
+        assert await run_08_rogue_mismatch() is True, "Rogue server mismatched protocol test failed"
 
-    async def test_09_rogue_missing(self) -> None:
-        assert await run_09_rogue_missing() is True, "Rogue server missing subprotocol test failed"
+    async def test_09_e2e_symmetry(self) -> None:
+        assert await run_09_e2e_symmetry() is True, "TLS export E2E symmetry test failed"
 
-    async def test_09_rogue_mismatch(self) -> None:
-        assert await run_09_rogue_mismatch() is True, "Rogue server mismatched subprotocol test failed"
+    async def test_09_context_and_label_isolation(self) -> None:
+        assert await run_09_context_and_label_isolation() is True, "TLS export context and label isolation test failed"
 
-    async def test_10_e2e_symmetry(self) -> None:
-        assert await run_10_e2e_symmetry() is True, "TLS export E2E symmetry test failed"
-
-    async def test_10_context_and_label_isolation(self) -> None:
-        assert await run_10_context_and_label_isolation() is True, "TLS export context and label isolation test failed"
-
-    async def test_10_error_handling(self) -> None:
-        assert await run_10_error_handling() is True, "TLS export error handling test failed"
+    async def test_09_error_handling(self) -> None:
+        assert await run_09_error_handling() is True, "TLS export error handling test failed"

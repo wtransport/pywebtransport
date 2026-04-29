@@ -199,7 +199,7 @@ async def test_unidirectional_stream_to_server(
         await stream.write(data=test_message)
         await stream.close()
 
-    async with asyncio.timeout(delay=2.0):
-        received_data = await data_queue.get()
+        async with asyncio.timeout(delay=2.0):
+            received_data = await data_queue.get()
 
     assert received_data == test_message

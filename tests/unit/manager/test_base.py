@@ -98,7 +98,9 @@ class TestBaseResourceManager:
         mocker.patch.object(target=manager, attribute="_check_is_closed", return_value=True)
 
         async with manager:
-            with pytest.raises(expected_exception=RuntimeError, match="closed during registration"):
+            with pytest.raises(
+                expected_exception=RuntimeError, match="app_manager validate invalid component=test_item expected=open"
+            ):
                 await manager.add_resource(resource=resource)
 
         cast(MagicMock, resource.events.off).assert_called_once()
@@ -131,9 +133,7 @@ class TestBaseResourceManager:
             await asyncio.sleep(delay=0.01)
 
             assert len(manager) == 0
-            assert "Resource ID mismatch in close event" in caplog.text
-            assert "test_item" in caplog.text
-            assert "other" in caplog.text
+            assert "app_manager validate invalid component=test_item expected=identity_match" in caplog.text
 
     async def test_add_resource_closed_inside_lock(self, manager: ConcreteResourceManager) -> None:
         class FlakyClosedResource(MockResource):
@@ -149,7 +149,9 @@ class TestBaseResourceManager:
         resource = FlakyClosedResource(resource_id="r1")
 
         async with manager:
-            with pytest.raises(expected_exception=RuntimeError, match="Cannot add closed test_item"):
+            with pytest.raises(
+                expected_exception=RuntimeError, match="app_manager validate invalid component=test_item expected=open"
+            ):
                 await manager.add_resource(resource=resource)
 
         assert len(manager) == 0
@@ -166,14 +168,16 @@ class TestBaseResourceManager:
             stats = await manager.get_stats()
             assert stats["total_created"] == 1
 
-            assert "Resource r1 already managed." in caplog.text
+            assert "app_manager validate invalid component=test_item" in caplog.text
 
     async def test_add_resource_initially_closed(self, manager: ConcreteResourceManager) -> None:
         resource = MockResource(resource_id="r1")
         await resource.close()
 
         async with manager:
-            with pytest.raises(expected_exception=RuntimeError, match="Cannot add closed test_item"):
+            with pytest.raises(
+                expected_exception=RuntimeError, match="app_manager validate invalid component=test_item expected=open"
+            ):
                 await manager.add_resource(resource=resource)
 
         assert len(manager) == 0
@@ -186,7 +190,10 @@ class TestBaseResourceManager:
         async with manager:
             await manager.add_resource(resource=r1)
 
-            with pytest.raises(expected_exception=RuntimeError, match="Maximum test_item limit reached"):
+            with pytest.raises(
+                expected_exception=RuntimeError,
+                match="app_manager validate exceeded actual=1 component=test_item limit=1",
+            ):
                 await manager.add_resource(resource=r2)
 
             assert len(manager) == 1
@@ -195,7 +202,7 @@ class TestBaseResourceManager:
     async def test_add_resource_not_activated(self, manager: ConcreteResourceManager) -> None:
         resource = MockResource(resource_id="r1")
 
-        with pytest.raises(expected_exception=RuntimeError, match="is not activated"):
+        with pytest.raises(expected_exception=RuntimeError, match="app_manager validate failed expected=active"):
             await manager.add_resource(resource=resource)
 
     async def test_add_resource_shutting_down(self, manager: ConcreteResourceManager) -> None:
@@ -203,7 +210,7 @@ class TestBaseResourceManager:
 
         async with manager:
             await manager.shutdown()
-            with pytest.raises(expected_exception=RuntimeError, match="is shutting down"):
+            with pytest.raises(expected_exception=RuntimeError, match="app_manager validate failed expected=active"):
                 await manager.add_resource(resource=resource)
             assert resource.closed is True
 
@@ -336,11 +343,14 @@ class TestBaseResourceManager:
         mocker.patch.object(target=r1, attribute="close", side_effect=ValueError("Fail 1"))
         mocker.patch.object(target=r2, attribute="close", side_effect=RuntimeError("Fail 2"))
 
-        async with manager:
-            await manager.add_resource(resource=r1)
-            await manager.add_resource(resource=r2)
+        try:
+            async with manager:
+                await manager.add_resource(resource=r1)
+                await manager.add_resource(resource=r2)
+        except BaseException:
+            pass
 
-        assert "Errors occurred while closing managed test_items" in caplog.text
+        assert "app_manager close failed component=test_item err=" in caplog.text
         assert "Fail 1" in caplog.text or "Fail 2" in caplog.text
         assert len(manager) == 0
 

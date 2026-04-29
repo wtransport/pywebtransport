@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable
 from typing import Final
 
 from pywebtransport import ClientConfig, ConnectionError, StreamError, TimeoutError, WebTransportClient
+from pywebtransport.utils import init_tracing
 
 SERVER_HOST: Final[str] = "127.0.0.1"
 SERVER_PORT: Final[int] = 4433
@@ -17,6 +18,7 @@ DEBUG_MODE: Final[bool] = "--debug" in sys.argv
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 if DEBUG_MODE:
     logging.getLogger().setLevel(logging.DEBUG)
+    init_tracing()
 
 logger = logging.getLogger(name="test_simple_stream")
 
@@ -32,13 +34,13 @@ async def test_stream_creation() -> bool:
         async with WebTransportClient(config=config) as client:
             logger.info("Connecting to %s...", SERVER_URL)
             session = await client.connect(url=SERVER_URL)
-            logger.info("Connected, session ID: %s", session.session_id)
+            logger.info("Connected, session ID: %d", session.session_id)
 
             logger.info("Creating bidirectional stream...")
             stream = await session.create_bidirectional_stream()
 
             logger.info("Stream created successfully!")
-            logger.info("   - Stream ID: %s", stream.stream_id)
+            logger.info("   - Stream ID: %d", stream.stream_id)
 
             await stream.close()
             logger.info("Stream closed.")
@@ -65,7 +67,7 @@ async def test_simple_echo() -> bool:
         async with WebTransportClient(config=config) as client:
             session = await client.connect(url=SERVER_URL)
             stream = await session.create_bidirectional_stream()
-            logger.info("Stream %s created for echo test.", stream.stream_id)
+            logger.info("Stream %d created for echo test.", stream.stream_id)
 
             test_message = b"Hello, WebTransport!"
             logger.info("Sending: %r", test_message)

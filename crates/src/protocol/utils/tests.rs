@@ -1,5 +1,6 @@
 //! Unit tests for the `crate::protocol::utils` module.
 
+use std::borrow::Cow;
 use std::io::Cursor;
 
 use bytes::{Buf, Bytes, BytesMut};
@@ -7,7 +8,7 @@ use rstest::rstest;
 
 use super::*;
 use crate::common::constants::{
-    ERR_H3_FRAME_ERROR, ERR_LIB_INTERNAL_ERROR, ERR_WT_APPLICATION_ERROR_FIRST, MAX_STREAM_ID,
+    ERR_H3_FRAME_ERROR, ERR_LIB_INTERNAL_ERROR, ERR_WT_APPLICATION_ERROR_FIRST, QUIC_MAX_STREAM_ID,
 };
 use crate::common::types::{ErrorCode, StreamDirection};
 
@@ -56,31 +57,34 @@ fn test_can_send_on_stream_permission_check(
 }
 
 #[test]
-fn test_encode_subprotocol_list_empty() {
+fn test_encode_wt_protocol_list_empty() {
     let protocols: Vec<String> = vec![];
-    let result = encode_subprotocol_list(&protocols);
-    assert_eq!(result, Bytes::new());
+    let result = encode_wt_protocol_list(&protocols);
+    assert_eq!(result, Ok(Bytes::new()));
 }
 
 #[test]
-fn test_encode_subprotocol_list_escapes_and_filters() {
-    let protocols = vec![
-        "h3".to_owned(),
-        "my\\proto\"".to_owned(),
-        "invalid\n\r".to_owned(),
-    ];
-    let result = encode_subprotocol_list(&protocols);
+fn test_encode_wt_protocol_list_escapes() {
+    let protocols = vec!["h3".to_owned(), "my\\proto\"".to_owned()];
+    let result = encode_wt_protocol_list(&protocols);
     assert_eq!(
         result,
-        Bytes::from_static(b"\"h3\", \"my\\\\proto\\\"\", \"invalid\"")
+        Ok(Bytes::from_static(b"\"h3\", \"my\\\\proto\\\"\""))
     );
 }
 
 #[test]
-fn test_encode_subprotocol_list_multiple() {
+fn test_encode_wt_protocol_list_invalid() {
+    let protocols = vec!["invalid\n\r".to_owned()];
+    let result = encode_wt_protocol_list(&protocols);
+    assert_eq!(result, Err(Cow::Borrowed("wt_protocol validate invalid")));
+}
+
+#[test]
+fn test_encode_wt_protocol_list_multiple() {
     let protocols = vec!["p1".to_owned(), "p2".to_owned(), "p3".to_owned()];
-    let result = encode_subprotocol_list(&protocols);
-    assert_eq!(result, Bytes::from_static(b"\"p1\", \"p2\", \"p3\""));
+    let result = encode_wt_protocol_list(&protocols);
+    assert_eq!(result, Ok(Bytes::from_static(b"\"p1\", \"p2\", \"p3\"")));
 }
 
 #[test]
@@ -142,7 +146,7 @@ fn test_http_to_wt_error_mapping_reserved_code() {
 
     if reserved > ERR_WT_APPLICATION_ERROR_FIRST {
         let result = http_to_wt_error(reserved);
-        assert_eq!(result, None, "Reserved code {reserved} should be rejected");
+        assert_eq!(result, None);
     }
 }
 
@@ -269,45 +273,45 @@ fn test_next_stream_limit_calculation(
 }
 
 #[test]
-fn test_parse_subprotocol_list_invalid() {
+fn test_parse_wt_protocol_list_invalid() {
     let unclosed = b"\"h3";
     let bad_escape = b"\"h3\\\"";
     let invalid_char = b"\"\x01\"";
     let no_quotes = b"h3";
 
-    assert_eq!(parse_subprotocol_list(unclosed), None);
-    assert_eq!(parse_subprotocol_list(bad_escape), None);
-    assert_eq!(parse_subprotocol_list(invalid_char), None);
-    assert_eq!(parse_subprotocol_list(no_quotes), None);
+    assert_eq!(parse_wt_protocol_list(unclosed), None);
+    assert_eq!(parse_wt_protocol_list(bad_escape), None);
+    assert_eq!(parse_wt_protocol_list(invalid_char), None);
+    assert_eq!(parse_wt_protocol_list(no_quotes), None);
 }
 
 #[test]
-fn test_parse_subprotocol_list_valid() {
+fn test_parse_wt_protocol_list_valid() {
     let single = b"\"h3\"";
     let multiple = b"\"h3\", \"p1\"";
     let multiple_spaces = b"  \"h3\"  , \t \"p1\"  ";
     let escaped = b"\"my\\\\proto\\\"\"";
 
-    assert_eq!(parse_subprotocol_list(single), Some(vec!["h3".to_owned()]));
+    assert_eq!(parse_wt_protocol_list(single), Some(vec!["h3".to_owned()]));
     assert_eq!(
-        parse_subprotocol_list(multiple),
+        parse_wt_protocol_list(multiple),
         Some(vec!["h3".to_owned(), "p1".to_owned()])
     );
     assert_eq!(
-        parse_subprotocol_list(multiple_spaces),
+        parse_wt_protocol_list(multiple_spaces),
         Some(vec!["h3".to_owned(), "p1".to_owned()])
     );
     assert_eq!(
-        parse_subprotocol_list(escaped),
+        parse_wt_protocol_list(escaped),
         Some(vec!["my\\proto\"".to_owned()])
     );
 }
 
 #[test]
-fn test_parse_subprotocol_string_logic() {
-    assert_eq!(parse_subprotocol_string(b"\"h3\""), Some("h3".to_owned()));
-    assert_eq!(parse_subprotocol_string(b"\"h3\", \"p1\""), None);
-    assert_eq!(parse_subprotocol_string(b"invalid"), None);
+fn test_parse_wt_protocol_string_logic() {
+    assert_eq!(parse_wt_protocol_string(b"\"h3\""), Some("h3".to_owned()));
+    assert_eq!(parse_wt_protocol_string(b"\"h3\", \"p1\""), None);
+    assert_eq!(parse_wt_protocol_string(b"invalid"), None);
 }
 
 #[test]
@@ -337,9 +341,9 @@ fn test_read_varint_valid_decoding(#[case] input: &[u8], #[case] expected: u64) 
 }
 
 #[test]
-#[should_panic(expected = "Invalid stream ID encountered in debug path")]
+#[should_panic(expected = "quic_stream validate exceeded")]
 fn test_stream_dir_from_id_panic_on_invalid() {
-    let _ = stream_dir_from_id(MAX_STREAM_ID + 1, true);
+    let _ = stream_dir_from_id(QUIC_MAX_STREAM_ID + 1, true);
 }
 
 #[rstest]
@@ -354,42 +358,6 @@ fn test_stream_dir_from_id_resolution(
     let result = stream_dir_from_id(stream_id, is_client);
 
     assert!(matches!(result, _x if result == expected));
-}
-
-#[test]
-fn test_validate_control_stream_id_rules() {
-    let valid = 0;
-    let invalid = 2;
-
-    let res_valid = validate_control_stream_id(valid);
-    let res_invalid = validate_control_stream_id(invalid);
-
-    assert_eq!(res_valid, Ok(()));
-    assert!(res_invalid.is_err());
-}
-
-#[test]
-fn test_validate_stream_id_bounds() {
-    let valid = MAX_STREAM_ID;
-    let invalid = MAX_STREAM_ID + 1;
-
-    let res_valid = validate_stream_id(valid);
-    let res_invalid = validate_stream_id(invalid);
-
-    assert_eq!(res_valid, Ok(()));
-    assert!(res_invalid.is_err());
-}
-
-#[test]
-fn test_validate_unidirectional_stream_id_rules() {
-    let valid = 2;
-    let invalid = 0;
-
-    let res_valid = validate_unidirectional_stream_id(valid, "Test");
-    let res_invalid = validate_unidirectional_stream_id(invalid, "Test");
-
-    assert_eq!(res_valid, Ok(()));
-    assert!(res_invalid.is_err());
 }
 
 #[test]

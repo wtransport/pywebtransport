@@ -4,6 +4,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use bytes::BytesMut;
 use crossbeam_queue::ArrayQueue;
@@ -20,7 +21,7 @@ use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 
 use super::*;
-use crate::common::config::{RustServerConfig, TransportConfig as WtTransportConfig};
+use crate::common::config::{RustBaseConfig, RustServerConfig};
 use crate::common::types::RequestId;
 use crate::protocol::events::{Effect, ProtocolEvent};
 
@@ -89,18 +90,18 @@ fn create_dummy_client_config() -> ClientConfig {
 
 fn create_dummy_endpoint(is_server: bool) -> TransportEndpoint {
     let quinn_ep = QuinnEndpoint::new(Arc::new(EndpointConfig::default()), None, false, None);
-    let t_cfg = WtTransportConfig::default();
+    let b_cfg = mock_base_config();
 
     if is_server {
         let s_cfg = create_dummy_rust_server_config();
-        let Ok(ep) = TransportEndpoint::new_server(quinn_ep, t_cfg, s_cfg) else {
+        let Ok(ep) = TransportEndpoint::new_server(quinn_ep, b_cfg, s_cfg) else {
             assert_eq!("ok", "err", "Failed to create TransportEndpoint server");
             unreachable!()
         };
         ep
     } else {
         let c_cfg = create_dummy_client_config();
-        let Ok(ep) = TransportEndpoint::new_client(quinn_ep, t_cfg, c_cfg) else {
+        let Ok(ep) = TransportEndpoint::new_client(quinn_ep, b_cfg, c_cfg) else {
             assert_eq!("ok", "err", "Failed to create TransportEndpoint client");
             unreachable!()
         };
@@ -110,13 +111,13 @@ fn create_dummy_endpoint(is_server: bool) -> TransportEndpoint {
 
 fn create_dummy_rust_server_config() -> RustServerConfig {
     RustServerConfig {
+        base: mock_base_config(),
         bind_host: "127.0.0.1".to_owned(),
         bind_port: 4433,
         ca_certs: None,
         certfile: PathBuf::from("dummy.crt"),
         keyfile: PathBuf::from("dummy.key"),
         require_client_auth: false,
-        transport: WtTransportConfig::default(),
     }
 }
 
@@ -144,13 +145,34 @@ async fn create_test_reactor(
         unreachable!()
     };
     let endpoint = create_dummy_endpoint(true);
-    let Ok(reactor) = Reactor::new(cmd_rx, endpoint, Arc::clone(&event_tx), vec![socket], waker)
-    else {
-        assert_eq!("ok", "err", "Failed to initialize Reactor");
-        unreachable!()
-    };
+    let reactor = Reactor::new(cmd_rx, endpoint, Arc::clone(&event_tx), vec![socket], waker);
 
     (reactor, cmd_tx, event_tx, waker_called)
+}
+
+fn mock_base_config() -> RustBaseConfig {
+    RustBaseConfig {
+        alpn_protocols: vec!["h3".to_owned()],
+        congestion_control_algorithm: "cubic".to_owned(),
+        connection_idle_timeout: Duration::from_secs(60),
+        flow_control_window: 1_048_576,
+        flow_control_window_auto_scale_enabled: true,
+        initial_max_data: 10_485_760,
+        initial_max_streams_bidi: 100,
+        initial_max_streams_uni: 100,
+        keep_alive_interval: Some(Duration::from_secs(10)),
+        max_capsule_size: 1500,
+        max_datagram_size: 1200,
+        max_field_section_size: 65536,
+        max_session_pending_events: 100,
+        max_sessions: 100,
+        max_stream_read_buffer_size: 1_048_576,
+        max_stream_write_buffer_size: 1_048_576,
+        max_total_pending_events: 1000,
+        max_transport_streams: 256,
+        pending_event_ttl: Duration::from_secs(30),
+        resource_cleanup_interval: Duration::from_secs(5),
+    }
 }
 
 #[tokio::test]
@@ -167,7 +189,7 @@ async fn test_handle_command_create_connection_failure_emits_event() {
     let (mut reactor, _, event_tx, _) = create_test_reactor(10).await;
     let cmd = RuntimeCommand::CreateConnection {
         request_id: RequestId::from(1u64),
-        remote: create_dummy_socket_addr(),
+        remote_address: create_dummy_socket_addr(),
         server_name: "localhost".to_owned(),
     };
 
@@ -187,7 +209,7 @@ async fn test_handle_command_create_connection_queue_full_drops_event() {
     let (mut reactor, _, event_tx, _) = create_test_reactor(1).await;
     let cmd = RuntimeCommand::CreateConnection {
         request_id: RequestId::from(1u64),
-        remote: create_dummy_socket_addr(),
+        remote_address: create_dummy_socket_addr(),
         server_name: "localhost".to_owned(),
     };
     let Ok(()) = event_tx.push(RuntimeEvent::ReactorShutDown) else {
@@ -229,7 +251,7 @@ async fn test_handle_datagram_processes_safely() {
     let (mut reactor, _, _, _) = create_test_reactor(10).await;
 
     reactor
-        .handle_datagram(BytesMut::new(), create_dummy_socket_addr(), None)
+        .handle_datagram(create_dummy_socket_addr(), None, BytesMut::new())
         .await;
 
     assert!(!reactor.events_emitted);
@@ -381,11 +403,7 @@ async fn test_reactor_initialization_succeeds() {
     };
     let endpoint = create_dummy_endpoint(true);
 
-    let Ok(reactor) = Reactor::new(cmd_rx, endpoint, Arc::clone(&event_tx), vec![socket], waker)
-    else {
-        assert_eq!("ok", "err", "Failed to construct reactor");
-        unreachable!()
-    };
+    let reactor = Reactor::new(cmd_rx, endpoint, Arc::clone(&event_tx), vec![socket], waker);
 
     assert!(!reactor.events_emitted);
 }
@@ -395,7 +413,7 @@ async fn test_reactor_run_loop_full_tick_and_waker() {
     let (reactor, cmd_tx, event_tx, waker_called) = create_test_reactor(10).await;
     let cmd_create = RuntimeCommand::CreateConnection {
         request_id: RequestId::from(99u64),
-        remote: create_dummy_socket_addr(),
+        remote_address: create_dummy_socket_addr(),
         server_name: "localhost".to_owned(),
     };
     let cmd_shutdown = RuntimeCommand::Shutdown;
@@ -408,7 +426,7 @@ async fn test_reactor_run_loop_full_tick_and_waker() {
                 assert_eq!("ok", "err", "Failed to send command to reactor loop");
                 unreachable!()
             };
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
             let Ok(()) = cmd_tx.send(cmd_shutdown).await else {
                 assert_eq!("ok", "err", "Failed to send shutdown command");
                 unreachable!()
@@ -517,11 +535,8 @@ async fn test_reactor_udp_slab_reallocation_is_triggered() {
         assert_eq!(size, 1200);
     }
     loop {
-        let result = tokio::time::timeout(
-            tokio::time::Duration::from_millis(50),
-            reactor.datagram_rx.recv(),
-        )
-        .await;
+        let result =
+            tokio::time::timeout(Duration::from_millis(50), reactor.datagram_rx.recv()).await;
         if let Ok(Some(_)) = result {
             count += 1;
             if count == 60 {

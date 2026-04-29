@@ -1,13 +1,13 @@
 [package]
-name = "wtransport-engine"
-version = "0.16.1"
+name = "pywebtransport-engine"
+version = "0.17.0"
 edition = "2024"
 rust-version = "1.93.1"
 publish = false
 build = "build.rs"
 
 [lib]
-name = "_wtransport"
+name = "_pywebtransport"
 crate-type = ["cdylib"]
 
 [dependencies]
@@ -35,6 +35,7 @@ tokio = { version = "1.49.0", features = [
     "time",
 ] }
 tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 webpki-roots = "1.0.6"
 
 [build-dependencies]

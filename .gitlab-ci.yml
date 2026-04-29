@@ -24,13 +24,21 @@ lint:
   cache:
     paths:
       - .cache/pip
+      - .cargo/registry
+      - crates/target/
   before_script:
+    - apt-get update && apt-get install -y curl build-essential clang
+    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.1
+    - export PATH="$CARGO_HOME/bin:$PATH"
     - python -m pip install --upgrade pip
     - pip install -r dev-requirements.txt
   script:
+    - isort --check-only src tests
     - black --check src tests
+    - cargo fmt --manifest-path crates/Cargo.toml -- --check
     - flake8 src tests
     - mypy src tests
+    - cargo clippy --manifest-path crates/Cargo.toml -- -D warnings
   rules:
     - if: '$CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH == "main"'
     - when: never
@@ -39,7 +47,7 @@ test:
   stage: test
   parallel:
     matrix:
-      - PYTHON_VERSION: ["3.12", "3.13"]
+      - PYTHON_VERSION: ["3.12", "3.13", "3.14"]
   image: python:$PYTHON_VERSION-slim-bookworm
   cache:
     paths:
@@ -117,6 +125,7 @@ deploy-release:
         echo "Version v$VERSION already released - skipping"
         exit 0
       fi
+    - twine check dist/*
     - twine upload dist/* -u "$TWINE_USERNAME" -p "$TWINE_PASSWORD" --non-interactive
     - git config user.name "WTransport Bot"
     - git config user.email "251935624+wtransport-bot@users.noreply.github.com"

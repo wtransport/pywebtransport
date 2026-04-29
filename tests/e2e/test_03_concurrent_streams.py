@@ -16,6 +16,7 @@ from pywebtransport import (
     WebTransportClient,
     WebTransportSession,
 )
+from pywebtransport.utils import init_tracing
 
 SERVER_HOST: Final[str] = "127.0.0.1"
 SERVER_PORT: Final[int] = 4433
@@ -25,6 +26,7 @@ DEBUG_MODE: Final[bool] = "--debug" in sys.argv
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 if DEBUG_MODE:
     logging.getLogger().setLevel(level=logging.DEBUG)
+    init_tracing()
 
 logger = logging.getLogger(name="test_concurrent_streams")
 
@@ -38,7 +40,7 @@ async def test_sequential_streams() -> bool:
     try:
         async with WebTransportClient(config=config) as client:
             session = await client.connect(url=SERVER_URL)
-            logger.info("Connected, session ID: %s", session.session_id)
+            logger.info("Connected, session ID: %d", session.session_id)
 
             for i in range(num_streams):
                 stream_num = i + 1
@@ -74,7 +76,7 @@ async def test_concurrent_streams() -> bool:
         """Define the work for a single concurrent stream test."""
         try:
             stream = await session.create_bidirectional_stream()
-            logger.debug("Task %d: Stream created (ID=%s)", task_id, stream.stream_id)
+            logger.debug("Task %d: Stream created (ID=%d)", task_id, stream.stream_id)
             test_msg = f"Concurrent stream {task_id}".encode()
             await stream.write_all(data=test_msg, end_stream=True)
             response = await stream.read_all()
@@ -125,7 +127,7 @@ async def test_stream_lifecycle() -> bool:
         async with WebTransportClient(config=config) as client:
             session = await client.connect(url=SERVER_URL)
             stream = await session.create_bidirectional_stream()
-            logger.info("Stream created: %s", stream.stream_id)
+            logger.info("Stream created: %d", stream.stream_id)
 
             await stream.write_all(data=b"Lifecycle test", end_stream=True)
             await stream.read_all()

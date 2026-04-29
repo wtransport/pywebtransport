@@ -14,13 +14,11 @@ impl<'py> IntoPyObject<'py> for ConnectionState {
 
     fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
         let s = match self {
-            Self::Idle => "idle",
-            Self::Connecting => "connecting",
-            Self::Connected => "connected",
-            Self::Closing => "closing",
-            Self::Draining => "draining",
             Self::Closed => "closed",
-            Self::Failed => "failed",
+            Self::Closing => "closing",
+            Self::Connected => "connected",
+            Self::Connecting => "connecting",
+            Self::Idle => "idle",
         };
 
         Ok(PyString::intern(py, s))
@@ -34,15 +32,9 @@ impl<'py> IntoPyObject<'py> for EventType {
 
     fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
         let s = match self {
-            Self::CapsuleReceived => "capsule_received",
             Self::ConnectionClosed => "connection_closed",
             Self::ConnectionEstablished => "connection_established",
-            Self::ConnectionFailed => "connection_failed",
-            Self::ConnectionLost => "connection_lost",
-            Self::DatagramError => "datagram_error",
             Self::DatagramReceived => "datagram_received",
-            Self::DatagramSent => "datagram_sent",
-            Self::ProtocolError => "protocol_error",
             Self::SessionClosed => "session_closed",
             Self::SessionDataBlocked => "session_data_blocked",
             Self::SessionDraining => "session_draining",
@@ -52,14 +44,10 @@ impl<'py> IntoPyObject<'py> for EventType {
             Self::SessionReady => "session_ready",
             Self::SessionRequest => "session_request",
             Self::SessionStreamsBlocked => "session_streams_blocked",
-            Self::SettingsReceived => "settings_received",
             Self::StopSendingReceived => "stop_sending_received",
             Self::StreamClosed => "stream_closed",
-            Self::StreamDataReceived => "stream_data_received",
-            Self::StreamError => "stream_error",
             Self::StreamOpened => "stream_opened",
             Self::StreamResetReceived => "stream_reset_received",
-            Self::TimeoutError => "timeout_error",
         };
 
         Ok(PyString::intern(py, s))
@@ -73,11 +61,11 @@ impl<'py> IntoPyObject<'py> for SessionState {
 
     fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
         let s = match self {
-            Self::Connecting => "connecting",
-            Self::Connected => "connected",
-            Self::Closing => "closing",
-            Self::Draining => "draining",
             Self::Closed => "closed",
+            Self::Closing => "closing",
+            Self::Connected => "connected",
+            Self::Connecting => "connecting",
+            Self::Draining => "draining",
         };
 
         Ok(PyString::intern(py, s))
@@ -92,8 +80,8 @@ impl<'py> IntoPyObject<'py> for StreamDirection {
     fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
         let s = match self {
             Self::Bidirectional => "bidirectional",
-            Self::SendOnly => "send_only",
             Self::ReceiveOnly => "receive_only",
+            Self::SendOnly => "send_only",
         };
 
         Ok(PyString::intern(py, s))
@@ -107,12 +95,12 @@ impl<'py> IntoPyObject<'py> for StreamState {
 
     fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
         let s = match self {
-            Self::Open => "open",
+            Self::Closed => "closed",
             Self::HalfClosedLocal => "half_closed_local",
             Self::HalfClosedRemote => "half_closed_remote",
-            Self::ResetSent => "reset_sent",
+            Self::Open => "open",
             Self::ResetReceived => "reset_received",
-            Self::Closed => "closed",
+            Self::ResetSent => "reset_sent",
         };
 
         Ok(PyString::intern(py, s))

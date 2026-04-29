@@ -13,16 +13,16 @@ __all__: list[str] = []
 def pack_user_event(*, event: events.ProtocolEvent) -> tuple[int, tuple[Any, ...]]:
     """Translate the UserEvent domain model into a tightly packed FFI tuple."""
     match event:
-        case events.ConnectionClose():
-            return abi.CONNECTION_CLOSE, (event.request_id, event.error_code, event.reason)
         case events.UserAcceptSession():
-            return abi.USER_ACCEPT_SESSION, (event.request_id, event.session_id, event.subprotocol)
+            return abi.USER_ACCEPT_SESSION, (event.request_id, event.session_id, event.wt_protocol)
+        case events.UserCloseConnection():
+            return abi.USER_CLOSE_CONNECTION, (event.request_id, event.error_code, event.reason)
+        case events.UserCloseConnectionGracefully():
+            return abi.USER_CLOSE_CONNECTION_GRACEFULLY, (event.request_id,)
         case events.UserCloseSession():
             return abi.USER_CLOSE_SESSION, (event.request_id, event.session_id, event.error_code, event.reason)
-        case events.UserConnectionGracefulClose():
-            return abi.USER_CONNECTION_GRACEFUL_CLOSE, (event.request_id,)
         case events.UserCreateSession():
-            return abi.USER_CREATE_SESSION, (event.request_id, event.path, event.headers, event.subprotocols)
+            return abi.USER_CREATE_SESSION, (event.request_id, event.path, event.headers, event.wt_available_protocols)
         case events.UserCreateStream():
             return abi.USER_CREATE_STREAM, (event.request_id, event.session_id, event.is_unidirectional)
         case events.UserExportKeyingMaterial():
@@ -48,6 +48,8 @@ def pack_user_event(*, event: events.ProtocolEvent) -> tuple[int, tuple[Any, ...
                 event.is_unidirectional,
                 event.max_streams,
             )
+        case events.UserReadStream():
+            return abi.USER_READ_STREAM, (event.request_id, event.stream_id, event.max_bytes)
         case events.UserRejectSession():
             return abi.USER_REJECT_SESSION, (event.request_id, event.session_id, event.status_code)
         case events.UserResetStream():
@@ -58,7 +60,5 @@ def pack_user_event(*, event: events.ProtocolEvent) -> tuple[int, tuple[Any, ...
             return abi.USER_SEND_STREAM_DATA, (event.request_id, event.stream_id, event.data, event.end_stream)
         case events.UserStopSending():
             return abi.USER_STOP_SENDING, (event.request_id, event.stream_id, event.error_code)
-        case events.UserStreamRead():
-            return abi.USER_STREAM_READ, (event.request_id, event.stream_id, event.max_bytes)
         case _:
-            raise ValueError(f"Unsupported event type for FFI translation: {type(event).__name__}")
+            raise ValueError(f"rt_event convert invalid actual={type(event).__name__}")

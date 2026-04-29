@@ -17,8 +17,8 @@ from .exceptions import (
     TimeoutError,
     WebTransportError,
 )
-from .messaging import StructuredDatagramTransport, StructuredStream
-from .server import ServerApp
+from .framework import ServerApp
+from .server import WebTransportServer
 from .session import WebTransportSession
 from .stream import WebTransportReceiveStream, WebTransportSendStream, WebTransportStream
 from .types import URL, Address, Headers
@@ -41,14 +41,13 @@ __all__: list[str] = [
     "SessionClosedError",
     "SessionError",
     "StreamError",
-    "StructuredDatagramTransport",
-    "StructuredStream",
     "TimeoutError",
     "URL",
     "WebTransportClient",
     "WebTransportError",
     "WebTransportReceiveStream",
     "WebTransportSendStream",
+    "WebTransportServer",
     "WebTransportSession",
     "WebTransportStream",
     "__version__",

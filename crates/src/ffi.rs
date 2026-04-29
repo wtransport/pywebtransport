@@ -9,6 +9,7 @@ mod constants;
 mod conversion;
 mod endpoint;
 mod error;
+mod tracing;
 mod types;
 mod waker;
 
@@ -18,6 +19,7 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     certificate::register(m)?;
     constants::register(m)?;
     endpoint::register(m)?;
+    tracing::register(m)?;
     waker::register(m)?;
 
     Ok(())

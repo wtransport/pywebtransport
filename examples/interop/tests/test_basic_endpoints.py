@@ -12,7 +12,6 @@ from dataclasses import asdict
 from typing import Any, AsyncGenerator, Callable, Coroutine, Final
 
 from pywebtransport import ClientConfig, WebTransportClient, WebTransportSession
-from pywebtransport.serializer import JSONSerializer
 from pywebtransport.server import ServerDiagnostics
 from pywebtransport.session import SessionDiagnostics
 from pywebtransport.types import EventType
@@ -41,12 +40,11 @@ class BasicEndpointsTest:
         """Initialize the test runner."""
         self._config = ClientConfig(verify_mode=ssl.CERT_NONE)
         self._results: list[tuple[str, bool, str]] = []
-        self._serializer = JSONSerializer()
 
     async def run(self) -> None:
         """Execute all defined compliance tests."""
         logger.info("Starting Basic Endpoints tests")
-        logger.info("Target: https://%s:%s", SERVER_HOST, SERVER_PORT)
+        logger.info("Target: https://%s:%d", SERVER_HOST, SERVER_PORT)
 
         tests: list[Callable[[], Coroutine[Any, Any, None]]] = [
             self.test_01_echo_endpoint,
@@ -104,7 +102,12 @@ class BasicEndpointsTest:
             stream = await session.create_bidirectional_stream()
             await stream.write(data=b"", end_stream=True)
             data = await stream.read_all()
-            diagnostics = self._serializer.deserialize(data=data, obj_type=ServerDiagnostics)
+
+            try:
+                diag_dict = json.loads(data.decode("utf-8"))
+                diagnostics = ServerDiagnostics(**diag_dict)
+            except Exception as e:
+                raise TestFailure(f"Failed to parse server diagnostics: {e}") from e
 
             if not isinstance(diagnostics, ServerDiagnostics):
                 raise TestFailure(f"Invalid type: {type(diagnostics)}")
@@ -119,7 +122,12 @@ class BasicEndpointsTest:
             stream = await session.create_bidirectional_stream()
             await stream.write(data=b"", end_stream=True)
             data = await stream.read_all()
-            stats = self._serializer.deserialize(data=data, obj_type=SessionDiagnostics)
+
+            try:
+                stats_dict = json.loads(data.decode("utf-8"))
+                stats = SessionDiagnostics(**stats_dict)
+            except Exception as e:
+                raise TestFailure(f"Failed to parse session diagnostics: {e}") from e
 
             if not isinstance(stats, SessionDiagnostics):
                 raise TestFailure(f"Invalid type: {type(stats)}")

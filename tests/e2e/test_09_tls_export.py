@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable
 from typing import Final
 
 from pywebtransport import ClientConfig, ConnectionError, SessionError, WebTransportClient
+from pywebtransport.utils import init_tracing
 
 SERVER_HOST: Final[str] = "127.0.0.1"
 SERVER_PORT: Final[int] = 4433
@@ -18,13 +19,14 @@ DEBUG_MODE: Final[bool] = "--debug" in sys.argv
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 if DEBUG_MODE:
     logging.getLogger().setLevel(logging.DEBUG)
+    init_tracing()
 
 logger = logging.getLogger(name="test_tls_export")
 
 
 async def test_e2e_symmetry() -> bool:
     """Test that client and server derive the exact same keying material."""
-    logger.info("--- Test 10A: E2E Symmetry ---")
+    logger.info("--- Test 09A: E2E Symmetry ---")
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
@@ -69,7 +71,7 @@ async def test_e2e_symmetry() -> bool:
 
 async def test_context_and_label_isolation() -> bool:
     """Test that different labels or contexts result in different keying material."""
-    logger.info("--- Test 10B: Context & Label Isolation ---")
+    logger.info("--- Test 09B: Context & Label Isolation ---")
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
@@ -108,7 +110,7 @@ async def test_context_and_label_isolation() -> bool:
 
 async def test_error_handling() -> bool:
     """Test error handling for invalid states during key derivation."""
-    logger.info("--- Test 10C: Error Handling & Boundaries ---")
+    logger.info("--- Test 09C: Error Handling & Boundaries ---")
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
@@ -132,7 +134,7 @@ async def test_error_handling() -> bool:
 
 async def main() -> int:
     """Run the main entry point for the TLS export test suite."""
-    logger.info("--- Starting Test 10: TLS Keying Material Export ---")
+    logger.info("--- Starting Test 09: TLS Keying Material Export ---")
 
     tests: list[tuple[str, Callable[[], Awaitable[bool]]]] = [
         ("E2E Symmetry", test_e2e_symmetry),
@@ -156,13 +158,13 @@ async def main() -> int:
 
     logger.info("")
     logger.info("=" * 60)
-    logger.info("Test 10 Results: %d/%d passed", passed, total)
+    logger.info("Test 09 Results: %d/%d passed", passed, total)
 
     if passed == total:
-        logger.info("TEST 10 PASSED: All TLS export tests successful!")
+        logger.info("TEST 09 PASSED: All TLS export tests successful!")
         return 0
     else:
-        logger.error("TEST 10 FAILED: Some TLS export tests failed!")
+        logger.error("TEST 09 FAILED: Some TLS export tests failed!")
         return 1
 
 

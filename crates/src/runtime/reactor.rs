@@ -8,26 +8,31 @@ use bytes::BytesMut;
 use quinn_proto::Transmit;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
-use tracing::{debug, error};
+use tracing::debug;
 
-use crate::common::constants;
-use crate::common::error::WebTransportError;
 use crate::runtime::channel::{RuntimeCommand, RuntimeCommandRx, RuntimeEvent, RuntimeEventTx};
 use crate::transport::endpoint::{TransportEndpoint, TransportEvent};
 
 // Callback type for cross-thread Python asyncio wake-ups.
 pub(crate) type WakerCallback = Arc<dyn Fn() + Send + Sync>;
 
+// Inbound UDP channel capacity between socket listeners and the reactor.
+const UDP_CHANNEL_CAPACITY: usize = 8192;
+// UDP slab allocation block capacity.
+const UDP_SLAB_CAPACITY: usize = 65536;
+// UDP slab remaining threshold before reallocation.
+const UDP_SLAB_THRESHOLD: usize = 2048;
+
 // Core event loop engine managing asynchronous I/O and multiplexing.
 pub(crate) struct Reactor {
-    sockets: Vec<Arc<UdpSocket>>,
-    endpoint: TransportEndpoint,
     command_rx: RuntimeCommandRx,
     datagram_rx: mpsc::Receiver<(BytesMut, SocketAddr, Option<SocketAddr>)>,
+    endpoint: TransportEndpoint,
     event_tx: RuntimeEventTx,
-    waker: WakerCallback,
-    start_instant: Instant,
     events_emitted: bool,
+    sockets: Vec<Arc<UdpSocket>>,
+    start_instant: Instant,
+    waker: WakerCallback,
 }
 
 impl Reactor {
@@ -38,30 +43,8 @@ impl Reactor {
         event_tx: RuntimeEventTx,
         sockets: Vec<UdpSocket>,
         waker: WakerCallback,
-    ) -> Result<Self, WebTransportError> {
-        let capacity = usize::try_from(constants::RUNTIME_UDP_CHANNEL_CAPACITY).map_err(|e| {
-            WebTransportError::Unknown(
-                Some(constants::ERR_LIB_INTERNAL_ERROR),
-                format!("RUNTIME_UDP_CHANNEL_CAPACITY exceeds system pointer size: {e}"),
-            )
-        })?;
-
-        let slab_capacity = usize::try_from(constants::RUNTIME_UDP_SLAB_CAPACITY).map_err(|e| {
-            WebTransportError::Unknown(
-                Some(constants::ERR_LIB_INTERNAL_ERROR),
-                format!("RUNTIME_UDP_SLAB_CAPACITY exceeds system pointer size: {e}"),
-            )
-        })?;
-
-        let slab_threshold =
-            usize::try_from(constants::RUNTIME_UDP_SLAB_THRESHOLD).map_err(|e| {
-                WebTransportError::Unknown(
-                    Some(constants::ERR_LIB_INTERNAL_ERROR),
-                    format!("RUNTIME_UDP_SLAB_THRESHOLD exceeds system pointer size: {e}"),
-                )
-            })?;
-
-        let (datagram_tx, datagram_rx) = mpsc::channel(capacity);
+    ) -> Self {
+        let (datagram_tx, datagram_rx) = mpsc::channel(UDP_CHANNEL_CAPACITY);
         let mut arc_sockets = Vec::new();
 
         for socket in sockets {
@@ -72,11 +55,11 @@ impl Reactor {
             let sock_clone = Arc::clone(&socket);
 
             tokio::spawn(async move {
-                let mut buf = BytesMut::with_capacity(slab_capacity);
+                let mut buf = BytesMut::with_capacity(UDP_SLAB_CAPACITY);
 
                 loop {
-                    if buf.capacity() < slab_threshold {
-                        buf.reserve(slab_capacity);
+                    if buf.capacity() < UDP_SLAB_THRESHOLD {
+                        buf.reserve(UDP_SLAB_CAPACITY);
                     }
 
                     if let Ok((len, remote_addr)) = sock_clone.recv_buf_from(&mut buf).await {
@@ -91,16 +74,16 @@ impl Reactor {
             });
         }
 
-        Ok(Self {
-            sockets: arc_sockets,
-            endpoint,
+        Self {
             command_rx,
             datagram_rx,
+            endpoint,
             event_tx,
-            waker,
-            start_instant: Instant::now(),
             events_emitted: false,
-        })
+            sockets: arc_sockets,
+            start_instant: Instant::now(),
+            waker,
+        }
     }
 
     // Starts the continuous non-blocking event loop.
@@ -126,7 +109,7 @@ impl Reactor {
                 datagram_opt = self.datagram_rx.recv() => {
                     let Some((data, remote, local)) = datagram_opt else { break; };
 
-                    self.handle_datagram(data, remote, local).await;
+                    self.handle_datagram(remote, local, data).await;
                 }
                 () = sleep_fut => {
                     self.handle_timeout();
@@ -160,9 +143,12 @@ impl Reactor {
         match command {
             RuntimeCommand::CreateConnection {
                 request_id,
-                remote,
+                remote_address,
                 server_name,
-            } => match self.endpoint.connect(remote, &server_name, now_instant) {
+            } => match self
+                .endpoint
+                .connect(remote_address, &server_name, now_instant)
+            {
                 Ok((handle, remote_address)) => {
                     if self
                         .event_tx
@@ -175,9 +161,7 @@ impl Reactor {
                     {
                         self.events_emitted = true;
                     } else {
-                        error!(
-                            "IPC event queue overflow: Event dropped due to lagging Python consumer."
-                        );
+                        debug!("rt_event send failed");
                     }
                 }
                 Err(e) => {
@@ -186,15 +170,13 @@ impl Reactor {
                         .push(RuntimeEvent::CommandFailed {
                             request_id,
                             error_code: None,
-                            reason: e.to_string(),
+                            reason: e.to_string().into(),
                         })
                         .is_ok()
                     {
                         self.events_emitted = true;
                     } else {
-                        error!(
-                            "IPC event queue overflow: Event dropped due to lagging Python consumer."
-                        );
+                        debug!("rt_event send failed");
                     }
                 }
             },
@@ -217,15 +199,15 @@ impl Reactor {
     // Processes an inbound UDP datagram payload.
     async fn handle_datagram(
         &mut self,
-        data: BytesMut,
         remote: SocketAddr,
         local: Option<SocketAddr>,
+        data: BytesMut,
     ) {
         let (now, now_instant) = self.now_context();
 
         let transport_event = self
             .endpoint
-            .handle_datagram(data, remote, local, now, now_instant);
+            .handle_datagram(remote, local, data, now, now_instant);
 
         self.process_transport_event(transport_event).await;
     }
@@ -234,7 +216,7 @@ impl Reactor {
     fn handle_timeout(&mut self) {
         let (now, now_instant) = self.now_context();
 
-        let results = self.endpoint.handle_timeout(now_instant, now);
+        let results = self.endpoint.handle_timeout(now, now_instant);
 
         for (handle, effects) in results {
             if !effects.is_empty() {
@@ -245,9 +227,7 @@ impl Reactor {
                 {
                     self.events_emitted = true;
                 } else {
-                    error!(
-                        "IPC event queue overflow: Event dropped due to lagging Python consumer."
-                    );
+                    debug!("rt_event send failed");
                 }
             }
         }
@@ -256,7 +236,7 @@ impl Reactor {
     // Emits the final shutdown acknowledgment to Python.
     fn notify_shutdown(&self) {
         if self.event_tx.push(RuntimeEvent::ReactorShutDown).is_err() {
-            error!("IPC event queue overflow: Event dropped due to lagging Python consumer.");
+            debug!("rt_event send failed");
         }
 
         (self.waker)();
@@ -282,9 +262,7 @@ impl Reactor {
                     {
                         self.events_emitted = true;
                     } else {
-                        error!(
-                            "IPC event queue overflow: Event dropped due to lagging Python consumer."
-                        );
+                        debug!("rt_event send failed");
                     }
                 }
             }
@@ -304,9 +282,7 @@ impl Reactor {
                 {
                     self.events_emitted = true;
                 } else {
-                    error!(
-                        "IPC event queue overflow: Event dropped due to lagging Python consumer."
-                    );
+                    debug!("rt_event send failed");
                 }
             }
             TransportEvent::Consumed => {}
@@ -333,7 +309,7 @@ impl Reactor {
             if let Some(socket) = target_socket
                 && let Err(e) = socket.send_to(data, addr).await
             {
-                debug!("UDP transmission to {} failed: {}", addr, e);
+                debug!("udp_datagram send failed err={e:?}");
             }
         }
     }

@@ -3,21 +3,37 @@
 use std::collections::VecDeque;
 
 use bytes::{Bytes, BytesMut};
-use tracing::{debug, error, warn};
+use tracing::debug;
 
 use crate::common::constants::{
     ERR_H3_INTERNAL_ERROR, ERR_LIB_CONNECTION_STATE_ERROR, ERR_LIB_INTERNAL_ERROR,
-    ERR_LIB_STREAM_STATE_ERROR, H3_STREAM_TYPE_CONTROL, H3_STREAM_TYPE_QPACK_DECODER,
-    H3_STREAM_TYPE_QPACK_ENCODER, UPGRADE_TOKEN_WEBTRANSPORT,
+    H3_STREAM_TYPE_CONTROL, H3_STREAM_TYPE_QPACK_DECODER, H3_STREAM_TYPE_QPACK_ENCODER,
+    WT_UPGRADE_TOKEN,
 };
 use crate::common::error::WebTransportError;
-use crate::common::types::{
-    ConnectionId, ConnectionState, ErrorCode, ErrorSource, EventType, Headers, StreamId,
-};
-use crate::protocol::connection::Connection;
+use crate::common::types::{ConnectionHandle, ErrorCode, ErrorSource, Headers, StreamId};
+use crate::protocol::connection::{Connection, ConnectionParams};
 use crate::protocol::events::{Effect, ProtocolEvent};
-use crate::protocol::h3::H3;
+use crate::protocol::h3::{H3, H3Params};
 use crate::protocol::utils::{merge_headers, write_varint};
+
+// Engine initialization constraints and thresholds.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct EngineParams {
+    pub(crate) early_event_ttl: f64,
+    pub(crate) flow_control_window: u64,
+    pub(crate) flow_control_window_auto_scale_enabled: bool,
+    pub(crate) initial_max_data: u64,
+    pub(crate) initial_max_streams_bidi: u64,
+    pub(crate) initial_max_streams_uni: u64,
+    pub(crate) max_capsule_size: u64,
+    pub(crate) max_field_section_size: u64,
+    pub(crate) max_session_pending_events: u64,
+    pub(crate) max_sessions: u64,
+    pub(crate) max_stream_read_buffer_size: u64,
+    pub(crate) max_stream_write_buffer_size: u64,
+    pub(crate) max_total_pending_events: u64,
+}
 
 // Orchestrates the unified protocol state machine.
 pub(crate) struct WebTransportEngine {
@@ -28,50 +44,39 @@ pub(crate) struct WebTransportEngine {
 
 impl WebTransportEngine {
     // Engine initialization with comprehensive configuration.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "Complex internal state initialization."
-    )]
     pub(crate) fn new(
-        connection_id: ConnectionId,
+        handle: ConnectionHandle,
         is_client: bool,
-        max_datagram_size: u64,
-        flow_control_window_size: u64,
-        max_sessions: u64,
-        initial_max_data: u64,
-        initial_max_streams_bidi: u64,
-        initial_max_streams_uni: u64,
-        stream_read_buffer_size: u64,
-        stream_write_buffer_size: u64,
-        flow_control_window_auto_scale: bool,
-        max_capsule_size: u64,
-        max_pending_events_per_session: u64,
-        max_total_pending_events: u64,
-        early_event_ttl: f64,
+        params: EngineParams,
     ) -> Result<Self, WebTransportError> {
         let connection = Connection::new(
-            connection_id,
+            handle,
             is_client,
-            max_datagram_size,
-            flow_control_window_size,
-            max_sessions,
-            initial_max_data,
-            initial_max_streams_bidi,
-            initial_max_streams_uni,
-            stream_read_buffer_size,
-            stream_write_buffer_size,
-            flow_control_window_auto_scale,
-            max_pending_events_per_session,
-            max_total_pending_events,
-            early_event_ttl,
+            ConnectionParams {
+                early_event_ttl: params.early_event_ttl,
+                flow_control_window: params.flow_control_window,
+                flow_control_window_auto_scale_enabled: params
+                    .flow_control_window_auto_scale_enabled,
+                initial_max_data: params.initial_max_data,
+                initial_max_streams_bidi: params.initial_max_streams_bidi,
+                initial_max_streams_uni: params.initial_max_streams_uni,
+                max_session_pending_events: params.max_session_pending_events,
+                max_sessions: params.max_sessions,
+                max_stream_read_buffer_size: params.max_stream_read_buffer_size,
+                max_stream_write_buffer_size: params.max_stream_write_buffer_size,
+                max_total_pending_events: params.max_total_pending_events,
+            },
         );
 
         let h3 = H3::new(
             is_client,
-            initial_max_data,
-            initial_max_streams_bidi,
-            initial_max_streams_uni,
-            max_capsule_size,
+            H3Params {
+                initial_max_data: params.initial_max_data,
+                initial_max_streams_bidi: params.initial_max_streams_bidi,
+                initial_max_streams_uni: params.initial_max_streams_uni,
+                max_capsule_size: params.max_capsule_size,
+                max_field_section_size: params.max_field_section_size,
+            },
         )?;
 
         Ok(Self {
@@ -82,8 +87,8 @@ impl WebTransportEngine {
     }
 
     // H3 stream state cleanup.
-    pub(crate) fn cleanup_stream(&mut self, stream_id: StreamId) {
-        self.h3.cleanup_stream(stream_id);
+    pub(crate) fn cleanup_stream(&mut self, stream_id: StreamId) -> Vec<Effect> {
+        self.h3.cleanup_stream(stream_id)
     }
 
     // Capsule encoding to H3 DATA frame.
@@ -93,12 +98,19 @@ impl WebTransportEngine {
         capsule_data: Bytes,
         end_stream: bool,
     ) -> Result<Vec<Effect>, WebTransportError> {
-        let data = H3::encode_capsule(stream_id, capsule_type, capsule_data)?;
-        Ok(vec![Effect::SendQuicData {
-            stream_id,
-            data,
-            end_stream,
-        }])
+        let chunks = H3::encode_capsule(stream_id, capsule_type, capsule_data)?;
+        let mut effects = Vec::with_capacity(chunks.len());
+        let last_idx = chunks.len().saturating_sub(1);
+
+        for (i, chunk) in chunks.into_iter().enumerate() {
+            effects.push(Effect::SendQuicData {
+                stream_id,
+                data: chunk,
+                end_stream: if i == last_idx { end_stream } else { false },
+            });
+        }
+
+        Ok(effects)
     }
 
     // Datagram encoding to H3 frame.
@@ -121,16 +133,22 @@ impl WebTransportEngine {
     // GOAWAY frame encoding.
     pub(crate) fn encode_goaway(&mut self) -> Vec<Effect> {
         if let Some(control_id) = self.h3.local_control_stream_id() {
-            if let Ok(data) = H3::encode_goaway(0) {
-                return vec![Effect::SendQuicData {
-                    stream_id: control_id,
-                    data,
-                    end_stream: false,
-                }];
+            match H3::encode_goaway(0) {
+                Ok(data) => {
+                    vec![Effect::SendQuicData {
+                        stream_id: control_id,
+                        data,
+                        end_stream: false,
+                    }]
+                }
+                Err(e) => {
+                    debug!("h3_goaway encode failed stream_id={control_id} err={e:?}");
+                    Vec::new()
+                }
             }
-            error!("Failed to encode GOAWAY frame");
+        } else {
+            Vec::new()
         }
-        Vec::new()
     }
 
     // Headers encoding to H3 HEADERS frame.
@@ -161,7 +179,7 @@ impl WebTransportEngine {
             (Bytes::from_static(b":path"), Bytes::from(path)),
             (
                 Bytes::from_static(b":protocol"),
-                Bytes::from_static(UPGRADE_TOKEN_WEBTRANSPORT),
+                Bytes::from_static(WT_UPGRADE_TOKEN),
             ),
         ];
         let final_headers = merge_headers(&initial_headers, headers);
@@ -190,6 +208,45 @@ impl WebTransportEngine {
             let mut re_queue_pending_actions = false;
 
             match current_event {
+                ProtocolEvent::H3CapsuleReceived {
+                    stream_id,
+                    capsule_type,
+                    capsule_data,
+                } => {
+                    new_effects.extend(self.connection.recv_capsule(
+                        stream_id,
+                        capsule_type,
+                        &capsule_data,
+                        now,
+                    ));
+                }
+                ProtocolEvent::H3ConnectStreamClosed { stream_id } => {
+                    new_effects.extend(self.connection.recv_connect_close(stream_id, now));
+                }
+                ProtocolEvent::H3DatagramReceived { stream_id, data } => {
+                    new_effects.extend(self.connection.recv_datagram(stream_id, data, now));
+                }
+                ProtocolEvent::H3GoawayReceived => {
+                    new_effects.extend(self.connection.recv_goaway());
+                }
+                ProtocolEvent::H3HeadersReceived {
+                    stream_id,
+                    headers,
+                    stream_ended,
+                } => {
+                    new_effects.extend(self.connection.recv_headers(
+                        stream_id,
+                        headers,
+                        stream_ended,
+                        now,
+                    ));
+                }
+                ProtocolEvent::H3SettingsReceived { settings } => {
+                    new_effects.extend(self.connection.recv_settings(&settings, now));
+                    if self.connection.is_client() && self.connection.is_connected() {
+                        re_queue_pending_actions = true;
+                    }
+                }
                 ProtocolEvent::InternalBindH3Session {
                     request_id,
                     stream_id,
@@ -241,18 +298,13 @@ impl WebTransportEngine {
                 }
                 ProtocolEvent::TransportConnectionTerminated { error_code, reason } => {
                     new_effects.extend(self.connection.terminated(error_code, reason.clone(), now));
-                    let reason = format!("Connection terminated before ready: {reason}");
-                    new_effects.extend(
-                        self.fail_pending_user_actions(
-                            Some(ERR_LIB_CONNECTION_STATE_ERROR),
-                            &reason,
-                        ),
-                    );
+                    new_effects.extend(self.fail_pending_user_actions(
+                        Some(ERR_LIB_CONNECTION_STATE_ERROR),
+                        "wt_connection abort",
+                    ));
                 }
                 ProtocolEvent::TransportDatagramFrameReceived { .. }
                 | ProtocolEvent::TransportStreamDataReceived { .. } => {
-                    let was_settings_received = self.h3.is_settings_received();
-
                     let (h3_events, h3_effects) = self
                         .h3
                         .handle_transport_event(&current_event, &self.connection);
@@ -261,52 +313,21 @@ impl WebTransportEngine {
                     for evt in h3_events.into_iter().rev() {
                         events_to_process.push_front(evt);
                     }
-
-                    if self.connection.is_client
-                        && !was_settings_received
-                        && self.h3.is_settings_received()
-                    {
-                        debug!("Client received peer H3 SETTINGS.");
-                    }
                 }
                 ProtocolEvent::TransportHandshakeCompleted => {
-                    if self.connection.state == ConnectionState::Idle {
-                        debug!("State transition: IDLE -> CONNECTING");
-                        self.connection.state = ConnectionState::Connecting;
-                    }
+                    let fx = self.connection.handshake_completed(now);
+                    new_effects.extend(fx);
 
-                    if self.connection.state == ConnectionState::Connecting {
-                        debug!("TransportHandshakeCompleted received.");
-                        let fx = self.connection.handshake_completed(now);
-                        new_effects.extend(fx);
-
-                        if self.connection.is_client {
-                            if self.connection.state == ConnectionState::Connected {
-                                re_queue_pending_actions = true;
-                            }
-                        } else if !self.connection.is_client {
-                            self.connection.state = ConnectionState::Connected;
-                            self.connection.connected_at = Some(now);
-                            new_effects.push(Effect::EmitConnectionEvent {
-                                connection_id: self.connection.id.clone(),
-                                event_type: EventType::ConnectionEstablished,
-                                error_code: None,
-                                reason: None,
-                            });
-                        }
-                    } else {
-                        warn!(
-                            "Received TransportHandshakeCompleted in unexpected state: {:?}",
-                            self.connection.state
-                        );
+                    if self.connection.is_client() && self.connection.is_connected() {
+                        re_queue_pending_actions = true;
                     }
                 }
                 ProtocolEvent::TransportQuicParametersReceived {
-                    remote_max_datagram_frame_size,
+                    peer_max_datagram_frame_size,
                 } => {
                     new_effects.extend(
                         self.connection
-                            .recv_transport_parameters(remote_max_datagram_frame_size),
+                            .recv_transport_parameters(peer_max_datagram_frame_size),
                     );
                 }
                 ProtocolEvent::TransportStopSendingReceived {
@@ -324,73 +345,31 @@ impl WebTransportEngine {
                             .recv_stream_reset(stream_id, error_code, now),
                     );
                 }
-                ProtocolEvent::CapsuleReceived {
-                    stream_id,
-                    capsule_type,
-                    capsule_data,
-                } => {
-                    new_effects.extend(self.connection.recv_capsule(
-                        stream_id,
-                        capsule_type,
-                        &capsule_data,
-                        now,
-                    ));
-                }
-                ProtocolEvent::ConnectStreamClosed { stream_id } => {
-                    new_effects.extend(self.connection.recv_connect_close(stream_id, now));
-                }
-                ProtocolEvent::DatagramReceived { stream_id, data } => {
-                    new_effects.extend(self.connection.recv_datagram(stream_id, data, now));
-                }
-                ProtocolEvent::GoawayReceived => {
-                    new_effects.extend(self.connection.recv_goaway(now));
-                }
-                ProtocolEvent::HeadersReceived {
-                    stream_id,
-                    headers,
-                    stream_ended,
-                } => {
-                    new_effects.extend(self.connection.recv_headers(
-                        stream_id,
-                        headers,
-                        stream_ended,
-                        now,
-                    ));
-                }
-                ProtocolEvent::SettingsReceived { settings } => {
-                    debug!("Processing H3 SETTINGS frame.");
-                    new_effects.extend(self.connection.recv_settings(&settings, now));
-                    if self.connection.is_client
-                        && self.connection.state == ConnectionState::Connected
-                    {
-                        re_queue_pending_actions = true;
-                    }
-                }
-                ProtocolEvent::WebTransportStreamDataReceived {
-                    session_id,
-                    stream_id,
-                    data,
-                    stream_ended,
-                } => {
-                    new_effects.extend(self.connection.recv_stream_data(
-                        session_id,
-                        stream_id,
-                        data,
-                        stream_ended,
-                        now,
-                    ));
-                }
                 ProtocolEvent::UserAcceptSession {
                     request_id,
                     session_id,
-                    subprotocol,
+                    wt_protocol,
                 } => {
                     new_effects.extend(self.connection.accept_session(
                         session_id,
                         request_id,
-                        subprotocol,
+                        wt_protocol,
                         now,
                     ));
+                }
+                ProtocolEvent::UserCloseConnection {
+                    request_id,
+                    error_code,
+                    reason,
+                } => {
+                    new_effects.extend(self.connection.close(request_id, error_code, reason, now));
+                    new_effects.extend(self.fail_pending_user_actions(
+                        Some(ERR_LIB_CONNECTION_STATE_ERROR),
+                        "wt_connection close",
+                    ));
+                }
+                ProtocolEvent::UserCloseConnectionGracefully { request_id } => {
+                    new_effects.extend(self.connection.graceful_close(request_id));
                 }
                 ProtocolEvent::UserCloseSession {
                     request_id,
@@ -403,33 +382,26 @@ impl WebTransportEngine {
                             .close_session(session_id, request_id, error_code, reason, now),
                     );
                 }
-                ProtocolEvent::UserConnectionGracefulClose { request_id } => {
-                    new_effects.extend(self.connection.graceful_close(request_id, now));
-                }
                 ProtocolEvent::UserCreateSession {
                     request_id,
                     path,
                     headers,
-                    subprotocols,
+                    wt_available_protocols,
                 } => {
-                    if self.connection.is_client
-                        && (self.connection.state == ConnectionState::Idle
-                            || self.connection.state == ConnectionState::Connecting)
-                    {
-                        debug!("Client not fully connected, buffering UserCreateSession.");
+                    if self.connection.is_client() && self.connection.is_pre_connected() {
                         self.pending_user_actions
                             .push_back(ProtocolEvent::UserCreateSession {
                                 request_id,
                                 path,
                                 headers,
-                                subprotocols,
+                                wt_available_protocols,
                             });
                     } else {
                         new_effects.extend(self.connection.create_session(
                             request_id,
                             path,
                             headers,
-                            subprotocols,
+                            wt_available_protocols,
                             now,
                         ));
                     }
@@ -439,11 +411,7 @@ impl WebTransportEngine {
                     session_id,
                     is_unidirectional,
                 } => {
-                    if self.connection.is_client
-                        && (self.connection.state == ConnectionState::Idle
-                            || self.connection.state == ConnectionState::Connecting)
-                    {
-                        debug!("Client not fully connected, buffering UserCreateStream.");
+                    if self.connection.is_client() && self.connection.is_pre_connected() {
                         self.pending_user_actions
                             .push_back(ProtocolEvent::UserCreateStream {
                                 request_id,
@@ -484,20 +452,7 @@ impl WebTransportEngine {
                     request_id,
                     stream_id,
                 } => {
-                    if let Some(session_id) = self.connection.stream_map.get(&stream_id) {
-                        new_effects.extend(self.connection.stream_diagnostics(
-                            *session_id,
-                            stream_id,
-                            request_id,
-                        ));
-                    } else {
-                        new_effects.push(Effect::NotifyRequestFailed {
-                            request_id,
-                            source: ErrorSource::Stream,
-                            error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
-                            reason: "Stream not associated with any session".to_owned(),
-                        });
-                    }
+                    new_effects.extend(self.connection.stream_diagnostics(stream_id, request_id));
                 }
                 ProtocolEvent::UserGrantDataCredit {
                     request_id,
@@ -522,6 +477,16 @@ impl WebTransportEngine {
                         max_streams,
                     ));
                 }
+                ProtocolEvent::UserReadStream {
+                    request_id,
+                    stream_id,
+                    max_bytes,
+                } => {
+                    new_effects.extend(
+                        self.connection
+                            .stream_read(stream_id, request_id, max_bytes),
+                    );
+                }
                 ProtocolEvent::UserRejectSession {
                     request_id,
                     session_id,
@@ -539,21 +504,10 @@ impl WebTransportEngine {
                     stream_id,
                     error_code,
                 } => {
-                    if let Some(session_id) = self.connection.stream_map.get(&stream_id) {
-                        new_effects.extend(self.connection.reset_stream(
-                            *session_id,
-                            stream_id,
-                            request_id,
-                            error_code,
-                        ));
-                    } else {
-                        new_effects.push(Effect::NotifyRequestFailed {
-                            request_id,
-                            source: ErrorSource::Stream,
-                            error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
-                            reason: "Stream not found".to_owned(),
-                        });
-                    }
+                    new_effects.extend(
+                        self.connection
+                            .reset_stream(stream_id, request_id, error_code, now),
+                    );
                 }
                 ProtocolEvent::UserSendDatagram {
                     request_id,
@@ -568,75 +522,33 @@ impl WebTransportEngine {
                     data,
                     end_stream,
                 } => {
-                    if let Some(session_id) = self.connection.stream_map.get(&stream_id) {
-                        new_effects.extend(self.connection.send_stream_data(
-                            *session_id,
-                            stream_id,
-                            request_id,
-                            data,
-                            end_stream,
-                        ));
-                    } else {
-                        new_effects.push(Effect::NotifyRequestFailed {
-                            request_id,
-                            source: ErrorSource::Stream,
-                            error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
-                            reason: "Stream not found".to_owned(),
-                        });
-                    }
+                    new_effects.extend(
+                        self.connection
+                            .send_stream_data(stream_id, request_id, data, end_stream),
+                    );
                 }
                 ProtocolEvent::UserStopSending {
                     request_id,
                     stream_id,
                     error_code,
                 } => {
-                    if let Some(session_id) = self.connection.stream_map.get(&stream_id) {
-                        new_effects.extend(self.connection.stop_stream(
-                            *session_id,
-                            stream_id,
-                            request_id,
-                            error_code,
-                        ));
-                    } else {
-                        new_effects.push(Effect::NotifyRequestFailed {
-                            request_id,
-                            source: ErrorSource::Stream,
-                            error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
-                            reason: "Stream not found".to_owned(),
-                        });
-                    }
+                    new_effects.extend(
+                        self.connection
+                            .stop_stream(stream_id, request_id, error_code, now),
+                    );
                 }
-                ProtocolEvent::UserStreamRead {
-                    request_id,
+                ProtocolEvent::WebTransportStreamDataReceived {
+                    session_id,
                     stream_id,
-                    max_bytes,
+                    data,
+                    stream_ended,
                 } => {
-                    if let Some(session_id) = self.connection.stream_map.get(&stream_id) {
-                        new_effects.extend(self.connection.stream_read(
-                            *session_id,
-                            stream_id,
-                            request_id,
-                            max_bytes,
-                        ));
-                    } else {
-                        new_effects.push(Effect::NotifyRequestFailed {
-                            request_id,
-                            source: ErrorSource::Stream,
-                            error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
-                            reason: "Stream not found".to_owned(),
-                        });
-                    }
-                }
-                ProtocolEvent::ConnectionClose {
-                    request_id,
-                    error_code,
-                    reason,
-                } => {
-                    new_effects.extend(self.connection.close(request_id, error_code, reason, now));
-                    let fail_reason = "Connection closed by application".to_owned();
-                    new_effects.extend(self.fail_pending_user_actions(
-                        Some(ERR_LIB_CONNECTION_STATE_ERROR),
-                        &fail_reason,
+                    new_effects.extend(self.connection.recv_stream_data(
+                        session_id,
+                        stream_id,
+                        data,
+                        stream_ended,
+                        now,
                     ));
                 }
             }
@@ -644,10 +556,6 @@ impl WebTransportEngine {
             all_effects.extend(new_effects);
 
             if re_queue_pending_actions && !self.pending_user_actions.is_empty() {
-                debug!(
-                    "Connection is ready, re-queueing {} pending user actions.",
-                    self.pending_user_actions.len()
-                );
                 while let Some(pending_event) = self.pending_user_actions.pop_back() {
                     events_to_process.push_front(pending_event);
                 }
@@ -670,42 +578,32 @@ impl WebTransportEngine {
         let settings_bytes = match self.h3.initialize_settings() {
             Ok(bytes) => bytes,
             Err(e) => {
-                error!("Failed to encode SETTINGS frame: {e:?}");
+                debug!("h3_settings encode failed err={e:?}");
                 return Ok(vec![Effect::CloseQuicConnection {
                     error_code: ERR_H3_INTERNAL_ERROR,
-                    reason: Some("Failed to encode settings".to_owned()),
+                    reason: Some("h3_settings encode failed".into()),
                 }]);
             }
         };
 
         let mut control_data = BytesMut::new();
-        write_varint(&mut control_data, H3_STREAM_TYPE_CONTROL).map_err(|_e| {
-            WebTransportError::Protocol(
-                Some(ERR_LIB_INTERNAL_ERROR),
-                "Failed to encode control stream type".to_owned(),
-            )
+        write_varint(&mut control_data, H3_STREAM_TYPE_CONTROL).map_err(|e| {
+            debug!("varint encode failed err={e:?}");
+            WebTransportError::Protocol(Some(ERR_LIB_INTERNAL_ERROR), "varint encode failed".into())
         })?;
         control_data.extend_from_slice(&settings_bytes);
 
         let mut encoder_data = BytesMut::new();
-        write_varint(&mut encoder_data, H3_STREAM_TYPE_QPACK_ENCODER).map_err(|_e| {
-            WebTransportError::Protocol(
-                Some(ERR_LIB_INTERNAL_ERROR),
-                "Failed to encode encoder stream type".to_owned(),
-            )
+        write_varint(&mut encoder_data, H3_STREAM_TYPE_QPACK_ENCODER).map_err(|e| {
+            debug!("varint encode failed err={e:?}");
+            WebTransportError::Protocol(Some(ERR_LIB_INTERNAL_ERROR), "varint encode failed".into())
         })?;
 
         let mut decoder_data = BytesMut::new();
-        write_varint(&mut decoder_data, H3_STREAM_TYPE_QPACK_DECODER).map_err(|_e| {
-            WebTransportError::Protocol(
-                Some(ERR_LIB_INTERNAL_ERROR),
-                "Failed to encode decoder stream type".to_owned(),
-            )
+        write_varint(&mut decoder_data, H3_STREAM_TYPE_QPACK_DECODER).map_err(|e| {
+            debug!("varint encode failed err={e:?}");
+            WebTransportError::Protocol(Some(ERR_LIB_INTERNAL_ERROR), "varint encode failed".into())
         })?;
-
-        debug!("Set infrastructure stream type Control for stream_id={control_id}");
-        debug!("Set infrastructure stream type QPACK Encoder for stream_id={encoder_id}");
-        debug!("Set infrastructure stream type QPACK Decoder for stream_id={decoder_id}");
 
         let effects = vec![
             Effect::SendQuicData {
@@ -732,7 +630,7 @@ impl WebTransportEngine {
     fn fail_pending_user_actions(
         &mut self,
         error_code: Option<ErrorCode>,
-        reason: &str,
+        reason: &'static str,
     ) -> Vec<Effect> {
         let mut effects = Vec::new();
         while let Some(action) = self.pending_user_actions.pop_front() {
@@ -747,10 +645,11 @@ impl WebTransportEngine {
                     request_id: id,
                     source: ErrorSource::Connection,
                     error_code,
-                    reason: reason.to_owned(),
+                    reason: reason.into(),
                 });
             }
         }
+
         effects
     }
 }

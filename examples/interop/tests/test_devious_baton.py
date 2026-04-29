@@ -16,6 +16,7 @@ from pywebtransport import (
     ClientError,
     ConnectionError,
     SessionClosedError,
+    SessionError,
     StreamError,
     WebTransportClient,
     WebTransportSession,
@@ -100,7 +101,7 @@ class DeviousBatonTest:
     async def run(self) -> None:
         """Execute all defined compliance tests."""
         logger.info("Starting Devious Baton protocol tests")
-        logger.info("Target: https://%s:%s%s", SERVER_HOST, SERVER_PORT, BASE_PATH)
+        logger.info("Target: https://%s:%d%s", SERVER_HOST, SERVER_PORT, BASE_PATH)
 
         tests: list[Callable[[], Coroutine[Any, Any, None]]] = [
             self.test_01_invalid_version,
@@ -129,9 +130,8 @@ class DeviousBatonTest:
         try:
             async with self._connect(url=url):
                 pass
-        except (ConnectionError, ClientError) as e:
-            err_str = str(e)
-            if "400" in err_str or "status" in err_str:
+        except (ConnectionError, ClientError, SessionError) as e:
+            if "0x10b" in str(e).lower() or "400" in str(e):
                 return
         raise TestFailure("Server accepted invalid version 99")
 
@@ -141,9 +141,8 @@ class DeviousBatonTest:
         try:
             async with self._connect(url=url):
                 pass
-        except (ConnectionError, ClientError) as e:
-            err_str = str(e)
-            if "400" in err_str or "status" in err_str:
+        except (ConnectionError, ClientError, SessionError) as e:
+            if "0x10b" in str(e).lower() or "400" in str(e):
                 return
         raise TestFailure("Server accepted invalid count 999999")
 
@@ -153,9 +152,8 @@ class DeviousBatonTest:
         try:
             async with self._connect(url=url):
                 pass
-        except (ConnectionError, ClientError) as e:
-            err_str = str(e)
-            if "400" in err_str or "status" in err_str:
+        except (ConnectionError, ClientError, SessionError) as e:
+            if "0x10b" in str(e).lower() or "400" in str(e):
                 return
         raise TestFailure("Server accepted invalid baton value 0")
 

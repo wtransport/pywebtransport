@@ -29,8 +29,8 @@ def client_config() -> ClientConfig:
         initial_max_data=1024 * 1024 * 1024,
         initial_max_streams_bidi=2000,
         initial_max_streams_uni=2000,
-        flow_control_window_size=1024 * 1024 * 1024,
-        max_event_queue_size=20000,
+        flow_control_window=1024 * 1024 * 1024,
+        event_queue_capacity=20000,
     )
 
 

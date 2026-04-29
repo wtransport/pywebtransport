@@ -1,3 +1,3 @@
 //! TLS infrastructure subsystem.
 
-pub mod certificate;
+pub(crate) mod certificate;

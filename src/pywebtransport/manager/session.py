@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from typing import Any, ClassVar
 
@@ -9,11 +10,10 @@ from pywebtransport.constants import ErrorCodes
 from pywebtransport.manager._base import BaseResourceManager
 from pywebtransport.session import WebTransportSession
 from pywebtransport.types import EventType, SessionId, SessionState
-from pywebtransport.utils import get_logger
 
 __all__: list[str] = ["SessionManager"]
 
-_logger = get_logger(name=__name__)
+_logger = logging.getLogger(name=__name__)
 
 
 class SessionManager(BaseResourceManager[SessionId, WebTransportSession]):
@@ -69,14 +69,18 @@ class SessionManager(BaseResourceManager[SessionId, WebTransportSession]):
             if removed_session is not None:
                 self._stats["total_closed"] += 1
                 self._update_stats_unsafe()
-                self._log.debug("Manually removed session %s (total: %d)", session_id, self._stats["current_count"])
+                self._log.debug(
+                    "app_manager evict component=session count=%d session_id=%d",
+                    self._stats["current_count"],
+                    session_id,
+                )
 
         return removed_session
 
     async def _close_resource(self, *, resource: WebTransportSession) -> None:
         """Close a single session resource."""
         if not resource.is_closed:
-            await resource.close(error_code=ErrorCodes.NO_ERROR, reason="Session manager shutdown")
+            await resource.close(error_code=ErrorCodes.APP_NO_ERROR, reason="wt_session close")
 
     def _get_resource_id(self, *, resource: WebTransportSession) -> SessionId:
         """Get the unique ID from a session object."""

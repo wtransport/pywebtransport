@@ -14,7 +14,7 @@ __all__: list[str] = []
 class PendingRequestManager:
     """Manage the lifecycle of pending asynchronous requests."""
 
-    __slots__ = ("_requests", "_counter")
+    __slots__ = ("_counter", "_requests")
 
     def __init__(self) -> None:
         """Initialize the instance."""

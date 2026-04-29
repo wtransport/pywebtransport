@@ -1,7 +1,5 @@
 //! Unit tests for the `crate::protocol::h3` module.
 
-use std::collections::HashMap;
-
 use bytes::{BufMut, Bytes, BytesMut};
 use rstest::*;
 
@@ -12,7 +10,15 @@ use crate::protocol::connection::Connection;
 use crate::protocol::events::{Effect, ProtocolEvent};
 
 fn create_h3(is_client: bool) -> H3 {
-    match H3::new(is_client, 10000, 10, 10, 2048) {
+    let params = H3Params {
+        initial_max_data: 10000,
+        initial_max_streams_bidi: 10,
+        initial_max_streams_uni: 10,
+        max_capsule_size: 2048,
+        max_field_section_size: 1_048_576,
+    };
+
+    match H3::new(is_client, params) {
         Ok(h3) => h3,
         Err(e) => {
             let msg = format!("{e:?}");
@@ -43,10 +49,13 @@ fn valid_req_headers() -> Headers {
 }
 
 fn valid_settings_frame() -> Bytes {
-    let mut map = HashMap::new();
-    map.insert(SETTINGS_WT_ENABLED, 1);
+    let settings = H3Settings {
+        wt_enabled: Some(1),
+        max_field_section_size: Some(1_048_576),
+        ..Default::default()
+    };
 
-    let payload = match encode_settings(&map) {
+    let payload = match encode_settings(&settings) {
         Ok(p) => p,
         Err(e) => {
             let msg = format!("{e:?}");
@@ -55,23 +64,170 @@ fn valid_settings_frame() -> Bytes {
         }
     };
 
-    match encode_frame(H3_FRAME_TYPE_SETTINGS, payload) {
-        Ok(f) => f,
+    let header = match encode_frame_header(H3_FRAME_TYPE_SETTINGS, payload.len()) {
+        Ok(h) => h,
         Err(e) => {
             let msg = format!("{e:?}");
-            assert_eq!(msg, "", "Failed to encode SETTINGS frame");
+            assert_eq!(msg, "", "Failed to encode SETTINGS header");
             unreachable!()
         }
+    };
+
+    let mut frame = BytesMut::with_capacity(header.len() + payload.len());
+    frame.put(header);
+    frame.put(payload);
+    frame.freeze()
+}
+
+#[test]
+fn test_cleanup_stream_emits_cancel_effect() {
+    let mut client = create_h3(true);
+    assert!(matches!(client.set_local_stream_ids(2, 6, 10), Ok(())));
+
+    let mut server = create_h3(false);
+    assert!(matches!(server.set_local_stream_ids(3, 7, 11), Ok(())));
+    server.settings_received = true;
+
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+
+    let settings = H3Settings {
+        qpack_max_table_capacity: Some(4096),
+        qpack_blocked_streams: Some(16),
+        wt_enabled: Some(1),
+        max_field_section_size: Some(1_048_576),
+        ..Default::default()
+    };
+
+    let Ok(settings_payload) = encode_settings(&settings) else {
+        unreachable!();
+    };
+    let Ok(settings_header) = encode_frame_header(H3_FRAME_TYPE_SETTINGS, settings_payload.len())
+    else {
+        unreachable!();
+    };
+
+    let mut ctrl_data = BytesMut::new();
+    assert!(matches!(
+        write_varint(&mut ctrl_data, H3_STREAM_TYPE_CONTROL),
+        Ok(())
+    ));
+    ctrl_data.extend_from_slice(&settings_header);
+    ctrl_data.extend_from_slice(&settings_payload);
+
+    client.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id: 3,
+            data: ctrl_data.freeze(),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    let headers = vec![
+        (Bytes::from(":method"), Bytes::from("GET")),
+        (
+            Bytes::from(":path"),
+            Bytes::from("/dynamic/path/to/force/indexing"),
+        ),
+        (
+            Bytes::from("custom-header"),
+            Bytes::from("custom-value-that-should-be-indexed"),
+        ),
+    ];
+
+    let mut forced_block = false;
+
+    for sid in [4, 8, 12, 16] {
+        let Ok(effects) = client.encode_headers(sid, &headers, false) else {
+            continue;
+        };
+
+        let mut frame_data = BytesMut::new();
+
+        for eff in effects {
+            match eff {
+                Effect::SendQuicData {
+                    stream_id, data, ..
+                } if stream_id == sid => {
+                    frame_data.extend_from_slice(&data);
+                }
+                _ => {}
+            }
+        }
+
+        server.handle_transport_event(
+            &ProtocolEvent::TransportStreamDataReceived {
+                stream_id: sid,
+                data: frame_data.freeze(),
+                end_stream: false,
+            },
+            mock.as_connection(),
+        );
+
+        if server.partial_frames.get(&sid).is_some_and(|p| p.blocked) {
+            let cleanup_effects = server.cleanup_stream(sid);
+            assert!(
+                cleanup_effects
+                    .iter()
+                    .any(|e| matches!(e, Effect::SendQuicData { stream_id: 11, .. }))
+            );
+            forced_block = true;
+            break;
+        }
     }
+
+    assert!(
+        forced_block,
+        "Failed to force QPACK decoder into blocked state"
+    );
 }
 
 #[test]
 fn test_cleanup_stream_removes_partial_frame() {
     let mut h3 = create_h3(true);
     let stream_id = 4;
-    h3.ensure_partial_frame(stream_id).ended = true;
+    let mut p = PartialFrameInfo::new(stream_id);
+    p.ended = true;
+    h3.partial_frames.insert(stream_id, p);
     h3.cleanup_stream(stream_id);
     assert!(!h3.partial_frames.contains_key(&stream_id));
+}
+
+#[test]
+fn test_client_rejects_server_initiated_non_wt_bidi_stream() {
+    let mut h3 = create_h3(true);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    let stream_id = 1;
+
+    let mut data = BytesMut::new();
+    assert!(matches!(
+        write_varint(&mut data, H3_FRAME_TYPE_DATA),
+        Ok(())
+    ));
+    assert!(matches!(write_varint(&mut data, 0), Ok(())));
+
+    let (_, effects) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: data.freeze(),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
+        assert_eq!(*error_code, ERR_H3_STREAM_CREATION_ERROR);
+    } else {
+        assert_eq!(
+            effects.len(),
+            0,
+            "Expected CloseQuicConnection for non-WT server-initiated bidi stream"
+        );
+    }
 }
 
 #[test]
@@ -81,7 +237,7 @@ fn test_encode_capsule_bidirectional_success() {
     let data = Bytes::from("capsule_payload");
     let res = H3::encode_capsule(stream_id, capsule_type, data.clone());
     match res {
-        Ok(bytes) => assert_eq!(bytes.first(), Some(&0x00)),
+        Ok(vec) => assert_eq!(vec.first().and_then(|b| b.first()), Some(&0x00)),
         Err(e) => {
             let msg = format!("{e:?}");
             assert_eq!(msg, "", "Failed to encode capsule");
@@ -190,7 +346,7 @@ fn test_encode_stream_creation_unidirectional() {
         .iter()
         .filter(|e| matches!(e, Effect::SendQuicData { .. }))
         .count();
-    assert_eq!(sends, 2);
+    assert_eq!(sends, 1);
 }
 
 #[test]
@@ -231,7 +387,7 @@ fn test_handle_transport_event_datagram_success() {
     let (events, _) = h3.handle_transport_event(&event, mock.as_connection());
 
     assert_eq!(events.len(), 1);
-    if let Some(ProtocolEvent::DatagramReceived { stream_id, data }) = events.first() {
+    if let Some(ProtocolEvent::H3DatagramReceived { stream_id, data }) = events.first() {
         assert_eq!(*stream_id, 0);
         assert_eq!(data.as_ref(), b"payload");
     } else {
@@ -254,7 +410,14 @@ fn test_initialize_settings_success() {
 
 #[test]
 fn test_new_valid_config_success() {
-    let res = H3::new(true, 100, 5, 5, 1000);
+    let params = H3Params {
+        initial_max_data: 100,
+        initial_max_streams_bidi: 5,
+        initial_max_streams_uni: 5,
+        max_capsule_size: 1000,
+        max_field_section_size: 1_048_576,
+    };
+    let res = H3::new(true, params);
     if let Err(e) = res {
         let msg = format!("{e:?}");
         assert_eq!(msg, "", "H3 initialization failed");
@@ -286,17 +449,21 @@ fn test_parse_settings_reserved_id_failure() {
 
 #[test]
 fn test_parse_settings_valid() {
-    let mut map = HashMap::new();
-    map.insert(SETTINGS_QPACK_MAX_TABLE_CAPACITY, 100);
+    let settings = H3Settings {
+        qpack_max_table_capacity: Some(100),
+        max_field_section_size: Some(65536),
+        ..Default::default()
+    };
 
-    let Ok(payload) = encode_settings(&map) else {
+    let Ok(payload) = encode_settings(&settings) else {
         return;
     };
 
     let parsed = parse_settings(&payload);
     match parsed {
-        Ok(settings) => {
-            assert_eq!(settings.get(&SETTINGS_QPACK_MAX_TABLE_CAPACITY), Some(&100));
+        Ok(s) => {
+            assert_eq!(s.qpack_max_table_capacity, Some(100));
+            assert_eq!(s.max_field_section_size, Some(65536));
         }
         Err(e) => {
             let msg = format!("{e:?}");
@@ -313,17 +480,14 @@ fn test_recv_capsule_too_large() {
     let mut p = PartialFrameInfo::new(stream_id);
     p.headers_processed = true;
     p.is_webtransport_control = true;
-    h3.partial_frames.insert(stream_id, p);
 
     let mut data = BytesMut::new();
     data.extend_from_slice(&[0x00]);
     data.extend_from_slice(&[0x80, 0x00, 0x20, 0x00]);
 
-    h3.ensure_partial_frame(stream_id)
-        .capsule_buffer
-        .extend_from_slice(&data);
+    p.capsule_buffer.extend_from_slice(&data);
 
-    let res = h3.parse_capsules(stream_id);
+    let res = h3.parse_capsules(stream_id, &mut p);
     assert!(matches!(
         res,
         Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
@@ -437,8 +601,11 @@ fn test_recv_control_frame_too_large() {
         mock.as_connection(),
     );
 
-    assert!(effects.is_empty());
-    assert!(h3.partial_frames.contains_key(&stream_id));
+    if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
+        assert_eq!(*error_code, ERR_H3_FRAME_ERROR);
+    } else {
+        unreachable!("Expected CloseQuicConnection effect for large control frame");
+    }
 }
 
 #[test]
@@ -477,7 +644,7 @@ fn test_recv_control_goaway_success() {
     assert!(
         events
             .iter()
-            .any(|e| matches!(e, ProtocolEvent::GoawayReceived))
+            .any(|e| matches!(e, ProtocolEvent::H3GoawayReceived))
     );
 }
 
@@ -559,6 +726,58 @@ fn test_recv_control_settings_twice_fails() {
         assert_eq!(*error_code, ERR_H3_FRAME_UNEXPECTED);
     } else {
         assert_eq!(effects.len(), 0, "Expected error on duplicate settings");
+    }
+}
+
+#[test]
+fn test_recv_control_wt_stream_frame_fails() {
+    let mut h3 = create_h3(true);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    let stream_id = 3;
+    h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: Bytes::from(vec![0x00]),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: valid_settings_frame(),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    let mut data = BytesMut::new();
+    assert!(matches!(
+        write_varint(&mut data, H3_FRAME_TYPE_WT_STREAM),
+        Ok(())
+    ));
+    assert!(matches!(write_varint(&mut data, 0), Ok(())));
+
+    let (_, effects) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: data.freeze(),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
+        assert_eq!(*error_code, ERR_H3_FRAME_ERROR);
+    } else {
+        assert_eq!(
+            effects.len(),
+            0,
+            "Expected CloseQuicConnection for WT_STREAM frame on control stream"
+        );
     }
 }
 
@@ -832,8 +1051,40 @@ fn test_recv_request_data_headers_frame_flow() {
         assert!(!events.is_empty(), "No events generated");
         assert!(matches!(
             events.first(),
-            Some(ProtocolEvent::HeadersReceived { .. })
+            Some(ProtocolEvent::H3HeadersReceived { .. })
         ));
+    }
+}
+
+#[test]
+fn test_recv_request_data_headers_too_large() {
+    let mut h3 = create_h3(true);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    let stream_id = 0;
+    h3.settings_received = true;
+
+    let p = PartialFrameInfo::new(stream_id);
+    h3.partial_frames.insert(stream_id, p);
+
+    let mut data = BytesMut::new();
+    data.put_u8(0x01);
+    assert!(matches!(write_varint(&mut data, 1_048_577), Ok(())));
+
+    let (_, effects) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: data.freeze(),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    if let Some(Effect::ResetQuicStream { error_code, .. }) = effects.first() {
+        assert_eq!(*error_code, ERR_H3_MESSAGE_ERROR);
+    } else {
+        unreachable!("Expected ResetQuicStream due to oversized headers frame");
     }
 }
 
@@ -933,6 +1184,35 @@ fn test_recv_request_data_unknown_frame_ignored() {
 }
 
 #[test]
+fn test_recv_request_data_wt_fast_path() {
+    let mut h3 = create_h3(false);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    let stream_id = 0;
+
+    let mut p = PartialFrameInfo::new(stream_id);
+    p.stream_type = Some(H3_STREAM_TYPE_WEBTRANSPORT);
+    p.control_stream_id = Some(4);
+    h3.partial_frames.insert(stream_id, p);
+
+    let (events, _) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: Bytes::from_static(b"fast_path_data"),
+            end_stream: true,
+        },
+        mock.as_connection(),
+    );
+
+    assert_eq!(events.len(), 1);
+    assert!(matches!(
+        events.first(),
+        Some(ProtocolEvent::WebTransportStreamDataReceived { .. })
+    ));
+}
+
+#[test]
 fn test_recv_request_settings_frame_fails() {
     let mut h3 = create_h3(true);
     let mock = MockConnectionLayout {
@@ -986,12 +1266,65 @@ fn test_recv_uni_stream_cancel_push_frame_fails() {
     );
 
     if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
-        assert_eq!(*error_code, ERR_H3_FRAME_UNEXPECTED);
+        assert_eq!(*error_code, ERR_H3_ID_ERROR);
     } else {
         assert_eq!(
             effects.len(),
             0,
             "Expected CloseQuicConnection effect for CANCEL_PUSH"
+        );
+    }
+}
+
+#[test]
+fn test_recv_uni_stream_data_control_data_frame_fails() {
+    let mut h3 = create_h3(true);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    let stream_id = 3;
+
+    h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: Bytes::from(vec![0x00]),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: valid_settings_frame(),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    let mut data = BytesMut::new();
+    assert!(matches!(
+        write_varint(&mut data, H3_FRAME_TYPE_DATA),
+        Ok(())
+    ));
+    assert!(matches!(write_varint(&mut data, 0), Ok(())));
+
+    let (_, effects) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: data.freeze(),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
+        assert_eq!(*error_code, ERR_H3_FRAME_UNEXPECTED);
+    } else {
+        assert_eq!(
+            effects.len(),
+            0,
+            "Expected CloseQuicConnection for DATA frame on control stream"
         );
     }
 }
@@ -1057,11 +1390,11 @@ fn test_recv_uni_stream_data_control_settings_success() {
         },
         mock.as_connection(),
     );
-    assert!(h3.is_settings_received());
+    assert!(h3.settings_received);
     assert!(
         events
             .iter()
-            .any(|e| matches!(e, ProtocolEvent::SettingsReceived { .. }))
+            .any(|e| matches!(e, ProtocolEvent::H3SettingsReceived { .. }))
     );
 }
 
@@ -1087,6 +1420,35 @@ fn test_recv_uni_stream_data_identifies_control_stream() {
 }
 
 #[test]
+fn test_recv_uni_stream_data_wt_fast_path() {
+    let mut h3 = create_h3(false);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    let stream_id = 3;
+
+    let mut p = PartialFrameInfo::new(stream_id);
+    p.stream_type = Some(H3_STREAM_TYPE_WEBTRANSPORT);
+    p.control_stream_id = Some(4);
+    h3.partial_frames.insert(stream_id, p);
+
+    let (events, _) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: Bytes::from_static(b"fast_path_data"),
+            end_stream: true,
+        },
+        mock.as_connection(),
+    );
+
+    assert_eq!(events.len(), 1);
+    assert!(matches!(
+        events.first(),
+        Some(ProtocolEvent::WebTransportStreamDataReceived { .. })
+    ));
+}
+
+#[test]
 fn test_recv_uni_stream_data_wt_stream_parsing() {
     let mut h3 = create_h3(true);
     let mock = MockConnectionLayout {
@@ -1095,7 +1457,7 @@ fn test_recv_uni_stream_data_wt_stream_parsing() {
     let stream_id = 7;
 
     let mut payload = BytesMut::new();
-    payload.extend_from_slice(&[0x54]);
+    payload.extend_from_slice(&[0x40, 0x54]);
     payload.extend_from_slice(&[0x00]);
     payload.extend_from_slice(b"abc");
 
@@ -1108,7 +1470,18 @@ fn test_recv_uni_stream_data_wt_stream_parsing() {
         mock.as_connection(),
     );
 
-    assert_eq!(events.len(), 0);
+    assert_eq!(events.len(), 1);
+    if let Some(ProtocolEvent::WebTransportStreamDataReceived {
+        stream_id: sid,
+        data,
+        ..
+    }) = events.first()
+    {
+        assert_eq!(*sid, 7);
+        assert_eq!(data.as_ref(), b"abc");
+    } else {
+        unreachable!();
+    }
 }
 
 #[test]
@@ -1120,11 +1493,11 @@ fn test_recv_uni_stream_data_wt_stream_unknown_session_ignored() {
     let stream_id = 7;
 
     let mut payload = BytesMut::new();
-    payload.extend_from_slice(&[0x54]);
-    payload.extend_from_slice(&[0x00]);
+    payload.extend_from_slice(&[0x40, 0x54]);
+    payload.extend_from_slice(&[0x02]);
     payload.extend_from_slice(b"abc");
 
-    let (events, _) = h3.handle_transport_event(
+    let (_, effects) = h3.handle_transport_event(
         &ProtocolEvent::TransportStreamDataReceived {
             stream_id,
             data: payload.freeze(),
@@ -1133,7 +1506,11 @@ fn test_recv_uni_stream_data_wt_stream_unknown_session_ignored() {
         mock.as_connection(),
     );
 
-    assert_eq!(events.len(), 0);
+    if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
+        assert_eq!(*error_code, ERR_H3_ID_ERROR);
+    } else {
+        unreachable!("Expected CloseQuicConnection for invalid session ID");
+    }
 }
 
 #[test]
@@ -1230,7 +1607,7 @@ fn test_recv_uni_stream_push_rejected() {
     );
 
     if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
-        assert_eq!(*error_code, ERR_H3_STREAM_CREATION_ERROR);
+        assert_eq!(*error_code, ERR_H3_ID_ERROR);
     } else {
         assert_eq!(
             effects.len(),
@@ -1286,17 +1663,14 @@ fn test_recv_wt_capsule_fragmented() {
     let mut p = PartialFrameInfo::new(stream_id);
     p.headers_processed = true;
     p.is_webtransport_control = true;
-    h3.partial_frames.insert(stream_id, p);
 
     let mut chunk1 = BytesMut::new();
     chunk1.extend_from_slice(&[0x00]);
     chunk1.extend_from_slice(&[0x03]);
 
-    h3.ensure_partial_frame(stream_id)
-        .capsule_buffer
-        .extend_from_slice(&chunk1);
+    p.capsule_buffer.extend_from_slice(&chunk1);
 
-    let events1 = match h3.parse_capsules(stream_id) {
+    let events1 = match h3.parse_capsules(stream_id, &mut p) {
         Ok(evts) => evts,
         Err(e) => {
             let msg = format!("{e:?}");
@@ -1309,11 +1683,9 @@ fn test_recv_wt_capsule_fragmented() {
     let mut chunk2 = BytesMut::new();
     chunk2.extend_from_slice(b"ABC");
 
-    h3.ensure_partial_frame(stream_id)
-        .capsule_buffer
-        .extend_from_slice(&chunk2);
+    p.capsule_buffer.extend_from_slice(&chunk2);
 
-    let events2 = match h3.parse_capsules(stream_id) {
+    let events2 = match h3.parse_capsules(stream_id, &mut p) {
         Ok(evts) => evts,
         Err(e) => {
             let msg = format!("{e:?}");
@@ -1323,7 +1695,7 @@ fn test_recv_wt_capsule_fragmented() {
     };
 
     assert_eq!(events2.len(), 1);
-    if let Some(ProtocolEvent::CapsuleReceived { capsule_data, .. }) = events2.first() {
+    if let Some(ProtocolEvent::H3CapsuleReceived { capsule_data, .. }) = events2.first() {
         assert_eq!(capsule_data.as_ref(), b"ABC");
     } else {
         assert_eq!(events2.len(), 0, "Expected CapsuleReceived event");
@@ -1346,9 +1718,8 @@ fn test_recv_wt_control_stream_capsules() {
     buf.put_slice(b"ABC");
 
     p.capsule_buffer.extend_from_slice(&buf);
-    h3.partial_frames.insert(stream_id, p);
 
-    let events = match h3.parse_capsules(stream_id) {
+    let events = match h3.parse_capsules(stream_id, &mut p) {
         Ok(evts) => evts,
         Err(e) => {
             let msg = format!("{e:?}");
@@ -1358,7 +1729,7 @@ fn test_recv_wt_control_stream_capsules() {
     };
 
     assert!(!events.is_empty());
-    if let Some(ProtocolEvent::CapsuleReceived {
+    if let Some(ProtocolEvent::H3CapsuleReceived {
         capsule_type,
         capsule_data,
         ..
@@ -1379,26 +1750,27 @@ fn test_recv_wt_stream_preamble_fragmented() {
     };
     let stream_id = 7;
 
-    h3.handle_transport_event(
+    let (events1, _) = h3.handle_transport_event(
         &ProtocolEvent::TransportStreamDataReceived {
             stream_id,
-            data: Bytes::from(vec![0x54]),
+            data: Bytes::from(vec![0x40]),
             end_stream: false,
         },
         mock.as_connection(),
     );
+    assert!(events1.is_empty());
 
-    let (events, _) = h3.handle_transport_event(
+    let (events2, _) = h3.handle_transport_event(
         &ProtocolEvent::TransportStreamDataReceived {
             stream_id,
-            data: Bytes::from(vec![0x00]),
+            data: Bytes::from(vec![0x54, 0x00]),
             end_stream: false,
         },
         mock.as_connection(),
     );
-    assert!(events.is_empty());
+    assert!(events2.is_empty());
 
-    let (events_final, effects) = h3.handle_transport_event(
+    let (events_final, _) = h3.handle_transport_event(
         &ProtocolEvent::TransportStreamDataReceived {
             stream_id,
             data: Bytes::from_static(b"data"),
@@ -1407,11 +1779,7 @@ fn test_recv_wt_stream_preamble_fragmented() {
         mock.as_connection(),
     );
 
-    if events_final.is_empty() {
-        assert!(effects.is_empty());
-    } else {
-        assert_eq!(events_final.len(), 1);
-    }
+    assert_eq!(events_final.len(), 1);
 }
 
 #[test]
@@ -1425,7 +1793,7 @@ fn test_recv_wt_uni_stream_missing_id_buffer() {
     let (_, effects) = h3.handle_transport_event(
         &ProtocolEvent::TransportStreamDataReceived {
             stream_id,
-            data: Bytes::from(vec![0x54]),
+            data: Bytes::from(vec![0x40, 0x54]),
             end_stream: false,
         },
         mock.as_connection(),
@@ -1435,7 +1803,7 @@ fn test_recv_wt_uni_stream_missing_id_buffer() {
     let (events, _) = h3.handle_transport_event(
         &ProtocolEvent::TransportStreamDataReceived {
             stream_id,
-            data: Bytes::from(vec![0x00]),
+            data: Bytes::from(vec![]),
             end_stream: false,
         },
         mock.as_connection(),
@@ -1643,7 +2011,7 @@ fn test_validate_response_headers_missing_status_failure() {
 
 #[test]
 fn test_validate_settings_missing_wt_enabled() {
-    let map = HashMap::new();
+    let map = H3Settings::default();
     let mock = MockConnectionLayout {
         _padding: [0; 1024],
     };

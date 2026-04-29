@@ -1,18 +1,39 @@
 //! Protocol event definitions and state machine effects.
 
-use std::collections::HashMap;
-
 use bytes::Bytes;
+use std::borrow::Cow;
 
 use crate::common::types::{
-    ConnectionId, ErrorCode, ErrorSource, EventType, Headers, RequestId, SessionId,
+    ConnectionHandle, ErrorCode, ErrorSource, EventType, Headers, RequestId, SessionId,
     StreamDirection, StreamId,
 };
+use crate::protocol::H3Settings;
 use crate::protocol::{ConnectionDiagnostics, SessionDiagnostics, StreamDiagnostics};
 
 // Protocol state machine input events.
 #[derive(Clone, Debug)]
 pub(crate) enum ProtocolEvent {
+    H3CapsuleReceived {
+        stream_id: StreamId,
+        capsule_type: u64,
+        capsule_data: Bytes,
+    },
+    H3ConnectStreamClosed {
+        stream_id: StreamId,
+    },
+    H3DatagramReceived {
+        stream_id: StreamId,
+        data: Bytes,
+    },
+    H3GoawayReceived,
+    H3HeadersReceived {
+        stream_id: StreamId,
+        headers: Headers,
+        stream_ended: bool,
+    },
+    H3SettingsReceived {
+        settings: H3Settings,
+    },
     InternalBindH3Session {
         request_id: RequestId,
         stream_id: StreamId,
@@ -28,90 +49,63 @@ pub(crate) enum ProtocolEvent {
     InternalFailH3Session {
         request_id: RequestId,
         error_code: Option<ErrorCode>,
-        reason: String,
+        reason: Cow<'static, str>,
     },
     InternalFailQuicStream {
         request_id: RequestId,
         session_id: SessionId,
         is_unidirectional: bool,
         error_code: Option<ErrorCode>,
-        reason: String,
+        reason: Cow<'static, str>,
     },
     TransportConnectionTerminated {
         error_code: ErrorCode,
-        reason: String,
+        reason: Cow<'static, str>,
     },
     TransportDatagramFrameReceived {
         data: Bytes,
     },
     TransportHandshakeCompleted,
     TransportQuicParametersReceived {
-        remote_max_datagram_frame_size: u64,
+        peer_max_datagram_frame_size: u64,
+    },
+    TransportStopSendingReceived {
+        stream_id: StreamId,
+        error_code: ErrorCode,
     },
     TransportStreamDataReceived {
         stream_id: StreamId,
         data: Bytes,
         end_stream: bool,
     },
-    TransportStopSendingReceived {
-        stream_id: StreamId,
-        error_code: ErrorCode,
-    },
     TransportStreamResetReceived {
         stream_id: StreamId,
         error_code: ErrorCode,
     },
-    CapsuleReceived {
-        stream_id: StreamId,
-        capsule_type: u64,
-        capsule_data: Bytes,
-    },
-    ConnectStreamClosed {
-        stream_id: StreamId,
-    },
-    DatagramReceived {
-        stream_id: StreamId,
-        data: Bytes,
-    },
-    GoawayReceived,
-    HeadersReceived {
-        stream_id: StreamId,
-        headers: Headers,
-        stream_ended: bool,
-    },
-    SettingsReceived {
-        settings: HashMap<u64, u64>,
-    },
-    WebTransportStreamDataReceived {
-        session_id: SessionId,
-        stream_id: StreamId,
-        data: Bytes,
-        stream_ended: bool,
-    },
-    ConnectionClose {
-        request_id: RequestId,
-        error_code: ErrorCode,
-        reason: Option<String>,
-    },
     UserAcceptSession {
         request_id: RequestId,
         session_id: SessionId,
-        subprotocol: Option<String>,
+        wt_protocol: Option<String>,
+    },
+    UserCloseConnection {
+        request_id: RequestId,
+        error_code: ErrorCode,
+        reason: Option<Cow<'static, str>>,
+    },
+    UserCloseConnectionGracefully {
+        request_id: RequestId,
     },
     UserCloseSession {
         request_id: RequestId,
         session_id: SessionId,
         error_code: ErrorCode,
-        reason: Option<String>,
-    },
-    UserConnectionGracefulClose {
-        request_id: RequestId,
+        reason: Option<Cow<'static, str>>,
     },
     UserCreateSession {
         request_id: RequestId,
         path: String,
         headers: Headers,
-        subprotocols: Option<Vec<String>>,
+        wt_available_protocols: Option<Vec<String>>,
     },
     UserCreateStream {
         request_id: RequestId,
@@ -147,6 +141,11 @@ pub(crate) enum ProtocolEvent {
         is_unidirectional: bool,
         max_streams: u64,
     },
+    UserReadStream {
+        request_id: RequestId,
+        stream_id: StreamId,
+        max_bytes: u64,
+    },
     UserRejectSession {
         request_id: RequestId,
         session_id: SessionId,
@@ -173,10 +172,11 @@ pub(crate) enum ProtocolEvent {
         stream_id: StreamId,
         error_code: ErrorCode,
     },
-    UserStreamRead {
-        request_id: RequestId,
+    WebTransportStreamDataReceived {
+        session_id: SessionId,
         stream_id: StreamId,
-        max_bytes: u64,
+        data: Bytes,
+        stream_ended: bool,
     },
 }
 
@@ -188,7 +188,7 @@ pub(crate) enum Effect {
     },
     CloseQuicConnection {
         error_code: ErrorCode,
-        reason: Option<String>,
+        reason: Option<Cow<'static, str>>,
     },
     CreateH3Session {
         request_id: RequestId,
@@ -201,25 +201,25 @@ pub(crate) enum Effect {
         is_unidirectional: bool,
     },
     EmitConnectionEvent {
-        connection_id: ConnectionId,
+        connection_handle: ConnectionHandle,
         event_type: EventType,
         error_code: Option<ErrorCode>,
-        reason: Option<String>,
+        reason: Option<Cow<'static, str>>,
     },
     EmitSessionEvent {
         session_id: SessionId,
         event_type: EventType,
         path: Option<String>,
         headers: Option<Headers>,
-        subprotocols: Option<Vec<String>>,
-        subprotocol: Option<String>,
+        wt_available_protocols: Option<Vec<String>>,
+        wt_protocol: Option<String>,
         data: Option<Bytes>,
         is_unidirectional: Option<bool>,
         max_data: Option<u64>,
         max_streams: Option<u64>,
         ready_at: Option<f64>,
         error_code: Option<ErrorCode>,
-        reason: Option<String>,
+        reason: Option<Cow<'static, str>>,
     },
     EmitStreamEvent {
         stream_id: StreamId,
@@ -243,7 +243,7 @@ pub(crate) enum Effect {
         request_id: RequestId,
         source: ErrorSource,
         error_code: Option<ErrorCode>,
-        reason: String,
+        reason: Cow<'static, str>,
     },
     ProcessProtocolEvent {
         event: Box<ProtocolEvent>,
@@ -289,14 +289,14 @@ pub(crate) enum Effect {
 )]
 #[derive(Clone, Debug)]
 pub(crate) enum RequestResult {
-    None,
-    SessionId(SessionId),
-    StreamId(StreamId),
-    ReadData(Bytes),
-    KeyingMaterial(Bytes),
     ConnectionDiagnostics(Box<ConnectionDiagnostics>),
+    KeyingMaterial(Bytes),
+    None,
+    ReadData(Bytes),
     SessionDiagnostics(Box<SessionDiagnostics>),
+    SessionId(SessionId),
     StreamDiagnostics(Box<StreamDiagnostics>),
+    StreamId(StreamId),
 }
 
 #[cfg(test)]

@@ -18,59 +18,6 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, Error as RustlsError, SignatureScheme};
 use time::{Duration, OffsetDateTime};
 
-/// Self-signed certificate generation and persistence.
-pub fn generate_self_signed_cert(
-    hostname: &str,
-    output_dir: &Path,
-    validity_days: i64,
-) -> io::Result<(String, String, String)> {
-    let ca_params = build_ca_params(validity_days);
-    let ca_key_pair = KeyPair::generate()
-        .map_err(|e| io::Error::other(format!("CA key generation failed: {e}")))?;
-    let ca_cert = ca_params
-        .self_signed(&ca_key_pair)
-        .map_err(|e| io::Error::other(format!("CA generation failed: {e}")))?;
-
-    let ca_issuer = Issuer::new(ca_params, &ca_key_pair);
-
-    let params = build_cert_params(hostname, validity_days)?;
-    let key_pair =
-        KeyPair::generate().map_err(|e| io::Error::other(format!("Key generation failed: {e}")))?;
-    let cert = params
-        .signed_by(&key_pair, &ca_issuer)
-        .map_err(|e| io::Error::other(format!("Cert generation failed: {e}")))?;
-
-    if !output_dir.exists() {
-        fs::create_dir_all(output_dir)?;
-    }
-
-    let safe_hostname = hostname.replace(['/', '\\'], "_");
-    let ca_filename = format!("{safe_hostname}_ca.crt");
-    let cert_filename = format!("{safe_hostname}.crt");
-    let key_filename = format!("{safe_hostname}.key");
-
-    let ca_path = output_dir.join(ca_filename);
-    let cert_path = output_dir.join(cert_filename);
-    let key_path = output_dir.join(key_filename);
-
-    fs::write(&ca_path, ca_cert.pem())?;
-    fs::write(&cert_path, cert.pem())?;
-    fs::write(&key_path, key_pair.serialize_pem())?;
-
-    #[cfg(unix)]
-    {
-        let mut perms = fs::metadata(&key_path)?.permissions();
-        perms.set_mode(0o600);
-        fs::set_permissions(&key_path, perms)?;
-    }
-
-    Ok((
-        ca_path.to_string_lossy().into_owned(),
-        cert_path.to_string_lossy().into_owned(),
-        key_path.to_string_lossy().into_owned(),
-    ))
-}
-
 // Bypasses server certificate verification for insecure client connections.
 #[derive(Debug)]
 pub(crate) struct NoCertificateVerification;
@@ -124,6 +71,57 @@ impl ServerCertVerifier for NoCertificateVerification {
     }
 }
 
+/// Self-signed certificate generation and persistence.
+pub(crate) fn generate_self_signed_cert(
+    hostname: &str,
+    output_dir: &Path,
+    validity_days: i64,
+) -> io::Result<(String, String, String)> {
+    let ca_params = build_ca_params(validity_days);
+    let ca_key_pair = KeyPair::generate().map_err(io::Error::other)?;
+    let ca_cert = ca_params
+        .self_signed(&ca_key_pair)
+        .map_err(io::Error::other)?;
+
+    let ca_issuer = Issuer::new(ca_params, &ca_key_pair);
+
+    let params = build_cert_params(hostname, validity_days)?;
+    let key_pair = KeyPair::generate().map_err(io::Error::other)?;
+    let cert = params
+        .signed_by(&key_pair, &ca_issuer)
+        .map_err(io::Error::other)?;
+
+    if !output_dir.exists() {
+        fs::create_dir_all(output_dir)?;
+    }
+
+    let safe_hostname = hostname.replace(['/', '\\'], "_");
+    let ca_filename = format!("{safe_hostname}_ca.crt");
+    let cert_filename = format!("{safe_hostname}.crt");
+    let key_filename = format!("{safe_hostname}.key");
+
+    let ca_path = output_dir.join(ca_filename);
+    let cert_path = output_dir.join(cert_filename);
+    let key_path = output_dir.join(key_filename);
+
+    fs::write(&ca_path, ca_cert.pem())?;
+    fs::write(&cert_path, cert.pem())?;
+    fs::write(&key_path, key_pair.serialize_pem())?;
+
+    #[cfg(unix)]
+    {
+        let mut perms = fs::metadata(&key_path)?.permissions();
+        perms.set_mode(0o600);
+        fs::set_permissions(&key_path, perms)?;
+    }
+
+    Ok((
+        ca_path.to_string_lossy().into_owned(),
+        cert_path.to_string_lossy().into_owned(),
+        key_path.to_string_lossy().into_owned(),
+    ))
+}
+
 // Extracts PEM certificate chains from the filesystem.
 pub(crate) fn load_certs(path: &Path) -> io::Result<Vec<CertificateDer<'static>>> {
     let file = File::open(path)?;
@@ -138,7 +136,7 @@ pub(crate) fn load_private_key(path: &Path) -> io::Result<PrivateKeyDer<'static>
     let mut reader = BufReader::new(file);
 
     rustls_pemfile::private_key(&mut reader)?
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "private key not found"))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "cfg_keyfile resolve failed"))
 }
 
 // Root CA parameter construction.
@@ -178,12 +176,8 @@ fn build_cert_params(hostname: &str, validity_days: i64) -> io::Result<Certifica
     let subject_alt_name = if let Ok(ip) = IpAddr::from_str(hostname) {
         SanType::IpAddress(ip)
     } else {
-        let ia5 = Ia5String::try_from(hostname).map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("Invalid hostname: {e}"),
-            )
-        })?;
+        let ia5 = Ia5String::try_from(hostname)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
         SanType::DnsName(ia5)
     };
 

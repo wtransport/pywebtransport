@@ -15,15 +15,13 @@ pub(super) fn create_py_exception(
     py: Python<'_>,
     source: ErrorSource,
     code: Option<ErrorCode>,
-    reason: String,
+    reason: &str,
 ) -> PyErr {
     let class_name = match source {
         ErrorSource::Connection => "ConnectionError",
+        ErrorSource::Datagram => "DatagramError",
         ErrorSource::Session => "SessionError",
         ErrorSource::Stream => "StreamError",
-        ErrorSource::Datagram => "DatagramError",
-        ErrorSource::Protocol => "ProtocolError",
-        ErrorSource::FlowControl => "FlowControlError",
         ErrorSource::Unspecified => "WebTransportError",
     };
 
@@ -45,7 +43,7 @@ impl From<WebTransportError> for PyErr {
 
             let kwargs = make_kwargs(py, code);
 
-            instantiate_py_exception(py, class_name, reason, &kwargs)
+            instantiate_py_exception(py, class_name, &reason, &kwargs)
         })
     }
 }
@@ -54,7 +52,7 @@ impl From<WebTransportError> for PyErr {
 fn instantiate_py_exception(
     py: Python<'_>,
     class_name: &str,
-    reason: String,
+    reason: &str,
     kwargs: &Bound<'_, PyDict>,
 ) -> PyErr {
     let module = EXCEPTION_MODULE

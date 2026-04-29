@@ -3,11 +3,11 @@
 use std::collections::VecDeque;
 
 use bytes::{BufMut, Bytes};
-use tracing::{debug, error, warn};
+use tracing::debug;
 
 use crate::common::constants::{
     ERR_LIB_STREAM_STATE_ERROR, ERR_WT_APPLICATION_ERROR_FIRST, ERR_WT_FLOW_CONTROL_ERROR,
-    WT_DATA_BLOCKED_TYPE,
+    WT_CAPSULE_TYPE_DATA_BLOCKED,
 };
 use crate::common::types::{
     ErrorCode, ErrorSource, EventType, RequestId, SessionId, StreamDirection, StreamId, StreamState,
@@ -16,29 +16,47 @@ use crate::protocol::events::{Effect, RequestResult};
 use crate::protocol::utils::{http_to_wt_error, write_varint, wt_to_http_error};
 
 // Threshold for zero-copy slicing optimization (32KB).
-const OPTIMIZED_READ_SLICE_THRESHOLD: u64 = 32 * 1024;
+const OPTIMIZED_READ_SLICE_SIZE: u64 = 32 * 1024;
+
+// Diagnostic information snapshot for a stream.
+#[derive(Clone, Debug)]
+pub(crate) struct StreamDiagnostics {
+    pub(crate) bytes_received: u64,
+    pub(crate) bytes_sent: u64,
+    pub(crate) close_code: Option<ErrorCode>,
+    pub(crate) close_reason: Option<String>,
+    pub(crate) closed_at: Option<f64>,
+    pub(crate) created_at: f64,
+    pub(crate) direction: StreamDirection,
+    pub(crate) is_peer_initiated: bool,
+    pub(crate) read_buffer_size: u64,
+    pub(crate) session_id: SessionId,
+    pub(crate) state: StreamState,
+    pub(crate) stream_id: StreamId,
+    pub(crate) write_buffer_size: u64,
+}
 
 // Single WebTransport stream state machine.
 #[derive(Debug)]
 pub(super) struct Stream {
-    pub(super) id: StreamId,
-    pub(super) session_id: SessionId,
-    pub(super) direction: StreamDirection,
-    pub(super) state: StreamState,
-    pub(super) is_peer_initiated: bool,
-    pub(super) created_at: f64,
-    pub(super) bytes_sent: u64,
-    pub(super) bytes_received: u64,
-    pub(super) read_buffer: VecDeque<Bytes>,
-    pub(super) read_buffer_size: u64,
-    pub(super) pending_read_requests: VecDeque<(RequestId, u64)>,
-    pub(super) write_buffer: VecDeque<(Bytes, RequestId, bool)>,
-    pub(super) write_buffer_size: u64,
-    pub(super) close_code: Option<ErrorCode>,
-    pub(super) close_reason: Option<String>,
-    pub(super) closed_at: Option<f64>,
-    pub(super) max_read_buffer_size: u64,
-    pub(super) max_write_buffer_size: u64,
+    bytes_received: u64,
+    bytes_sent: u64,
+    close_code: Option<ErrorCode>,
+    close_reason: Option<String>,
+    closed_at: Option<f64>,
+    created_at: f64,
+    direction: StreamDirection,
+    id: StreamId,
+    is_peer_initiated: bool,
+    max_read_buffer_size: u64,
+    max_write_buffer_size: u64,
+    pending_read_requests: VecDeque<(RequestId, u64)>,
+    read_buffer: VecDeque<Bytes>,
+    read_buffer_size: u64,
+    session_id: SessionId,
+    state: StreamState,
+    write_buffer: VecDeque<(Bytes, RequestId, bool)>,
+    write_buffer_size: u64,
 }
 
 impl Stream {
@@ -48,39 +66,45 @@ impl Stream {
         session_id: SessionId,
         direction: StreamDirection,
         is_peer_initiated: bool,
-        created_at: f64,
         max_read_buffer_size: u64,
         max_write_buffer_size: u64,
+        created_at: f64,
     ) -> Self {
         Self {
-            id,
-            session_id,
-            direction,
-            state: StreamState::Open,
-            is_peer_initiated,
-            created_at,
-            bytes_sent: 0,
             bytes_received: 0,
-            read_buffer: VecDeque::new(),
-            read_buffer_size: 0,
-            pending_read_requests: VecDeque::new(),
-            write_buffer: VecDeque::new(),
-            write_buffer_size: 0,
+            bytes_sent: 0,
             close_code: None,
             close_reason: None,
             closed_at: None,
+            created_at,
+            direction,
+            id,
+            is_peer_initiated,
             max_read_buffer_size,
             max_write_buffer_size,
+            pending_read_requests: VecDeque::new(),
+            read_buffer: VecDeque::new(),
+            read_buffer_size: 0,
+            session_id,
+            state: StreamState::Open,
+            write_buffer: VecDeque::new(),
+            write_buffer_size: 0,
         }
     }
 
     // User diagnostics event handling.
     pub(super) fn diagnose(&self, request_id: RequestId) -> Vec<Effect> {
         let diag = self.diagnostics_snapshot();
+
         vec![Effect::NotifyRequestDone {
             request_id,
             result: RequestResult::StreamDiagnostics(Box::new(diag)),
         }]
+    }
+
+    // Stream direction accessor.
+    pub(super) fn direction(&self) -> StreamDirection {
+        self.direction
     }
 
     // Write buffer flushing with flow control.
@@ -161,11 +185,11 @@ impl Stream {
         if !self.write_buffer.is_empty() {
             let mut buf = bytes::BytesMut::with_capacity(8);
             if let Err(e) = write_varint(&mut buf, peer_max_data) {
-                error!("Internal error: Failed to encode peer_max_data for DATA_BLOCKED: {e:?}");
+                debug!("varint encode failed stream_id={} err={e:?}", self.id);
             } else {
                 effects.push(Effect::SendH3Capsule {
                     stream_id: self.session_id,
-                    capsule_type: WT_DATA_BLOCKED_TYPE,
+                    capsule_type: WT_CAPSULE_TYPE_DATA_BLOCKED,
                     capsule_data: buf.freeze(),
                     end_stream: false,
                 });
@@ -173,6 +197,16 @@ impl Stream {
         }
 
         (effects, total_sent)
+    }
+
+    // Pending write state validation.
+    pub(super) fn has_pending_writes(&self) -> bool {
+        self.write_buffer_size > 0
+    }
+
+    // Terminal state predicate.
+    pub(super) fn is_closed(&self) -> bool {
+        self.state == StreamState::Closed
     }
 
     // User read request handling.
@@ -183,11 +217,6 @@ impl Stream {
             let target = Self::limit_read(max_bytes, self.read_buffer_size);
             let data_to_return = self.take_data(target);
             let consumed = data_to_return.len() as u64;
-
-            debug!(
-                "Stream {} read {} bytes (requested {})",
-                self.id, consumed, max_bytes
-            );
 
             effects.push(Effect::NotifyRequestDone {
                 request_id,
@@ -207,17 +236,17 @@ impl Stream {
             return (effects, 0);
         }
 
-        if matches!(self.state, StreamState::ResetReceived | StreamState::Closed) {
+        if matches!(self.state, StreamState::Closed | StreamState::ResetReceived) {
             let error_to_return = self.close_code.unwrap_or(ERR_LIB_STREAM_STATE_ERROR);
-
+            debug!(
+                "wt_stream validate failed actual={:?} stream_id={}",
+                self.state, self.id
+            );
             effects.push(Effect::NotifyRequestFailed {
                 request_id,
                 source: ErrorSource::Stream,
                 error_code: Some(error_to_return),
-                reason: format!(
-                    "Stream {} receive side closed (state: {:?}, code: {:?})",
-                    self.id, self.state, error_to_return
-                ),
+                reason: "wt_stream validate failed".into(),
             });
             return (effects, 0);
         }
@@ -232,6 +261,7 @@ impl Stream {
 
         self.pending_read_requests
             .push_back((request_id, max_bytes));
+
         (effects, 0)
     }
 
@@ -245,16 +275,18 @@ impl Stream {
         let mut effects = Vec::new();
         let mut consumed_bytes_by_reads = 0;
 
-        if matches!(self.state, StreamState::ResetReceived | StreamState::Closed) {
+        if matches!(self.state, StreamState::Closed | StreamState::ResetReceived) {
             return (effects, 0);
         }
 
         if !data.is_empty() {
             let data_len = data.len() as u64;
             if self.read_buffer_size + data_len > self.max_read_buffer_size {
-                warn!(
-                    "Stream {} read buffer limit exceeded ({} + {} > {}). Sending STOP_SENDING.",
-                    self.id, self.read_buffer_size, data_len, self.max_read_buffer_size
+                debug!(
+                    "wt_stream validate exceeded actual={} limit={} stream_id={}",
+                    self.read_buffer_size + data_len,
+                    self.max_read_buffer_size,
+                    self.id
                 );
                 effects.push(Effect::StopQuicStream {
                     stream_id: self.id,
@@ -274,13 +306,6 @@ impl Stream {
                 let data_chunk = self.take_data(target);
 
                 consumed_bytes_by_reads += data_chunk.len() as u64;
-
-                debug!(
-                    "Stream {} read {} bytes (requested {})",
-                    self.id,
-                    data_chunk.len(),
-                    max_bytes
-                );
 
                 effects.push(Effect::NotifyRequestDone {
                     request_id: req_id,
@@ -305,15 +330,10 @@ impl Stream {
                         });
                     } else {
                         self.state = StreamState::HalfClosedRemote;
-                        debug!(
-                            "Stream {} rx closed, data pending read. Moving to HALF_CLOSED_REMOTE",
-                            self.id
-                        );
                     }
                 }
                 StreamState::Open => {
                     self.state = StreamState::HalfClosedRemote;
-                    debug!("Stream {} receive side closed by peer (WT data)", self.id);
                 }
                 _ => {}
             }
@@ -333,12 +353,11 @@ impl Stream {
     pub(super) fn recv_reset(&mut self, error_code: ErrorCode, now: f64) -> Vec<Effect> {
         let mut effects = Vec::new();
 
-        if self.state == StreamState::Closed {
+        if matches!(self.state, StreamState::Closed | StreamState::ResetReceived) {
             return effects;
         }
 
-        debug!("Stream {} reset by peer with code {}", self.id, error_code);
-
+        debug!("wt_stream abort stream_id={} err={error_code}", self.id);
         let app_error_code = http_to_wt_error(error_code);
 
         effects.push(Effect::EmitStreamEvent {
@@ -351,11 +370,15 @@ impl Stream {
         });
 
         while let Some((req_id, _)) = self.pending_read_requests.pop_front() {
+            debug!(
+                "wt_stream abort request_id={req_id} stream_id={} err={error_code}",
+                self.id
+            );
             effects.push(Effect::NotifyRequestFailed {
                 request_id: req_id,
                 source: ErrorSource::Stream,
                 error_code: app_error_code,
-                reason: format!("Stream {} reset by peer", self.id),
+                reason: "wt_stream abort".into(),
             });
         }
 
@@ -370,11 +393,15 @@ impl Stream {
                 self.state = StreamState::Closed;
 
                 while let Some((_, req_id, _)) = self.write_buffer.pop_front() {
+                    debug!(
+                        "wt_stream abort request_id={req_id} stream_id={} err={error_code}",
+                        self.id
+                    );
                     effects.push(Effect::NotifyRequestFailed {
                         request_id: req_id,
                         source: ErrorSource::Stream,
                         error_code: app_error_code,
-                        reason: format!("Stream {} fully closed after reset", self.id),
+                        reason: "wt_stream abort".into(),
                     });
                 }
                 self.write_buffer_size = 0;
@@ -398,15 +425,11 @@ impl Stream {
     pub(super) fn recv_stop_sending(&mut self, error_code: ErrorCode) -> Vec<Effect> {
         let mut effects = Vec::new();
 
-        if self.state == StreamState::Closed {
+        if matches!(self.state, StreamState::Closed | StreamState::ResetSent) {
             return effects;
         }
 
-        debug!(
-            "Stream {} received STOP_SENDING with code {}",
-            self.id, error_code
-        );
-
+        debug!("wt_stream abort stream_id={} err={error_code}", self.id);
         let app_error_code = http_to_wt_error(error_code);
 
         effects.push(Effect::EmitStreamEvent {
@@ -431,11 +454,15 @@ impl Stream {
         let mut effects = Vec::new();
 
         if self.direction == StreamDirection::ReceiveOnly {
+            debug!(
+                "wt_stream validate invalid actual={:?} stream_id={}",
+                self.direction, self.id
+            );
             effects.push(Effect::NotifyRequestFailed {
                 request_id,
                 source: ErrorSource::Stream,
                 error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
-                reason: format!("Cannot reset receive-only stream {}", self.id),
+                reason: "wt_stream validate invalid".into(),
             });
             return effects;
         }
@@ -449,6 +476,10 @@ impl Stream {
         }
 
         let previous_state = self.state;
+        debug!(
+            "wt_stream abort request_id={request_id} stream_id={} err={error_code}",
+            self.id
+        );
         self.state = StreamState::ResetSent;
         self.closed_at = Some(now);
         self.close_code = Some(error_code);
@@ -462,11 +493,15 @@ impl Stream {
         });
 
         while let Some((_, req_id, _)) = self.write_buffer.pop_front() {
+            debug!(
+                "wt_stream abort request_id={req_id} stream_id={} err={error_code}",
+                self.id
+            );
             effects.push(Effect::NotifyRequestFailed {
                 request_id: req_id,
                 source: ErrorSource::Stream,
                 error_code: Some(error_code),
-                reason: format!("Stream {} reset by application", self.id),
+                reason: "wt_stream abort".into(),
             });
         }
         self.write_buffer_size = 0;
@@ -491,11 +526,6 @@ impl Stream {
             result: RequestResult::None,
         });
 
-        debug!(
-            "Stream {} reset locally with code {} (mapped to {:x})",
-            self.id, error_code, http_error_code
-        );
-
         effects
     }
 
@@ -509,18 +539,22 @@ impl Stream {
         let mut effects = Vec::new();
 
         if self.direction == StreamDirection::SendOnly {
+            debug!(
+                "wt_stream validate invalid actual={:?} stream_id={}",
+                self.direction, self.id
+            );
             effects.push(Effect::NotifyRequestFailed {
                 request_id,
                 source: ErrorSource::Stream,
                 error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
-                reason: format!("Cannot stop send-only stream {}", self.id),
+                reason: "wt_stream validate invalid".into(),
             });
             return effects;
         }
 
         if matches!(
             self.state,
-            StreamState::HalfClosedRemote | StreamState::Closed | StreamState::ResetReceived
+            StreamState::Closed | StreamState::HalfClosedRemote | StreamState::ResetReceived
         ) {
             effects.push(Effect::NotifyRequestDone {
                 request_id,
@@ -530,6 +564,10 @@ impl Stream {
         }
 
         let previous_state = self.state;
+        debug!(
+            "wt_stream abort request_id={request_id} stream_id={} err={error_code}",
+            self.id
+        );
         self.state = StreamState::ResetReceived;
         self.closed_at = Some(now);
         self.close_code = Some(error_code);
@@ -543,11 +581,15 @@ impl Stream {
         });
 
         while let Some((req_id, _)) = self.pending_read_requests.pop_front() {
+            debug!(
+                "wt_stream abort request_id={req_id} stream_id={} err={error_code}",
+                self.id
+            );
             effects.push(Effect::NotifyRequestFailed {
                 request_id: req_id,
                 source: ErrorSource::Stream,
                 error_code: Some(error_code),
-                reason: format!("Stream {} stopped by application", self.id),
+                reason: "wt_stream abort".into(),
             });
         }
 
@@ -571,11 +613,6 @@ impl Stream {
             result: RequestResult::None,
         });
 
-        debug!(
-            "Stream {} receive side stopped locally with code {} (mapped to {:x})",
-            self.id, error_code, http_error_code
-        );
-
         effects
     }
 
@@ -592,7 +629,7 @@ impl Stream {
 
         if matches!(
             self.state,
-            StreamState::HalfClosedLocal | StreamState::Closed | StreamState::ResetSent
+            StreamState::Closed | StreamState::HalfClosedLocal | StreamState::ResetSent
         ) {
             if data.is_empty() && end_stream {
                 effects.push(Effect::NotifyRequestDone {
@@ -602,14 +639,15 @@ impl Stream {
                 return (effects, 0);
             }
 
+            debug!(
+                "wt_stream validate failed actual={:?} stream_id={}",
+                self.state, self.id
+            );
             effects.push(Effect::NotifyRequestFailed {
                 request_id,
                 source: ErrorSource::Stream,
                 error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
-                reason: format!(
-                    "Stream {} is not writable (state: {:?})",
-                    self.id, self.state
-                ),
+                reason: "wt_stream validate failed".into(),
             });
             return (effects, 0);
         }
@@ -618,20 +656,22 @@ impl Stream {
         let current_buffer_size = self.write_buffer_size;
 
         if current_buffer_size + data_len > self.max_write_buffer_size {
+            debug!(
+                "wt_stream validate exceeded actual={} limit={} stream_id={}",
+                current_buffer_size + data_len,
+                self.max_write_buffer_size,
+                self.id
+            );
             effects.push(Effect::NotifyRequestFailed {
                 request_id,
                 source: ErrorSource::Stream,
                 error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
-                reason: format!(
-                    "Stream {} write buffer full ({} + {} > {} bytes)",
-                    self.id, current_buffer_size, data_len, self.max_write_buffer_size
-                ),
+                reason: "wt_stream validate exceeded".into(),
             });
             return (effects, 0);
         }
 
         if !self.write_buffer.is_empty() {
-            debug!("Stream {} write added to existing write buffer", self.id);
             self.write_buffer.push_back((data, request_id, end_stream));
             self.write_buffer_size += data_len;
             return (effects, 0);
@@ -667,7 +707,6 @@ impl Stream {
                     }
                     _ => {}
                 }
-                debug!("Stream {} send side closed", self.id);
             }
             (effects, data_len)
         } else if available_credit > 0 {
@@ -683,24 +722,17 @@ impl Stream {
                 end_stream: false,
             });
 
-            debug!(
-                "Stream {} partial send: sent {} bytes, buffering {} bytes",
-                self.id,
-                available_credit,
-                remaining_data.len()
-            );
-
             self.write_buffer
                 .push_front((remaining_data, request_id, end_stream));
             self.write_buffer_size += remaining_len;
 
             let mut buf = bytes::BytesMut::with_capacity(8);
             if let Err(e) = write_varint(&mut buf, peer_max_data) {
-                error!("Internal error: Failed to encode peer_max_data for DATA_BLOCKED: {e:?}");
+                debug!("varint encode failed stream_id={} err={e:?}", self.id);
             } else {
                 effects.push(Effect::SendH3Capsule {
                     stream_id: self.session_id,
-                    capsule_type: WT_DATA_BLOCKED_TYPE,
+                    capsule_type: WT_CAPSULE_TYPE_DATA_BLOCKED,
                     capsule_data: buf.freeze(),
                     end_stream: false,
                 });
@@ -708,20 +740,16 @@ impl Stream {
 
             (effects, available_credit)
         } else {
-            debug!(
-                "Stream {} write blocked by session flow control ({} > {})",
-                self.id, data_len, available_credit
-            );
             self.write_buffer.push_back((data, request_id, end_stream));
             self.write_buffer_size += data_len;
 
             let mut buf = bytes::BytesMut::with_capacity(8);
             if let Err(e) = write_varint(&mut buf, peer_max_data) {
-                error!("Internal error: Failed to encode peer_max_data for DATA_BLOCKED: {e:?}");
+                debug!("varint encode failed stream_id={} err={e:?}", self.id);
             } else {
                 effects.push(Effect::SendH3Capsule {
                     stream_id: self.session_id,
-                    capsule_type: WT_DATA_BLOCKED_TYPE,
+                    capsule_type: WT_CAPSULE_TYPE_DATA_BLOCKED,
                     capsule_data: buf.freeze(),
                     end_stream: false,
                 });
@@ -734,19 +762,19 @@ impl Stream {
     // Internal diagnostics snapshot creation.
     fn diagnostics_snapshot(&self) -> StreamDiagnostics {
         StreamDiagnostics {
-            stream_id: self.id,
-            session_id: self.session_id,
-            direction: self.direction,
-            state: self.state,
-            is_peer_initiated: self.is_peer_initiated,
-            created_at: self.created_at,
-            bytes_sent: self.bytes_sent,
             bytes_received: self.bytes_received,
-            read_buffer_size: self.read_buffer_size,
-            write_buffer_size: self.write_buffer_size,
+            bytes_sent: self.bytes_sent,
             close_code: self.close_code,
             close_reason: self.close_reason.clone(),
             closed_at: self.closed_at,
+            created_at: self.created_at,
+            direction: self.direction,
+            is_peer_initiated: self.is_peer_initiated,
+            read_buffer_size: self.read_buffer_size,
+            session_id: self.session_id,
+            state: self.state,
+            stream_id: self.id,
+            write_buffer_size: self.write_buffer_size,
         }
     }
 
@@ -767,8 +795,7 @@ impl Stream {
 
         let head_len = head_chunk.len() as u64;
 
-        if head_len >= max_bytes
-            && (head_len == max_bytes || head_len <= OPTIMIZED_READ_SLICE_THRESHOLD)
+        if head_len >= max_bytes && (head_len == max_bytes || head_len <= OPTIMIZED_READ_SLICE_SIZE)
         {
             let chunk = self.read_buffer.pop_front().unwrap_or_default();
             self.read_buffer_size -= max_bytes;
@@ -821,24 +848,6 @@ impl Stream {
             merged.freeze()
         }
     }
-}
-
-// Diagnostic information snapshot for a stream.
-#[derive(Clone, Debug)]
-pub(crate) struct StreamDiagnostics {
-    pub(crate) stream_id: StreamId,
-    pub(crate) session_id: SessionId,
-    pub(crate) direction: StreamDirection,
-    pub(crate) state: StreamState,
-    pub(crate) is_peer_initiated: bool,
-    pub(crate) created_at: f64,
-    pub(crate) bytes_sent: u64,
-    pub(crate) bytes_received: u64,
-    pub(crate) read_buffer_size: u64,
-    pub(crate) write_buffer_size: u64,
-    pub(crate) close_code: Option<ErrorCode>,
-    pub(crate) close_reason: Option<String>,
-    pub(crate) closed_at: Option<f64>,
 }
 
 #[cfg(test)]

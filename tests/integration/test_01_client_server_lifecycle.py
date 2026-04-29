@@ -53,7 +53,7 @@ async def test_connection_to_non_existent_route_fails(
         await client.connect(url=url)
 
     error_message = str(exc_info.value).lower()
-    assert "404" in error_message or "rejected" in error_message or "timeout" in error_message
+    assert "0x10b" in error_message
 
 
 async def test_server_initiated_close(

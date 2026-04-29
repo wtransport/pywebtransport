@@ -8,13 +8,7 @@ SERVER_SCRIPT="${BENCHMARK_DIR}/test_00_bench_server.py"
 OUTPUT_DIR="${PROJECT_ROOT}/.benchmarks"
 PYTHON_EXEC="python3"
 
-TEST_SUITES=(
-    "${BENCHMARK_DIR}/test_01_throughput.py"
-    "${BENCHMARK_DIR}/test_02_latency.py"
-    "${BENCHMARK_DIR}/test_03_concurrency.py"
-    "${BENCHMARK_DIR}/test_04_datagrams.py"
-    "${BENCHMARK_DIR}/test_05_resources.py"
-)
+TEST_SUITES=("${BENCHMARK_DIR}"/test_0[1-9]_*.py)
 
 mkdir -p "${OUTPUT_DIR}"
 SERVER_PID=""
@@ -41,7 +35,7 @@ for test_file in "${TEST_SUITES[@]}"; do
     echo ""
     echo "[BENCHMARK] ${test_name}"
     
-    pytest -q "${test_file}" \
+    $PYTHON_EXEC -m pytest -q "${test_file}" \
         --benchmark-only \
         --benchmark-json="${json_output}" \
         --benchmark-columns=min,max,mean,median,stddev,ops \

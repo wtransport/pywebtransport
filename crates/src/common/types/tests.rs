@@ -17,13 +17,13 @@ fn test_connection_state_traits_behavior_success() {
 
 #[test]
 fn test_error_source_traits_behavior_success() {
-    let source = ErrorSource::Protocol;
+    let source = ErrorSource::Session;
 
     let source_copy = source;
     let debug_output = format!("{source:?}");
 
     assert_eq!(source, source_copy);
-    assert_eq!(debug_output, "Protocol");
+    assert_eq!(debug_output, "Session");
 }
 
 #[test]
@@ -72,14 +72,14 @@ fn test_stream_state_traits_behavior_success() {
 
 #[test]
 fn test_type_aliases_instantiation_and_usage_success() {
-    let conn_id: ConnectionId = "conn-uuid-1".to_owned();
+    let conn_handle: ConnectionHandle = 42;
     let err_code: ErrorCode = 404;
     let req_id: RequestId = 1001;
     let sess_id: SessionId = 500;
     let stream_id: StreamId = 8;
     let headers: Headers = vec![(Bytes::from("content-type"), Bytes::from("application/json"))];
 
-    assert_eq!(conn_id, "conn-uuid-1");
+    assert_eq!(conn_handle, 42);
     assert_eq!(err_code, 404);
     assert_eq!(req_id, 1001);
     assert_eq!(sess_id, 500);

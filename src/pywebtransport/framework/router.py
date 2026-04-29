@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Awaitable, Callable
 from typing import Any, Pattern
 
 from pywebtransport.session import WebTransportSession
-from pywebtransport.utils import get_logger
 
 __all__: list[str] = ["RequestRouter", "SessionHandler"]
 
 type SessionHandler = Callable[..., Awaitable[None]]
 
-_logger = get_logger(name=__name__)
+_logger = logging.getLogger(name=__name__)
 
 
 class RequestRouter:
@@ -30,17 +30,16 @@ class RequestRouter:
         try:
             compiled_pattern = re.compile(pattern)
             self._pattern_routes.append((compiled_pattern, handler))
-            _logger.debug("Added pattern route: %s", pattern)
+            _logger.debug("app_router register actual=%s", pattern)
         except re.error as e:
-            _logger.error("Invalid regex pattern '%s': %s", pattern, e, exc_info=True)
-            raise
+            raise ValueError(f"app_router validate invalid actual={pattern}") from e
 
     def add_route(self, *, path: str, handler: SessionHandler, override: bool = False) -> None:
         """Register a route for an exact path match."""
         if path in self._routes and not override:
-            raise ValueError(f"Route for path '{path}' already exists.")
+            raise ValueError(f"app_router validate failed actual={path}")
         self._routes[path] = handler
-        _logger.debug("Added route: %s", path)
+        _logger.debug("app_router register actual=%s", path)
 
     def get_all_routes(self) -> dict[str, SessionHandler]:
         """Return a copy of all registered exact-match routes."""
@@ -63,13 +62,13 @@ class RequestRouter:
         original_len = len(self._pattern_routes)
         self._pattern_routes = [(p, h) for p, h in self._pattern_routes if p.pattern != pattern]
         if len(self._pattern_routes) < original_len:
-            _logger.debug("Removed pattern route: %s", pattern)
+            _logger.debug("app_router evict actual=%s", pattern)
 
     def remove_route(self, *, path: str) -> None:
         """Unregister a route for an exact path match."""
         if path in self._routes:
             del self._routes[path]
-            _logger.debug("Removed route: %s", path)
+            _logger.debug("app_router evict actual=%s", path)
 
     def route_request(self, *, session: WebTransportSession) -> tuple[SessionHandler, dict[str, Any]] | None:
         """Dispatch a request to the appropriate handler based on the session path."""
@@ -91,4 +90,4 @@ class RequestRouter:
     def set_default_handler(self, *, handler: SessionHandler) -> None:
         """Configure a default handler for unmatched routes."""
         self._default_handler = handler
-        _logger.debug("Set default handler")
+        _logger.debug("app_router register")

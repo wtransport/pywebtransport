@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable
 from typing import Final
 
 from pywebtransport import ClientConfig, ConnectionError, TimeoutError, WebTransportClient
+from pywebtransport.utils import init_tracing
 
 SERVER_HOST: Final[str] = "127.0.0.1"
 SERVER_PORT: Final[int] = 4433
@@ -18,6 +19,7 @@ DEBUG_MODE: Final[bool] = "--debug" in sys.argv
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 if DEBUG_MODE:
     logging.getLogger().setLevel(level=logging.DEBUG)
+    init_tracing()
 
 logger = logging.getLogger(name="test_data_transfer")
 
@@ -38,7 +40,7 @@ async def test_small_data() -> bool:
         async with WebTransportClient(config=config) as client:
             session = await client.connect(url=SERVER_URL)
             for size in test_sizes:
-                logger.info("Testing %s bytes transfer...", size)
+                logger.info("Testing %d bytes transfer...", size)
                 test_data = generate_test_data(size=size)
                 stream = await session.create_bidirectional_stream()
 
@@ -47,9 +49,9 @@ async def test_small_data() -> bool:
 
                 expected = b"ECHO: " + test_data
                 if response != expected:
-                    logger.error("FAILURE: Data mismatch for %s bytes.", size)
+                    logger.error("FAILURE: Data mismatch for %d bytes.", size)
                     return False
-                logger.info("   - %s bytes: OK", size)
+                logger.info("   - %d bytes: OK", size)
 
             logger.info("SUCCESS: All small data transfers completed successfully.")
             return True
@@ -107,7 +109,7 @@ async def test_chunked_transfer() -> bool:
             session = await client.connect(url=SERVER_URL)
             test_data = generate_test_data(size=total_size)
             stream = await session.create_bidirectional_stream()
-            logger.info("Sending %s bytes in %s-byte chunks...", total_size, chunk_size)
+            logger.info("Sending %d bytes in %d-byte chunks...", total_size, chunk_size)
 
             bytes_sent = 0
             for i in range(0, total_size, chunk_size):
@@ -115,7 +117,7 @@ async def test_chunked_transfer() -> bool:
                 is_last_chunk = (i + chunk_size) >= total_size
                 await stream.write(data=chunk, end_stream=is_last_chunk)
                 bytes_sent += len(chunk)
-            logger.info("All %s bytes sent.", bytes_sent)
+            logger.info("All %d bytes sent.", bytes_sent)
 
             response_data = await stream.read_all()
             expected = b"ECHO: " + test_data
