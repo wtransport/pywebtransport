@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
+import socket
 from collections.abc import Callable
 from typing import Any, Final, cast
 
@@ -42,15 +42,15 @@ class EndpointController:
         self._remote_addresses: dict[int, Address] = {}
         self._spawn_callback: _SpawnCallback | None = None
 
-        self._r_fd, self._w_fd = os.pipe()
-        os.set_blocking(self._r_fd, False)
-        os.set_blocking(self._w_fd, False)
+        self._r_sock, self._w_sock = socket.socketpair()
+        self._r_sock.setblocking(False)
+        self._w_sock.setblocking(False)
 
         self._pending_manager = PendingRequestManager()
-        self._waker = Waker(self._w_fd)
+        self._waker = Waker(self._w_sock.fileno())
         self._endpoint = Endpoint(is_client=is_client, config=config, waker=self._waker)
 
-        self._loop.add_reader(self._r_fd, self._on_waker_triggered)
+        self._waker_task = self._loop.create_task(self._waker_task_loop())
 
     def close(self) -> None:
         """Terminate the controller and shutdown the background reactor."""
@@ -64,6 +64,15 @@ class EndpointController:
         self._remote_addresses.clear()
         self._spawn_callback = None
         self._pending_manager.fail_all(exception=ConnectionError(message="rt close"))
+
+        if not self._waker_task.done():
+            self._waker_task.cancel()
+
+        try:
+            self._r_sock.close()
+            self._w_sock.close()
+        except OSError as e:
+            _logger.debug("sys_socket destroy failed err=%s", e)
 
     async def connect(self, *, remote_host: str, remote_port: int, server_name: str) -> int:
         """Dispatch an outbound connection request to the reactor."""
@@ -182,26 +191,6 @@ class EndpointController:
                     "rt_event receive failed actual=%s ptr=%s err=%s", effect_opcode, handle, e, exc_info=True
                 )
 
-    def _on_waker_triggered(self) -> None:
-        """Process the edge-triggered wake-up signal from the pipe."""
-        try:
-            while True:
-                try:
-                    os.read(self._r_fd, _WAKER_DRAIN_BUFFER_SIZE)
-                except BlockingIOError:
-                    break
-        except OSError as e:
-            _logger.debug("sys_pipe drain failed err=%s", e)
-
-        self._waker.clear()
-
-        try:
-            events = self._endpoint.poll_runtime_events()
-            for event_tuple in events:
-                self._process_runtime_event(event_tuple=event_tuple)
-        except Exception as e:
-            _logger.warning("rt_event receive failed err=%s", e, exc_info=True)
-
     def _process_runtime_event(self, *, event_tuple: tuple[int, Any]) -> None:
         """Route the IPC runtime events to the corresponding domain handlers."""
         opcode, payload = event_tuple
@@ -227,18 +216,33 @@ class EndpointController:
                 self._execute_effects(handle=handle, effects=effects)
             case abi.REACTOR_SHUTDOWN:
                 _logger.debug("rt close")
+                self.close()
 
-                if not self._is_closed:
-                    self._is_closed = True
-                    self._connection_callbacks.clear()
-                    self._remote_addresses.clear()
-                    self._spawn_callback = None
-                    self._pending_manager.fail_all(exception=ConnectionError(message="rt failed"))
-
-                self._loop.remove_reader(self._r_fd)
+    async def _waker_task_loop(self) -> None:
+        """Continuously monitor the internal socket for cross-thread wake-up signals."""
+        try:
+            while not self._is_closed:
+                data = await self._loop.sock_recv(self._r_sock, _WAKER_DRAIN_BUFFER_SIZE)
+                if not data:
+                    break
 
                 try:
-                    os.close(self._r_fd)
-                    os.close(self._w_fd)
-                except OSError as e:
-                    _logger.debug("sys_pipe destroy failed err=%s", e)
+                    while True:
+                        if not self._r_sock.recv(_WAKER_DRAIN_BUFFER_SIZE):
+                            break
+                except BlockingIOError:
+                    pass
+
+                self._waker.clear()
+
+                try:
+                    events = self._endpoint.poll_runtime_events()
+                    for event_tuple in events:
+                        self._process_runtime_event(event_tuple=event_tuple)
+                except Exception as e:
+                    _logger.warning("rt_event receive failed err=%s", e, exc_info=True)
+        except asyncio.CancelledError:
+            pass
+        except OSError as e:
+            if not self._is_closed:
+                _logger.debug("sys_socket drain failed err=%s", e)

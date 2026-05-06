@@ -198,13 +198,13 @@ impl Decoder {
         &mut self,
         stream_id: u64,
         mut pending: Pin<Box<PendingBlock>>,
-        res: u32,
+        res: sys::lsqpack_read_header_status,
         dec_len: usize,
     ) -> Result<(Vec<u8>, DecodeStatus), QpackError> {
         let inner = unsafe { self.inner.as_mut().get_unchecked_mut() };
 
-        if res != sys::lsqpack_read_header_status_LQRHS_DONE
-            && res != sys::lsqpack_read_header_status_LQRHS_BLOCKED
+        if res != sys::lsqpack_read_header_status::LQRHS_DONE
+            && res != sys::lsqpack_read_header_status::LQRHS_BLOCKED
         {
             return Err(QpackError::DecoderError);
         }
@@ -224,7 +224,7 @@ impl Decoder {
         let dec_instructions = inner.dec_buffer.clone();
         let pending_ptr = unsafe { pending.as_mut().get_unchecked_mut() };
 
-        if res == sys::lsqpack_read_header_status_LQRHS_DONE {
+        if res == sys::lsqpack_read_header_status::LQRHS_DONE {
             if let Some(e) = pending_ptr.ctx.error {
                 Err(e)
             } else {
@@ -603,7 +603,7 @@ impl InnerEncoder {
                 )
             };
 
-            if res == sys::lsqpack_enc_status_LQES_OK {
+            if res == sys::lsqpack_enc_status::LQES_OK {
                 // SAFETY: FFI contract guarantees enc_written and hdr_written bytes are initialized upon LQES_OK.
                 unsafe {
                     self.enc_buffer.set_len(enc_off + enc_written);
@@ -618,9 +618,9 @@ impl InnerEncoder {
                 return Err(QpackError::EncoderError);
             }
 
-            if res == sys::lsqpack_enc_status_LQES_NOBUF_ENC {
+            if res == sys::lsqpack_enc_status::LQES_NOBUF_ENC {
                 self.enc_buffer.reserve(1024);
-            } else if res == sys::lsqpack_enc_status_LQES_NOBUF_HEAD {
+            } else if res == sys::lsqpack_enc_status::LQES_NOBUF_HEAD {
                 self.hdr_buffer.reserve(1024);
             } else {
                 return Err(QpackError::EncoderError);

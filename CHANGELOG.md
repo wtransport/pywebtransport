@@ -7,9 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned for future release
+### Fixed
 
-_(No planned changes for the next release yet.)_
+- **Windows Compatibility**: Resolved MSVC compilation failures and IOCP runtime regressions on Windows NT kernels. Enforced strict Rust-native enumeration layouts via `rustified_enum` in the FFI generation pipeline to resolve `i32`/`u32` ABI mismatches within the QPACK layer. Migrated the internal IPC waker to a bidirectional `socketpair` mechanism, replacing the unsupported `add_reader` pipe dependency to establish compatibility with the `ProactorEventLoop`.
 
 ## [0.17.0] - 2026-04-29
 

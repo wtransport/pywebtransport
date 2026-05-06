@@ -1,9 +1,10 @@
 """Unit tests for the pywebtransport._controller.controller module."""
 
-import os
+import asyncio
+import socket
 from collections.abc import Iterator
 from typing import Any, cast
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -24,6 +25,12 @@ class TestEndpointController:
         monkeypatch.setattr("pywebtransport._controller.controller.Waker", MagicMock(return_value=mock_waker))
         config = MagicMock()
         mock_loop = MagicMock()
+
+        def mock_create_task(coro: Any) -> MagicMock:
+            coro.close()
+            return MagicMock()
+
+        mock_loop.create_task.side_effect = mock_create_task
 
         ctrl = EndpointController(config=config, is_client=True, loop=mock_loop)
 
@@ -47,10 +54,29 @@ class TestEndpointController:
 
         assert controller._is_closed is True
 
-    def test_close_success(self, controller: EndpointController, mock_endpoint: MagicMock) -> None:
+    def test_close_oserror(self, controller: EndpointController, monkeypatch: pytest.MonkeyPatch) -> None:
+        mock_r_sock = MagicMock()
+        mock_r_sock.close.side_effect = OSError("mock close error")
+        monkeypatch.setattr(controller, "_r_sock", mock_r_sock)
+
+        controller.close()
+
+        assert controller._is_closed is True
+
+    def test_close_success(
+        self, controller: EndpointController, mock_endpoint: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         controller.register_connection(handle=1, callback=MagicMock())
         controller._remote_addresses[1] = ("127.0.0.1", 443)
         controller.set_spawn_callback(callback=MagicMock())
+
+        mock_task = cast(MagicMock, controller._waker_task)
+        cast(MagicMock, mock_task.done).return_value = False
+
+        r_sock_mock = MagicMock()
+        w_sock_mock = MagicMock()
+        monkeypatch.setattr(controller, "_r_sock", r_sock_mock)
+        monkeypatch.setattr(controller, "_w_sock", w_sock_mock)
 
         controller.close()
 
@@ -59,6 +85,9 @@ class TestEndpointController:
         assert not controller._connection_callbacks
         assert not controller._remote_addresses
         assert controller._spawn_callback is None
+        cast(MagicMock, mock_task.cancel).assert_called_once()
+        r_sock_mock.close.assert_called_once()
+        w_sock_mock.close.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_connect_failure(self, controller: EndpointController, mock_endpoint: MagicMock) -> None:
@@ -248,35 +277,9 @@ class TestEndpointController:
     def test_init_state(self, controller: EndpointController) -> None:
         assert controller._is_closed is False
         assert isinstance(controller._pending_manager, PendingRequestManager)
-        assert controller._w_fd > 0
-        assert controller._r_fd > 0
-
-    def test_on_waker_triggered_oserror(self, controller: EndpointController, monkeypatch: pytest.MonkeyPatch) -> None:
-        mock_read = MagicMock(side_effect=OSError("mock error"))
-        monkeypatch.setattr("pywebtransport._controller.controller.os.read", mock_read)
-
-        controller._on_waker_triggered()
-
-        mock_read.assert_called_once()
-
-    def test_on_waker_triggered_poll_exception(self, controller: EndpointController, mock_endpoint: MagicMock) -> None:
-        mock_endpoint.poll_runtime_events.side_effect = RuntimeError("poll error")
-        os.write(controller._w_fd, b"x")
-
-        controller._on_waker_triggered()
-
-        mock_endpoint.poll_runtime_events.assert_called_once()
-
-    def test_on_waker_triggered_success(
-        self, controller: EndpointController, mock_endpoint: MagicMock, mock_waker: MagicMock
-    ) -> None:
-        os.write(controller._w_fd, b"x")
-        mock_endpoint.poll_runtime_events.return_value = [(abi.COMMAND_COMPLETED, (1, 1, ("127.0.0.1", 443)))]
-
-        controller._on_waker_triggered()
-
-        mock_waker.clear.assert_called_once()
-        mock_endpoint.poll_runtime_events.assert_called_once()
+        assert isinstance(controller._r_sock, socket.socket)
+        assert isinstance(controller._w_sock, socket.socket)
+        cast(MagicMock, controller._loop.create_task).assert_called_once()
 
     @pytest.mark.asyncio
     async def test_process_runtime_event_command_completed(self, controller: EndpointController) -> None:
@@ -328,49 +331,26 @@ class TestEndpointController:
         assert controller.get_remote_address(handle=1) == ("127.0.0.1", 443)
         cb.assert_called_once_with(1)
 
-    def test_process_runtime_event_reactor_shutdown_already_closed(self, controller: EndpointController) -> None:
-        controller._is_closed = True
-
-        controller._process_runtime_event(event_tuple=(abi.REACTOR_SHUTDOWN, None))
-
-        assert controller._is_closed is True
-
-    @pytest.mark.asyncio
-    async def test_process_runtime_event_reactor_shutdown_unexpected(self, controller: EndpointController) -> None:
-        req_id, future = controller._pending_manager.create_request()
-        controller.register_connection(handle=1, callback=MagicMock())
-        controller._remote_addresses[1] = ("127.0.0.1", 443)
-        controller.set_spawn_callback(callback=MagicMock())
-        r_fd = controller._r_fd
-        w_fd = controller._w_fd
-
-        controller._process_runtime_event(event_tuple=(abi.REACTOR_SHUTDOWN, None))
-
-        assert controller._is_closed is True
-        assert not controller._connection_callbacks
-        assert not controller._remote_addresses
-        assert controller._spawn_callback is None
-        cast(MagicMock, controller._loop.remove_reader).assert_called_once_with(r_fd)
-
-        assert future.done()
-        exc = cast(ConnectionError, future.exception())
-        assert isinstance(exc, ConnectionError)
-        assert exc.message == "rt failed"
-
-        with pytest.raises(expected_exception=OSError):
-            os.fstat(r_fd)
-        with pytest.raises(expected_exception=OSError):
-            os.fstat(w_fd)
-
-    def test_process_runtime_event_reactor_shutdown_oserror(
+    def test_process_runtime_event_reactor_shutdown(
         self, controller: EndpointController, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        mock_close = MagicMock(side_effect=OSError("mock close error"))
-        monkeypatch.setattr("pywebtransport._controller.controller.os.close", mock_close)
+        mock_close = MagicMock()
+        monkeypatch.setattr(controller, "close", mock_close)
 
         controller._process_runtime_event(event_tuple=(abi.REACTOR_SHUTDOWN, None))
 
-        mock_close.assert_called()
+        mock_close.assert_called_once()
+
+    def test_process_runtime_event_reactor_shutdown_already_closed(
+        self, controller: EndpointController, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        controller._is_closed = True
+        mock_close = MagicMock()
+        monkeypatch.setattr(controller, "close", mock_close)
+
+        controller._process_runtime_event(event_tuple=(abi.REACTOR_SHUTDOWN, None))
+
+        mock_close.assert_called_once()
 
     def test_process_runtime_event_unknown_opcode(self, controller: EndpointController) -> None:
         controller._process_runtime_event(event_tuple=(999, None))
@@ -417,3 +397,102 @@ class TestEndpointController:
         controller.set_spawn_callback(callback=cb)
 
         assert controller._spawn_callback is cb
+
+    @pytest.mark.asyncio
+    async def test_waker_task_loop_cancelled(
+        self, controller: EndpointController, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(controller._loop, "sock_recv", AsyncMock(side_effect=asyncio.CancelledError()))
+
+        await controller._waker_task_loop()
+
+        assert True
+
+    @pytest.mark.asyncio
+    async def test_waker_task_loop_drain_eof(
+        self, controller: EndpointController, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(controller._loop, "sock_recv", AsyncMock(side_effect=[b"x", b""]))
+        mock_r_sock = MagicMock()
+        mock_r_sock.recv.side_effect = [b"y", b""]
+        monkeypatch.setattr(controller, "_r_sock", mock_r_sock)
+
+        await controller._waker_task_loop()
+
+        assert mock_r_sock.recv.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_waker_task_loop_graceful_exit(
+        self, controller: EndpointController, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def mock_sock_recv(*args: Any, **kwargs: Any) -> bytes:
+            controller._is_closed = True
+            return b"x"
+
+        monkeypatch.setattr(controller._loop, "sock_recv", AsyncMock(side_effect=mock_sock_recv))
+        mock_r_sock = MagicMock()
+        mock_r_sock.recv.side_effect = BlockingIOError()
+        monkeypatch.setattr(controller, "_r_sock", mock_r_sock)
+        mock_endpoint = cast(MagicMock, controller._endpoint)
+        mock_endpoint.poll_runtime_events.return_value = []
+
+        await controller._waker_task_loop()
+
+        assert controller._is_closed is True
+
+    @pytest.mark.asyncio
+    async def test_waker_task_loop_oserror(
+        self, controller: EndpointController, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(controller._loop, "sock_recv", AsyncMock(side_effect=OSError("mock error")))
+
+        await controller._waker_task_loop()
+
+        assert True
+
+    @pytest.mark.asyncio
+    async def test_waker_task_loop_oserror_when_closed(
+        self, controller: EndpointController, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def mock_sock_recv(*args: Any, **kwargs: Any) -> bytes:
+            controller._is_closed = True
+            raise OSError("mock error")
+
+        monkeypatch.setattr(controller._loop, "sock_recv", AsyncMock(side_effect=mock_sock_recv))
+
+        await controller._waker_task_loop()
+
+        assert controller._is_closed is True
+
+    @pytest.mark.asyncio
+    async def test_waker_task_loop_poll_exception(
+        self, controller: EndpointController, mock_endpoint: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(controller._loop, "sock_recv", AsyncMock(side_effect=[b"x", b""]))
+        mock_r_sock = MagicMock()
+        mock_r_sock.recv.side_effect = BlockingIOError()
+        monkeypatch.setattr(controller, "_r_sock", mock_r_sock)
+        mock_endpoint.poll_runtime_events.side_effect = RuntimeError("poll error")
+
+        await controller._waker_task_loop()
+
+        mock_endpoint.poll_runtime_events.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_waker_task_loop_success(
+        self,
+        controller: EndpointController,
+        mock_endpoint: MagicMock,
+        mock_waker: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(controller._loop, "sock_recv", AsyncMock(side_effect=[b"x", b""]))
+        mock_r_sock = MagicMock()
+        mock_r_sock.recv.side_effect = BlockingIOError()
+        monkeypatch.setattr(controller, "_r_sock", mock_r_sock)
+        mock_endpoint.poll_runtime_events.return_value = [(abi.COMMAND_COMPLETED, (1, 1, ("127.0.0.1", 443)))]
+
+        await controller._waker_task_loop()
+
+        mock_waker.clear.assert_called_once()
+        mock_endpoint.poll_runtime_events.assert_called_once()

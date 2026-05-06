@@ -54,6 +54,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .allowlist_function("lsxpack_.*")
         .allowlist_type("lsxpack_.*")
         .allowlist_var("LSQPACK_.*")
+        .rustified_enum("lsqpack_read_header_status")
+        .rustified_enum("lsqpack_enc_status")
         .use_core()
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .generate()?;
