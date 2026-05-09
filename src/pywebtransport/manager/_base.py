@@ -108,7 +108,7 @@ class BaseResourceManager[ResourceId, ResourceType: ManageableResource](ABC):
             if self._check_is_closed(resource=resource):
                 try:
                     emitter.off(event_type=self._resource_closed_event_type, handler=closed_handler_wrapper)
-                except (ValueError, KeyError):
+                except (KeyError, ValueError):
                     pass
                 del self._event_handlers[resource_id]
                 raise RuntimeError(f"app_manager validate invalid component={self._resource_name} expected=open")
@@ -175,7 +175,7 @@ class BaseResourceManager[ResourceId, ResourceType: ManageableResource](ABC):
             for _, (emitter, handler) in self._event_handlers.items():
                 try:
                     emitter.off(event_type=self._resource_closed_event_type, handler=handler)
-                except (ValueError, KeyError):
+                except (KeyError, ValueError):
                     pass
             self._event_handlers.clear()
             self._resources.clear()

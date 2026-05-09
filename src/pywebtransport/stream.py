@@ -8,7 +8,7 @@ import weakref
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from types import TracebackType
-from typing import TYPE_CHECKING, Final, Self
+from typing import TYPE_CHECKING, Any, Final, Self
 
 from pywebtransport._protocol.events import (
     UserGetStreamDiagnostics,
@@ -115,13 +115,15 @@ class _BaseStream:
         if connection is None:
             raise ConnectionError(message="wt_connection resolve failed")
 
-        request_id, future = connection._controller._pending_manager.create_request()
-        event = UserGetStreamDiagnostics(request_id=request_id, stream_id=self.stream_id)
-        connection._controller.send_user_event(handle=connection._handle, event=event)
-
         try:
-            diag_data = await future
-        except ConnectionError as e:
+            diag_data: dict[str, Any] = await connection.execute_request(
+                event_factory=lambda request_id: UserGetStreamDiagnostics(
+                    request_id=request_id, stream_id=self.stream_id
+                )
+            )
+        except (ConnectionError, StreamError, asyncio.CancelledError):
+            raise
+        except Exception as e:
             raise StreamError.from_cause(
                 message=f"wt_stream resolve failed stream_id={self.stream_id}", cause=e, stream_id=self.stream_id
             ) from e
@@ -185,19 +187,25 @@ class WebTransportReceiveStream(_BaseStream):
         if connection is None:
             raise ConnectionError(message="wt_connection resolve failed")
 
-        request_id, future = connection._controller._pending_manager.create_request()
-
         limit = max_bytes if max_bytes >= 0 else None
-        event = UserReadStream(request_id=request_id, stream_id=self.stream_id, max_bytes=limit)
-        connection._controller.send_user_event(handle=connection._handle, event=event)
 
         try:
-            data = await future
+            data = await connection.execute_request(
+                event_factory=lambda request_id: UserReadStream(
+                    request_id=request_id, stream_id=self.stream_id, max_bytes=limit
+                )
+            )
         except StreamError as e:
             if e.error_code == ErrorCodes.LIB_STREAM_STATE_ERROR:
                 self._read_eof = True
                 return b""
             raise
+        except (ConnectionError, asyncio.CancelledError):
+            raise
+        except Exception as e:
+            raise StreamError.from_cause(
+                message=f"wt_stream receive failed stream_id={self.stream_id}", cause=e, stream_id=self.stream_id
+            ) from e
 
         if not data and max_bytes != 0:
             self._read_eof = True
@@ -284,15 +292,21 @@ class WebTransportReceiveStream(_BaseStream):
         if connection is None:
             return
 
-        request_id, future = connection._controller._pending_manager.create_request()
-        event = UserStopSending(request_id=request_id, stream_id=self.stream_id, error_code=error_code)
-        connection._controller.send_user_event(handle=connection._handle, event=event)
-
         try:
-            await future
+            await connection.execute_request(
+                event_factory=lambda request_id: UserStopSending(
+                    request_id=request_id, stream_id=self.stream_id, error_code=error_code
+                )
+            )
         except StreamError as e:
             if e.error_code != ErrorCodes.LIB_STREAM_STATE_ERROR:
                 raise
+        except (ConnectionError, asyncio.CancelledError):
+            raise
+        except Exception as e:
+            raise StreamError.from_cause(
+                message=f"wt_stream abort failed stream_id={self.stream_id}", cause=e, stream_id=self.stream_id
+            ) from e
 
     def __aiter__(self) -> AsyncIterator[bytes]:
         """Iterate over the stream chunks."""
@@ -359,23 +373,29 @@ class WebTransportSendStream(_BaseStream):
         if connection is None:
             raise ConnectionError(message="wt_connection resolve failed")
 
-        request_id, future = connection._controller._pending_manager.create_request()
-        event = UserResetStream(request_id=request_id, stream_id=self.stream_id, error_code=error_code)
-        connection._controller.send_user_event(handle=connection._handle, event=event)
-
         try:
-            await future
+            await connection.execute_request(
+                event_factory=lambda request_id: UserResetStream(
+                    request_id=request_id, stream_id=self.stream_id, error_code=error_code
+                )
+            )
         except StreamError as e:
             if e.error_code != ErrorCodes.LIB_STREAM_STATE_ERROR:
                 raise
+        except (ConnectionError, asyncio.CancelledError):
+            raise
+        except Exception as e:
+            raise StreamError.from_cause(
+                message=f"wt_stream abort failed stream_id={self.stream_id}", cause=e, stream_id=self.stream_id
+            ) from e
 
     async def write(self, *, data: Buffer, end_stream: bool = False) -> None:
         """Write data to the stream."""
         try:
             buffer_data = _ensure_buffer(data=data)
         except TypeError as e:
-            raise StreamError.from_cause(
-                message=f"wt_stream validate invalid stream_id={self.stream_id}", cause=e, stream_id=self.stream_id
+            raise StreamError(
+                message=f"wt_stream validate invalid stream_id={self.stream_id}", stream_id=self.stream_id
             ) from e
 
         if not buffer_data and not end_stream:
@@ -385,16 +405,18 @@ class WebTransportSendStream(_BaseStream):
         if connection is None:
             raise ConnectionError(message="wt_connection resolve failed")
 
-        request_id, future = connection._controller._pending_manager.create_request()
-        event = UserSendStreamData(
-            request_id=request_id, stream_id=self.stream_id, data=buffer_data, end_stream=end_stream
-        )
-        connection._controller.send_user_event(handle=connection._handle, event=event)
-
         try:
-            await future
-        except Exception:
+            await connection.execute_request(
+                event_factory=lambda request_id: UserSendStreamData(
+                    request_id=request_id, stream_id=self.stream_id, data=buffer_data, end_stream=end_stream
+                )
+            )
+        except (ConnectionError, StreamError, asyncio.CancelledError):
             raise
+        except Exception as e:
+            raise StreamError.from_cause(
+                message=f"wt_stream send failed stream_id={self.stream_id}", cause=e, stream_id=self.stream_id
+            ) from e
 
     async def write_all(self, *, data: Buffer, chunk_size: int = 65536, end_stream: bool = False) -> None:
         """Write buffer data to the stream in chunks."""

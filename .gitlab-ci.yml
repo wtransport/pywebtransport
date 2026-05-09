@@ -120,8 +120,9 @@ deploy-release:
     - python -m pip install --upgrade pip
     - pip install twine
   script:
+    - REMOTE_TAGS=$(git ls-remote --tags origin) || exit 1
     - |
-      if git ls-remote --tags origin | grep -q "refs/tags/v$VERSION"; then
+      if echo "$REMOTE_TAGS" | grep -q "refs/tags/v$VERSION"; then
         echo "Version v$VERSION already released - skipping"
         exit 0
       fi
@@ -155,11 +156,13 @@ deploy-image:
     - apk add --no-cache ca-certificates git
     - cp "$INTERNAL_CA_CERT" /usr/local/share/ca-certificates/internal_ca.crt
     - update-ca-certificates
+    - git config --global http.sslCAInfo /etc/ssl/certs/ca-certificates.crt
     - echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
   script:
     - ls -la dist/
+    - REMOTE_TAGS=$(git ls-remote --tags origin) || exit 1
     - |
-      if git ls-remote --tags origin | grep -q "refs/tags/v$VERSION"; then
+      if echo "$REMOTE_TAGS" | grep -q "refs/tags/v$VERSION"; then
         echo "Version v$VERSION already released - skipping Docker push to prevent overwriting immutable tags"
         exit 0
       fi

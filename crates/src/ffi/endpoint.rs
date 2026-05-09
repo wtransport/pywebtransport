@@ -3,6 +3,7 @@
 use std::fmt;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::sync::Arc;
+use std::sync::mpsc;
 
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -39,7 +40,12 @@ impl PyEndpoint {
     // Initializes the endpoint proxy and spawns the Tokio reactor background thread.
     #[new]
     #[pyo3(signature = (is_client, config, waker))]
-    fn new(is_client: bool, config: &Bound<'_, PyAny>, waker: &PyWaker) -> PyResult<Self> {
+    fn new(
+        py: Python<'_>,
+        is_client: bool,
+        config: &Bound<'_, PyAny>,
+        waker: &PyWaker,
+    ) -> PyResult<Self> {
         let (endpoint, std_sockets) = if is_client {
             let rust_config = RustClientConfig::try_from(config)?;
             let quic_config = build_client_config(&rust_config)?;
@@ -133,6 +139,7 @@ impl PyEndpoint {
         } = IpcChannels::new();
 
         let waker_callback = waker.clone_waker_callback();
+        let (tx, rx) = mpsc::sync_channel::<Result<(), String>>(0);
 
         std::thread::Builder::new()
             .name("pywebtransport-reactor".into())
@@ -156,6 +163,7 @@ impl PyEndpoint {
 
                             if tokio_sockets.is_empty() {
                                 debug!("sys_socket convert failed");
+                                tx.send(Err("sys_socket convert failed".into())).ok();
                                 return;
                             }
 
@@ -167,15 +175,22 @@ impl PyEndpoint {
                                 waker_callback,
                             );
 
+                            tx.send(Ok(())).ok();
+
                             reactor.run().await;
                         });
                     }
                     Err(e) => {
-                        debug!("rt_engine create failed err={e:?}");
+                        debug!("rt create failed err={e:?}");
+                        tx.send(Err(format!("rt create failed err={e}"))).ok();
                     }
                 }
             })
             .map_err(|e| PyRuntimeError::new_err(format!("sys_thread create failed err={e}")))?;
+
+        py.detach(move || rx.recv())
+            .unwrap_or_else(|e| Err(format!("rt resolve failed err={e}")))
+            .map_err(PyRuntimeError::new_err)?;
 
         Ok(Self {
             local_addrs,

@@ -24,7 +24,14 @@ from pywebtransport._protocol.events import (
 )
 from pywebtransport.constants import ErrorCodes
 from pywebtransport.events import Event, EventEmitter
-from pywebtransport.exceptions import ConnectionError, SessionClosedError, SessionError, StreamError, TimeoutError
+from pywebtransport.exceptions import (
+    ConnectionError,
+    DatagramError,
+    SessionClosedError,
+    SessionError,
+    StreamError,
+    TimeoutError,
+)
 from pywebtransport.stream import WebTransportReceiveStream, WebTransportSendStream, WebTransportStream
 from pywebtransport.types import Address, Buffer, EventType, Headers, SessionId, SessionState, StreamId
 
@@ -193,10 +200,19 @@ class WebTransportSession:
         if connection is None:
             raise ConnectionError(message="wt_connection resolve failed")
 
-        request_id, future = connection._controller._pending_manager.create_request()
-        event = UserAcceptSession(request_id=request_id, session_id=self.session_id, wt_protocol=self.wt_protocol)
-        connection._controller.send_user_event(handle=connection.handle, event=event)
-        await future
+        try:
+            await connection.execute_request(
+                event_factory=lambda request_id: UserAcceptSession(
+                    request_id=request_id, session_id=self.session_id, wt_protocol=self.wt_protocol
+                )
+            )
+        except (ConnectionError, asyncio.CancelledError):
+            raise
+        except Exception as e:
+            raise SessionError.from_cause(
+                message=f"wt_session open failed session_id={self.session_id}", cause=e, session_id=self.session_id
+            ) from e
+
         self._cached_state = SessionState.CONNECTED
 
     async def accept_bidirectional_stream(self) -> WebTransportStream:
@@ -224,16 +240,19 @@ class WebTransportSession:
         if connection is None:
             return
 
-        request_id, future = connection._controller._pending_manager.create_request()
-        event = UserCloseSession(
-            request_id=request_id, session_id=self.session_id, error_code=error_code, reason=reason
-        )
-        connection._controller.send_user_event(handle=connection.handle, event=event)
-
         try:
-            await future
+            await connection.execute_request(
+                event_factory=lambda request_id: UserCloseSession(
+                    request_id=request_id, session_id=self.session_id, error_code=error_code, reason=reason
+                )
+            )
+        except asyncio.CancelledError:
+            pass
         except (ConnectionError, SessionError) as e:
-            _logger.warning("wt_session close failed session_id=%d err=%s", self.session_id, e, exc_info=True)
+            if "channel closed" not in str(e):
+                _logger.warning("wt_session close failed session_id=%d err=%s", self.session_id, e)
+        except Exception as e:
+            _logger.warning("wt_session close failed session_id=%d err=%s", self.session_id, e)
 
     async def create_bidirectional_stream(self) -> WebTransportStream:
         """Instantiate a new bidirectional WebTransport stream."""
@@ -267,18 +286,21 @@ class WebTransportSession:
         if connection is None:
             raise ConnectionError(message="wt_connection resolve failed")
 
-        request_id, future = connection._controller._pending_manager.create_request()
-        event = UserGetSessionDiagnostics(request_id=request_id, session_id=self.session_id)
-
         try:
-            connection._controller.send_user_event(handle=connection.handle, event=event)
-            diag_data: dict[str, Any] = await future
-            diag_data["wt_available_protocols"] = self._wt_available_protocols
-            return SessionDiagnostics(**diag_data)
-        except ConnectionError as e:
+            diag_data: dict[str, Any] = await connection.execute_request(
+                event_factory=lambda request_id: UserGetSessionDiagnostics(
+                    request_id=request_id, session_id=self.session_id
+                )
+            )
+        except (ConnectionError, SessionError, asyncio.CancelledError):
+            raise
+        except Exception as e:
             raise SessionError.from_cause(
                 message=f"wt_session resolve failed session_id={self.session_id}", cause=e, session_id=self.session_id
             ) from e
+
+        diag_data["wt_available_protocols"] = self._wt_available_protocols
+        return SessionDiagnostics(**diag_data)
 
     async def export_keying_material(self, *, label: str, context: Buffer, length: int) -> bytes:
         """Export TLS keying material for this session."""
@@ -286,12 +308,21 @@ class WebTransportSession:
         if connection is None:
             raise ConnectionError(message="wt_connection resolve failed")
 
-        request_id, future = connection._controller._pending_manager.create_request()
-        event = UserExportKeyingMaterial(
-            request_id=request_id, session_id=self.session_id, label=label, context=context, length=length
-        )
-        connection._controller.send_user_event(handle=connection.handle, event=event)
-        return cast(bytes, await future)
+        try:
+            return cast(
+                bytes,
+                await connection.execute_request(
+                    event_factory=lambda request_id: UserExportKeyingMaterial(
+                        request_id=request_id, session_id=self.session_id, label=label, context=context, length=length
+                    )
+                ),
+            )
+        except (ConnectionError, SessionError, asyncio.CancelledError):
+            raise
+        except Exception as e:
+            raise SessionError.from_cause(
+                message=f"wt_session resolve failed session_id={self.session_id}", cause=e, session_id=self.session_id
+            ) from e
 
     async def grant_data_credit(self, *, max_data: int) -> None:
         """Allocate data flow control credit to the peer."""
@@ -299,10 +330,18 @@ class WebTransportSession:
         if connection is None:
             raise ConnectionError(message="wt_connection resolve failed")
 
-        request_id, future = connection._controller._pending_manager.create_request()
-        event = UserGrantDataCredit(request_id=request_id, session_id=self.session_id, max_data=max_data)
-        connection._controller.send_user_event(handle=connection.handle, event=event)
-        await future
+        try:
+            await connection.execute_request(
+                event_factory=lambda request_id: UserGrantDataCredit(
+                    request_id=request_id, session_id=self.session_id, max_data=max_data
+                )
+            )
+        except (ConnectionError, SessionError, asyncio.CancelledError):
+            raise
+        except Exception as e:
+            raise SessionError.from_cause(
+                message=f"wt_session resolve failed session_id={self.session_id}", cause=e, session_id=self.session_id
+            ) from e
 
     async def grant_streams_credit(self, *, is_unidirectional: bool, max_streams: int) -> None:
         """Allocate stream flow control credit to the peer."""
@@ -310,15 +349,21 @@ class WebTransportSession:
         if connection is None:
             raise ConnectionError(message="wt_connection resolve failed")
 
-        request_id, future = connection._controller._pending_manager.create_request()
-        event = UserGrantStreamsCredit(
-            request_id=request_id,
-            session_id=self.session_id,
-            is_unidirectional=is_unidirectional,
-            max_streams=max_streams,
-        )
-        connection._controller.send_user_event(handle=connection.handle, event=event)
-        await future
+        try:
+            await connection.execute_request(
+                event_factory=lambda request_id: UserGrantStreamsCredit(
+                    request_id=request_id,
+                    session_id=self.session_id,
+                    is_unidirectional=is_unidirectional,
+                    max_streams=max_streams,
+                )
+            )
+        except (ConnectionError, SessionError, asyncio.CancelledError):
+            raise
+        except Exception as e:
+            raise SessionError.from_cause(
+                message=f"wt_session resolve failed session_id={self.session_id}", cause=e, session_id=self.session_id
+            ) from e
 
     async def incoming_bidirectional_streams(self) -> AsyncGenerator[WebTransportStream, None]:
         """Yield incoming bidirectional streams until the session is closed."""
@@ -342,10 +387,20 @@ class WebTransportSession:
         if connection is None:
             raise ConnectionError(message="wt_connection resolve failed")
 
-        request_id, future = connection._controller._pending_manager.create_request()
-        event = UserRejectSession(request_id=request_id, session_id=self.session_id, status_code=status_code)
-        connection._controller.send_user_event(handle=connection.handle, event=event)
-        await future
+        try:
+            await connection.execute_request(
+                event_factory=lambda request_id: UserRejectSession(
+                    request_id=request_id, session_id=self.session_id, status_code=status_code
+                )
+            )
+        except asyncio.CancelledError:
+            pass
+        except ConnectionError as e:
+            if "channel closed" not in str(e):
+                _logger.warning("wt_session reject failed session_id=%d err=%s", self.session_id, e)
+        except Exception as e:
+            _logger.warning("wt_session reject failed session_id=%d err=%s", self.session_id, e)
+
         self._cached_state = SessionState.CLOSED
         self._incoming_bidi_streams.put_nowait(None)
         self._incoming_uni_streams.put_nowait(None)
@@ -357,10 +412,18 @@ class WebTransportSession:
         if connection is None:
             raise ConnectionError(message="wt_connection resolve failed")
 
-        request_id, future = connection._controller._pending_manager.create_request()
-        event = UserSendDatagram(request_id=request_id, session_id=self.session_id, data=data)
-        connection._controller.send_user_event(handle=connection.handle, event=event)
-        await future
+        try:
+            await connection.execute_request(
+                event_factory=lambda request_id: UserSendDatagram(
+                    request_id=request_id, session_id=self.session_id, data=data
+                )
+            )
+        except (ConnectionError, DatagramError, SessionError, asyncio.CancelledError):
+            raise
+        except Exception as e:
+            raise SessionError.from_cause(
+                message=f"wt_session send failed session_id={self.session_id}", cause=e, session_id=self.session_id
+            ) from e
 
     async def _create_stream_internal(self, *, is_unidirectional: bool) -> WebTransportStream | WebTransportSendStream:
         """Execute internal logic for stream creation with timeout."""
@@ -368,18 +431,25 @@ class WebTransportSession:
         if connection is None:
             raise ConnectionError(message="wt_connection resolve failed")
 
-        request_id, future = connection._controller._pending_manager.create_request()
-        event = UserCreateStream(request_id=request_id, session_id=self.session_id, is_unidirectional=is_unidirectional)
-        connection._controller.send_user_event(handle=connection.handle, event=event)
-
         try:
             timeout = connection.config.stream_creation_timeout
             async with asyncio.timeout(delay=timeout):
-                stream_id: StreamId = await future
+                stream_id = cast(
+                    StreamId,
+                    await connection.execute_request(
+                        event_factory=lambda request_id: UserCreateStream(
+                            request_id=request_id, session_id=self.session_id, is_unidirectional=is_unidirectional
+                        )
+                    ),
+                )
+        except (ConnectionError, SessionError, asyncio.CancelledError):
+            raise
         except asyncio.TimeoutError:
             raise TimeoutError(message=f"wt_stream create failed session_id={self.session_id}") from None
-        except Exception:
-            raise
+        except Exception as e:
+            raise StreamError.from_cause(
+                message=f"wt_stream create failed session_id={self.session_id}", cause=e
+            ) from e
 
         stream_handle = connection._stream_handles.get(stream_id)
         if stream_handle is None:

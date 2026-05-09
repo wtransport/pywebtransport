@@ -55,7 +55,7 @@ async def test_small_data() -> bool:
 
             logger.info("SUCCESS: All small data transfers completed successfully.")
             return True
-    except (TimeoutError, ConnectionError) as e:
+    except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Test failed due to connection or timeout issue: %s", e)
         return False
     except Exception as e:
@@ -89,7 +89,7 @@ async def test_medium_data() -> bool:
 
             logger.info("SUCCESS: All medium data transfers completed successfully.")
             return True
-    except (TimeoutError, ConnectionError) as e:
+    except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Test failed due to connection or timeout issue: %s", e)
         return False
     except Exception as e:
@@ -127,7 +127,7 @@ async def test_chunked_transfer() -> bool:
 
             logger.info("SUCCESS: Chunked transfer completed successfully.")
             return True
-    except (TimeoutError, ConnectionError) as e:
+    except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Test failed due to connection or timeout issue: %s", e)
         return False
     except Exception as e:
@@ -157,7 +157,7 @@ async def test_binary_data() -> bool:
 
             logger.info("SUCCESS: Binary data transfer completed without corruption.")
             return True
-    except (TimeoutError, ConnectionError) as e:
+    except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Test failed due to connection or timeout issue: %s", e)
         return False
     except Exception as e:
@@ -194,7 +194,7 @@ async def test_performance_benchmark() -> bool:
             logger.info("   - Total round-trip time: %.3fs", duration)
             logger.info("   - Aggregate throughput: %.2f MB/s", throughput)
             return True
-    except (TimeoutError, ConnectionError) as e:
+    except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Test failed due to connection or timeout issue: %s", e)
         return False
     except Exception as e:

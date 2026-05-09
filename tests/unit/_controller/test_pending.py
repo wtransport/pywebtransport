@@ -90,3 +90,12 @@ class TestPendingRequestManager:
     def test_init(self, manager: PendingRequestManager) -> None:
         assert manager._requests == {}
         assert not hasattr(manager, "__dict__")
+
+    @pytest.mark.asyncio
+    async def test_unregister_request(self, manager: PendingRequestManager) -> None:
+        request_id, _ = manager.create_request()
+
+        manager.unregister_request(request_id=request_id)
+
+        assert request_id not in manager._requests
+        manager.unregister_request(request_id=request_id)

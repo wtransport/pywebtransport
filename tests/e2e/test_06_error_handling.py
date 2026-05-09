@@ -45,7 +45,7 @@ async def test_connection_timeout() -> bool:
             await client.connect(url=unreachable_url)
         logger.error("FAILURE: Connection should have failed but it succeeded.")
         return False
-    except (TimeoutError, ConnectionError, ClientError):
+    except (ClientError, ConnectionError, TimeoutError):
         duration = time.time() - start_time
         logger.info("SUCCESS: Connection correctly failed after %.1fs.", duration)
         return True

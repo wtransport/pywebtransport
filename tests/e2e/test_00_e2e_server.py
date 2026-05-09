@@ -190,7 +190,7 @@ async def handle_bidirectional_stream(*, stream: WebTransportStream) -> None:
         request_data = await stream.read_all()
         echo_data = b"ECHO: " + request_data
         await stream.write_all(data=echo_data, end_stream=True)
-    except (asyncio.CancelledError, ConnectionError, StreamError):
+    except (ConnectionError, StreamError, asyncio.CancelledError):
         pass
     except Exception as e:
         logger.error("Bidirectional stream %d error: %s", stream.stream_id, e, exc_info=True)
@@ -216,7 +216,7 @@ async def handle_datagrams(*, session: WebTransportSession) -> None:
     session.events.on(event_type=EventType.DATAGRAM_RECEIVED, handler=datagram_handler)
     try:
         await session.events.wait_for(event_type=EventType.SESSION_CLOSED)
-    except (asyncio.CancelledError, ConnectionError):
+    except (ConnectionError, asyncio.CancelledError):
         pass
     except Exception as e:
         logger.error("Datagram handler error for session %d: %s", session_id, e, exc_info=True)
@@ -261,7 +261,7 @@ async def handle_receive_stream(*, stream: WebTransportReceiveStream) -> None:
     """Handle data from a receive-only stream."""
     try:
         await stream.read_all()
-    except (asyncio.CancelledError, ConnectionError, StreamError):
+    except (ConnectionError, StreamError, asyncio.CancelledError):
         pass
     except Exception as e:
         logger.error("Receive stream %d error: %s", stream.stream_id, e, exc_info=True)

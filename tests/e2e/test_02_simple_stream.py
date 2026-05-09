@@ -45,7 +45,7 @@ async def test_stream_creation() -> bool:
             await stream.close()
             logger.info("Stream closed.")
             return True
-    except (TimeoutError, ConnectionError) as e:
+    except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Connection failed: %s", e)
         return False
     except StreamError as e:
@@ -86,7 +86,7 @@ async def test_simple_echo() -> bool:
                 logger.error("   - Expected: %r", expected_response)
                 logger.error("   - Received: %r", response_data)
                 return False
-    except (TimeoutError, ConnectionError) as e:
+    except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Test failed due to connection or timeout issue: %s", e)
         return False
     except Exception as e:
@@ -128,7 +128,7 @@ async def test_multiple_messages() -> bool:
             else:
                 logger.error("FAILURE: Only %d/%d messages were successful.", success_count, len(messages))
                 return False
-    except (TimeoutError, ConnectionError) as e:
+    except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Test failed due to connection or timeout issue: %s", e)
         return False
     except Exception as e:

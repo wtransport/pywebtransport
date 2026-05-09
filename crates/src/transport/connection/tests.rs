@@ -298,6 +298,18 @@ fn test_process_effects_export_tls_keying_material_processes_safely() {
 }
 
 #[test]
+fn test_process_effects_process_protocol_event_processes_safely() {
+    let mut connection = create_test_connection();
+    let effects = vec![Effect::ProcessProtocolEvent {
+        event: Box::new(ProtocolEvent::InternalCleanupResources),
+    }];
+
+    connection.process_effects(effects, 0.0, Instant::now());
+
+    assert!(connection.pending_effects.is_empty());
+}
+
+#[test]
 fn test_process_effects_reset_quic_stream_removes_send_buffer() {
     let mut connection = create_test_connection();
     let q_id = QuinnStreamId::from(VarInt::from_u32(1));
@@ -310,6 +322,21 @@ fn test_process_effects_reset_quic_stream_removes_send_buffer() {
     connection.process_effects(effects, 0.0, Instant::now());
 
     assert!(!connection.send_buffers.contains_key(&q_id));
+}
+
+#[test]
+fn test_process_effects_send_h3_capsule_processes_safely() {
+    let mut connection = create_test_connection();
+    let effects = vec![Effect::SendH3Capsule {
+        stream_id: 1,
+        capsule_type: 0,
+        capsule_data: Bytes::from_static(b"test"),
+        end_stream: false,
+    }];
+
+    connection.process_effects(effects, 0.0, Instant::now());
+
+    assert!(connection.pending_effects.is_empty());
 }
 
 #[test]

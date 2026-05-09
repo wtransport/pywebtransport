@@ -82,7 +82,7 @@ class InteropServer(ServerApp):
             for i in range(count):
                 try:
                     stream: WebTransportSendStream = await session.create_unidirectional_stream()
-                except (TimeoutError, StreamError):
+                except (StreamError, TimeoutError):
                     logger.warning("Session %d: failed to create initial stream", session.session_id)
                     await session.close(error_code=ERR_DA_YAMN, reason="Insufficient stream credit")
                     return

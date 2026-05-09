@@ -47,3 +47,7 @@ class PendingRequestManager:
         future = self._requests.pop(request_id, None)
         if future is not None and not future.done():
             future.set_exception(exception)
+
+    def unregister_request(self, *, request_id: RequestId) -> None:
+        """Remove a request from active ownership tracking."""
+        self._requests.pop(request_id, None)

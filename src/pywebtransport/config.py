@@ -164,7 +164,7 @@ class BaseConfig(ABC):
 
         try:
             _validate_timeout(timeout=self.close_timeout)
-        except (ValueError, TypeError) as e:
+        except (TypeError, ValueError) as e:
             raise ConfigurationError(
                 message=f"cfg_close_timeout validate invalid actual={self.close_timeout}",
                 config_key="close_timeout",
@@ -183,7 +183,7 @@ class BaseConfig(ABC):
 
         try:
             _validate_timeout(timeout=self.connection_idle_timeout)
-        except (ValueError, TypeError) as e:
+        except (TypeError, ValueError) as e:
             raise ConfigurationError(
                 message=f"cfg_connection_idle_timeout validate invalid actual={self.connection_idle_timeout}",
                 config_key="connection_idle_timeout",
@@ -213,7 +213,7 @@ class BaseConfig(ABC):
 
         try:
             _validate_timeout(timeout=self.keep_alive_interval)
-        except (ValueError, TypeError) as e:
+        except (TypeError, ValueError) as e:
             raise ConfigurationError(
                 message=f"cfg_keep_alive_interval validate invalid actual={self.keep_alive_interval}",
                 config_key="keep_alive_interval",
@@ -299,7 +299,7 @@ class BaseConfig(ABC):
 
         try:
             _validate_timeout(timeout=self.pending_event_ttl)
-        except (ValueError, TypeError) as e:
+        except (TypeError, ValueError) as e:
             raise ConfigurationError(
                 message=f"cfg_pending_event_ttl validate invalid actual={self.pending_event_ttl}",
                 config_key="pending_event_ttl",
@@ -308,7 +308,7 @@ class BaseConfig(ABC):
 
         try:
             _validate_timeout(timeout=self.read_timeout)
-        except (ValueError, TypeError) as e:
+        except (TypeError, ValueError) as e:
             raise ConfigurationError(
                 message=f"cfg_read_timeout validate invalid actual={self.read_timeout}",
                 config_key="read_timeout",
@@ -317,7 +317,7 @@ class BaseConfig(ABC):
 
         try:
             _validate_timeout(timeout=self.resource_cleanup_interval)
-        except (ValueError, TypeError) as e:
+        except (TypeError, ValueError) as e:
             raise ConfigurationError(
                 message=f"cfg_resource_cleanup_interval validate invalid actual={self.resource_cleanup_interval}",
                 config_key="resource_cleanup_interval",
@@ -326,7 +326,7 @@ class BaseConfig(ABC):
 
         try:
             _validate_timeout(timeout=self.stream_creation_timeout)
-        except (ValueError, TypeError) as e:
+        except (TypeError, ValueError) as e:
             raise ConfigurationError(
                 message=f"cfg_stream_creation_timeout validate invalid actual={self.stream_creation_timeout}",
                 config_key="stream_creation_timeout",
@@ -335,7 +335,7 @@ class BaseConfig(ABC):
 
         try:
             _validate_timeout(timeout=self.write_timeout)
-        except (ValueError, TypeError) as e:
+        except (TypeError, ValueError) as e:
             raise ConfigurationError(
                 message=f"cfg_write_timeout validate invalid actual={self.write_timeout}",
                 config_key="write_timeout",
@@ -370,7 +370,7 @@ class ClientConfig(BaseConfig):
 
         try:
             _validate_timeout(timeout=self.connect_timeout)
-        except (ValueError, TypeError) as e:
+        except (TypeError, ValueError) as e:
             raise ConfigurationError(
                 message=f"cfg_connect_timeout validate invalid actual={self.connect_timeout}",
                 config_key="connect_timeout",
@@ -379,7 +379,7 @@ class ClientConfig(BaseConfig):
 
         try:
             _validate_timeout(timeout=self.connection_attempt_delay)
-        except (ValueError, TypeError) as e:
+        except (TypeError, ValueError) as e:
             raise ConfigurationError(
                 message=f"cfg_connection_attempt_delay validate invalid actual={self.connection_attempt_delay}",
                 config_key="connection_attempt_delay",

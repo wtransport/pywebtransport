@@ -58,7 +58,7 @@ async def test_sequential_streams() -> bool:
 
             logger.info("SUCCESS: All sequential streams worked correctly.")
             return True
-    except (TimeoutError, ConnectionError) as e:
+    except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Test failed due to connection or timeout issue: %s", e)
         return False
     except Exception as e:
@@ -110,7 +110,7 @@ async def test_concurrent_streams() -> bool:
             else:
                 logger.error("FAILURE: %d/%d concurrent streams failed.", num_streams - success_count, num_streams)
                 return False
-    except (TimeoutError, ConnectionError) as e:
+    except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Test failed due to connection or timeout issue: %s", e)
         return False
     except Exception as e:

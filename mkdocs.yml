@@ -76,7 +76,7 @@ plugins:
       default_handler: python
       handlers:
         python:
-          paths: [ src ]
+          paths: [src]
           options:
             docstring_style: google
             show_symbol_type_heading: true

@@ -23,7 +23,7 @@ async def test_client_initiated_close(
         server_entered.set()
         try:
             await session.events.wait_for(event_type=EventType.SESSION_CLOSED)
-        except (asyncio.CancelledError, Exception):
+        except (Exception, asyncio.CancelledError):
             pass
 
     session = await client.connect(url=url)

@@ -8,7 +8,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Final
 
-from pywebtransport import ClientConfig, ConnectionError, Event, TimeoutError, WebTransportClient, WebTransportError
+from pywebtransport import ClientConfig, ConnectionError, DatagramError, Event, TimeoutError, WebTransportClient
 from pywebtransport.types import EventType
 from pywebtransport.utils import init_tracing
 
@@ -58,7 +58,7 @@ async def test_basic_datagram() -> bool:
             else:
                 logger.error("FAILURE: Datagram echo mismatch. Got: %r", response)
                 return False
-    except (TimeoutError, ConnectionError) as e:
+    except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Test failed due to connection or timeout issue: %s", e)
         return False
     except Exception as e:
@@ -153,13 +153,9 @@ async def test_datagram_sizes() -> bool:
                 await session.send_datagram(data=oversized_data)
                 logger.error("FAILURE: Sending oversized datagram should have raised an exception.")
                 return False
-            except WebTransportError as e:
-                if "wt_datagram validate exceeded" in str(e):
-                    logger.info("SUCCESS: Oversized datagram correctly raised WebTransportError: %s", e)
-                    return True
-                else:
-                    logger.error("FAILURE: Caught WebTransportError, but message mismatch: %s", e)
-                    return False
+            except DatagramError as e:
+                logger.info("SUCCESS: Oversized datagram correctly raised DatagramError: %s", e)
+                return True
             except Exception as e:
                 logger.error("FAILURE: Unexpected exception type for oversized datagram: %s (%s)", type(e).__name__, e)
                 return False

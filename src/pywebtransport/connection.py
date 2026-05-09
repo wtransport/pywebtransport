@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Any, Self
+from typing import Any, Self, cast
 
 from pywebtransport._controller.controller import EndpointController
 from pywebtransport._protocol.events import (
+    ProtocolEvent,
     UserCloseConnection,
     UserCloseConnectionGracefully,
     UserCreateSession,
@@ -173,19 +175,17 @@ class WebTransportConnection:
 
         _logger.debug("wt_connection close connection_handle=%d", self._handle)
 
-        request_id, future = self._controller._pending_manager.create_request()
-        event = UserCloseConnection(request_id=request_id, error_code=error_code, reason=reason)
-        self._controller.send_user_event(handle=self._handle, event=event)
-
         try:
             async with asyncio.timeout(delay=self._config.close_timeout):
-                await future
-        except (asyncio.TimeoutError, asyncio.CancelledError):
+                await self.execute_request(
+                    event_factory=lambda request_id: UserCloseConnection(
+                        request_id=request_id, error_code=error_code, reason=reason
+                    )
+                )
+        except (asyncio.CancelledError, asyncio.TimeoutError):
             pass
         except ConnectionError as e:
-            if "Connection closed" in str(e):
-                _logger.debug("wt_connection close failed connection_handle=%d err=%s", self._handle, e)
-            else:
+            if "channel closed" not in str(e):
                 _logger.warning("wt_connection close failed connection_handle=%d err=%s", self._handle, e)
         except Exception as e:
             _logger.warning("wt_connection close failed connection_handle=%d err=%s", self._handle, e)
@@ -197,20 +197,19 @@ class WebTransportConnection:
         if not self.is_client:
             raise ConnectionError(message=f"wt_connection validate failed actual={self.is_client} expected=true")
 
-        request_id, future = self._controller._pending_manager.create_request()
-        event = UserCreateSession(
-            request_id=request_id,
-            path=path,
-            headers=headers if headers is not None else {},
-            wt_available_protocols=wt_available_protocols,
-        )
-        self._controller.send_user_event(handle=self._handle, event=event)
-
         try:
-            session_id: SessionId = await future
-        except ConnectionError:
-            raise
-        except asyncio.CancelledError:
+            session_id = cast(
+                SessionId,
+                await self.execute_request(
+                    event_factory=lambda request_id: UserCreateSession(
+                        request_id=request_id,
+                        path=path,
+                        headers=headers if headers is not None else {},
+                        wt_available_protocols=wt_available_protocols,
+                    )
+                ),
+            )
+        except (ConnectionError, asyncio.CancelledError):
             raise
         except asyncio.TimeoutError:
             raise TimeoutError(message=f"wt_session create failed connection_handle={self._handle}") from None
@@ -227,14 +226,30 @@ class WebTransportConnection:
 
     async def diagnostics(self) -> ConnectionDiagnostics:
         """Retrieve diagnostic information about the connection."""
-        request_id, future = self._controller._pending_manager.create_request()
-        event = UserGetConnectionDiagnostics(request_id=request_id)
-        self._controller.send_user_event(handle=self._handle, event=event)
+        try:
+            diag_data: dict[str, Any] = await self.execute_request(
+                event_factory=lambda request_id: UserGetConnectionDiagnostics(request_id=request_id)
+            )
+        except (ConnectionError, asyncio.CancelledError):
+            raise
+        except Exception as e:
+            raise ConnectionError.from_cause(
+                message=f"wt_connection resolve failed connection_handle={self._handle}",
+                cause=e,
+                connection_handle=self._handle,
+            ) from e
 
-        diag_data: dict[str, Any] = await future
         diag_data["active_session_handles"] = len(self._session_handles)
         diag_data["active_stream_handles"] = len(self._stream_handles)
         return ConnectionDiagnostics(**diag_data)
+
+    async def execute_request(self, *, event_factory: Callable[[int], ProtocolEvent]) -> Any:
+        """Execute an asynchronous IPC request via the controller."""
+
+        def _dispatch(request_id: int) -> None:
+            self._controller.send_user_event(handle=self._handle, event=event_factory(request_id))
+
+        return await self._controller.execute_request(dispatcher=_dispatch)
 
     def get_all_sessions(self) -> list[WebTransportSession]:
         """Retrieve a list of all active session handles."""
@@ -244,15 +259,16 @@ class WebTransportConnection:
         """Initiate a graceful shutdown of the connection."""
         _logger.debug("wt_connection drain connection_handle=%d", self._handle)
 
-        request_id, future = self._controller._pending_manager.create_request()
-        event = UserCloseConnectionGracefully(request_id=request_id)
-        self._controller.send_user_event(handle=self._handle, event=event)
-
         try:
             async with asyncio.timeout(delay=self._config.close_timeout):
-                await future
-        except asyncio.TimeoutError:
+                await self.execute_request(
+                    event_factory=lambda request_id: UserCloseConnectionGracefully(request_id=request_id)
+                )
+        except (asyncio.CancelledError, asyncio.TimeoutError):
             _logger.warning("wt_connection drain failed connection_handle=%d", self._handle)
+        except ConnectionError as e:
+            if "channel closed" not in str(e):
+                _logger.warning("wt_connection drain failed connection_handle=%d err=%s", self._handle, e)
         except Exception as e:
             _logger.warning("wt_connection drain failed connection_handle=%d err=%s", self._handle, e)
 

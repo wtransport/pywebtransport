@@ -77,7 +77,7 @@ async def test_basic_connection() -> bool:
             await session.close()
             logger.info("Session closed successfully")
             return True
-    except (TimeoutError, ConnectionError) as e:
+    except (ConnectionError, TimeoutError) as e:
         logger.error("FAILED: Connection error - %s", e)
         logger.error("Possible issues:")
         logger.error("   - Server not running")

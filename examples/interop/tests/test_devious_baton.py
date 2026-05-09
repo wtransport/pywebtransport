@@ -130,7 +130,7 @@ class DeviousBatonTest:
         try:
             async with self._connect(url=url):
                 pass
-        except (ConnectionError, ClientError, SessionError) as e:
+        except (ClientError, ConnectionError, SessionError) as e:
             if "0x10b" in str(e).lower() or "400" in str(e):
                 return
         raise TestFailure("Server accepted invalid version 99")
@@ -141,7 +141,7 @@ class DeviousBatonTest:
         try:
             async with self._connect(url=url):
                 pass
-        except (ConnectionError, ClientError, SessionError) as e:
+        except (ClientError, ConnectionError, SessionError) as e:
             if "0x10b" in str(e).lower() or "400" in str(e):
                 return
         raise TestFailure("Server accepted invalid count 999999")
@@ -152,7 +152,7 @@ class DeviousBatonTest:
         try:
             async with self._connect(url=url):
                 pass
-        except (ConnectionError, ClientError, SessionError) as e:
+        except (ClientError, ConnectionError, SessionError) as e:
             if "0x10b" in str(e).lower() or "400" in str(e):
                 return
         raise TestFailure("Server accepted invalid baton value 0")

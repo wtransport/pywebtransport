@@ -62,7 +62,7 @@ class SessionManager(BaseResourceManager[SessionId, WebTransportSession]):
                 emitter, handler = self._event_handlers.pop(session_id)
                 try:
                     emitter.off(event_type=self._resource_closed_event_type, handler=handler)
-                except (ValueError, KeyError):
+                except (KeyError, ValueError):
                     pass
 
             removed_session = self._resources.pop(session_id, None)

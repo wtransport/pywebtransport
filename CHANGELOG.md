@@ -7,9 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planned for future release
+
+_(No planned changes for the next release yet.)_
+
+## [0.17.1] - 2026-05-09
+
+This release resolves initialization race conditions, asynchronous task memory leaks, and Windows NT kernel compatibility issues to stabilize the core runtime environment.
+
 ### Fixed
 
 - **Windows Compatibility**: Resolved MSVC compilation failures and IOCP runtime regressions on Windows NT kernels. Enforced strict Rust-native enumeration layouts via `rustified_enum` in the FFI generation pipeline to resolve `i32`/`u32` ABI mismatches within the QPACK layer. Migrated the internal IPC waker to a bidirectional `socketpair` mechanism, replacing the unsupported `add_reader` pipe dependency to establish compatibility with the `ProactorEventLoop`.
+- **Reactor Initialization Sync**: Resolved initialization race conditions by implementing a synchronous handshake (`mpsc::sync_channel` and `py.detach`) during `PyEndpoint` instantiation, ensuring the background Tokio reactor is fully operational before releasing the Python thread.
+- **Asynchronous Task Leaks**: Resolved memory leaks during task cancellations. Unified the request dispatching architecture via an `execute_request` abstraction and an `event_factory` closure pattern. This structural refactoring guarantees `Future` teardown upon `CancelledError` or `TimeoutError` and prevents event loop pollution from isolated background exceptions.
+- **Protocol Observability**: Addressed silent failures in the HTTP/3 transport layer by explicitly closing QUIC connections with defined error codes upon control stream creation failures. Standardized exception handling across the API layer to suppress expected channel closure warnings while preserving tracebacks for unrecoverable failures.
 
 ## [0.17.0] - 2026-04-29
 
@@ -919,7 +930,9 @@ This is a major release focused on enhancing runtime safety and modernizing the 
 - cryptography (>=45.0.4,<46.0.0) for SSL/TLS operations
 - typing-extensions (>=4.14.0,<5.0.0) for Python <3.10 support
 
-[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.16.1...HEAD
+[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.17.1...HEAD
+[0.17.1]: https://github.com/wtransport/pywebtransport/compare/v0.17.0...v0.17.1
+[0.17.0]: https://github.com/wtransport/pywebtransport/compare/v0.16.1...v0.17.0
 [0.16.1]: https://github.com/wtransport/pywebtransport/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/wtransport/pywebtransport/compare/v0.15.1...v0.16.0
 [0.15.1]: https://github.com/wtransport/pywebtransport/compare/v0.15.0...v0.15.1

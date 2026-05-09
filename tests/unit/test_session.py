@@ -12,6 +12,7 @@ from pytest_mock import MockerFixture
 from pywebtransport import (
     ClientConfig,
     ConnectionError,
+    DatagramError,
     ErrorCodes,
     Event,
     SessionClosedError,
@@ -23,7 +24,6 @@ from pywebtransport import (
     WebTransportSession,
     WebTransportStream,
 )
-from pywebtransport._controller.controller import EndpointController
 from pywebtransport._protocol.events import (
     UserAcceptSession,
     UserCloseSession,
@@ -78,8 +78,8 @@ class TestSessionDiagnostics:
             ready_at=101.0,
             session_id=1,
             state=SessionState.CONNECTED,
-            wt_protocol="p1",
             wt_available_protocols=["p1"],
+            wt_protocol="p1",
         )
 
         assert diag.session_id == 1
@@ -111,23 +111,15 @@ class TestWebTransportSession:
         return cast(MagicMock, conf)
 
     @pytest.fixture
-    def mock_connection(self, mock_controller: MagicMock, mock_config: MagicMock, mocker: MockerFixture) -> MagicMock:
+    def mock_connection(self, mock_config: MagicMock, mocker: MockerFixture) -> MagicMock:
         conn = mocker.Mock(spec=WebTransportConnection)
         conn.config = mock_config
-        conn._controller = mock_controller
         conn.handle = 42
         conn.remote_address = ("127.0.0.1", 443)
         conn._stream_handles = {}
+        conn.execute_request = mocker.AsyncMock()
 
         return cast(MagicMock, conn)
-
-    @pytest.fixture
-    def mock_controller(self, mocker: MockerFixture) -> MagicMock:
-        ctrl = mocker.Mock(spec=EndpointController)
-        ctrl._pending_manager = mocker.Mock()
-        ctrl._pending_manager.create_request.side_effect = lambda: (1, asyncio.Future())
-
-        return cast(MagicMock, ctrl)
 
     @pytest.fixture
     def session(self, mock_connection: MagicMock) -> WebTransportSession:
@@ -152,6 +144,20 @@ class TestWebTransportSession:
         assert result is stream
 
     @pytest.mark.asyncio
+    async def test_accept_cancelled(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
+        mock_connection.execute_request.side_effect = asyncio.CancelledError
+
+        with pytest.raises(expected_exception=asyncio.CancelledError):
+            await session.accept()
+
+    @pytest.mark.asyncio
+    async def test_accept_connection_error(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
+        mock_connection.execute_request.side_effect = ConnectionError(message="fail")
+
+        with pytest.raises(expected_exception=ConnectionError):
+            await session.accept()
+
+    @pytest.mark.asyncio
     async def test_accept_connection_gone(self, session: WebTransportSession) -> None:
         session._connection = lambda: None  # type: ignore[assignment]
 
@@ -159,19 +165,22 @@ class TestWebTransportSession:
             await session.accept()
 
     @pytest.mark.asyncio
-    async def test_accept_success(self, session: WebTransportSession, mock_controller: MagicMock) -> None:
-        fut: asyncio.Future[None] = asyncio.Future()
-        mock_controller._pending_manager.create_request.side_effect = None
-        mock_controller._pending_manager.create_request.return_value = (1, fut)
-        fut.set_result(None)
+    async def test_accept_generic_error(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
+        mock_connection.execute_request.side_effect = ValueError("fail")
 
+        with pytest.raises(expected_exception=SessionError, match="wt_session open failed session_id=1"):
+            await session.accept()
+
+    @pytest.mark.asyncio
+    async def test_accept_success(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
+        mock_connection.execute_request.return_value = None
         session.wt_protocol = "h3"
+
         await session.accept()
 
-        kwargs = mock_controller.send_user_event.call_args[1]
+        mock_connection.execute_request.assert_awaited_once()
+        event = mock_connection.execute_request.call_args.kwargs["event_factory"](123)
 
-        assert kwargs["handle"] == 42
-        event = kwargs["event"]
         assert isinstance(event, UserAcceptSession)
         assert event.session_id == 1
         assert event.wt_protocol == "h3"
@@ -204,64 +213,97 @@ class TestWebTransportSession:
     async def test_close(
         self,
         session: WebTransportSession,
-        mock_controller: MagicMock,
+        mock_connection: MagicMock,
         test_error_code: int | None,
         test_reason: str | None,
         expected_code: int,
         expected_reason: str | None,
     ) -> None:
-        fut: asyncio.Future[None] = asyncio.Future()
-        mock_controller._pending_manager.create_request.side_effect = None
-        mock_controller._pending_manager.create_request.return_value = (1, fut)
-        fut.set_result(None)
+        mock_connection.execute_request.return_value = None
 
         if test_error_code is not None:
             await session.close(error_code=test_error_code, reason=test_reason)
         else:
             await session.close()
 
-        mock_controller._pending_manager.create_request.assert_called_once()
-        mock_controller.send_user_event.assert_called_once()
-        kwargs = mock_controller.send_user_event.call_args[1]
+        mock_connection.execute_request.assert_awaited_once()
+        event = mock_connection.execute_request.call_args.kwargs["event_factory"](123)
 
-        assert kwargs["handle"] == 42
-        event = kwargs["event"]
         assert isinstance(event, UserCloseSession)
         assert event.session_id == 1
         assert event.error_code == expected_code
         assert event.reason == expected_reason
 
     @pytest.mark.asyncio
-    async def test_close_already_closed(self, session: WebTransportSession, mock_controller: MagicMock) -> None:
+    async def test_close_already_closed(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
         session._cached_state = SessionState.CLOSED
 
         await session.close()
 
-        mock_controller._pending_manager.create_request.assert_not_called()
+        mock_connection.execute_request.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_close_connection_gone(self, session: WebTransportSession, mock_controller: MagicMock) -> None:
-        session._connection = lambda: None  # type: ignore[assignment]
-
-        await session.close()
-
-        mock_controller._pending_manager.create_request.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_close_error_logging(
-        self, session: WebTransportSession, mock_controller: MagicMock, mocker: MockerFixture
+    async def test_close_cancelled(
+        self, session: WebTransportSession, mock_connection: MagicMock, mocker: MockerFixture
     ) -> None:
-        fut: asyncio.Future[None] = asyncio.Future()
-        mock_controller._pending_manager.create_request.side_effect = None
-        mock_controller._pending_manager.create_request.return_value = (1, fut)
-        fut.set_exception(ConnectionError(message="Gone"))
+        mock_connection.execute_request.side_effect = asyncio.CancelledError
         spy_logger = mocker.patch(target="pywebtransport.session._logger")
 
         await session.close()
 
-        spy_logger.warning.assert_called_with(
-            "wt_session close failed session_id=%d err=%s", 1, mocker.ANY, exc_info=True
-        )
+        spy_logger.warning.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_close_connection_error_channel_closed(
+        self, session: WebTransportSession, mock_connection: MagicMock, mocker: MockerFixture
+    ) -> None:
+        mock_connection.execute_request.side_effect = ConnectionError(message="channel closed")
+        spy_logger = mocker.patch(target="pywebtransport.session._logger")
+
+        await session.close()
+
+        spy_logger.warning.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_close_connection_error_warning(
+        self, session: WebTransportSession, mock_connection: MagicMock, mocker: MockerFixture
+    ) -> None:
+        mock_connection.execute_request.side_effect = ConnectionError(message="fail")
+        spy_logger = mocker.patch(target="pywebtransport.session._logger")
+
+        await session.close()
+
+        spy_logger.warning.assert_called_with("wt_session close failed session_id=%d err=%s", 1, mocker.ANY)
+
+    @pytest.mark.asyncio
+    async def test_close_connection_gone(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
+        session._connection = lambda: None  # type: ignore[assignment]
+
+        await session.close()
+
+        mock_connection.execute_request.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_close_generic_error(
+        self, session: WebTransportSession, mock_connection: MagicMock, mocker: MockerFixture
+    ) -> None:
+        mock_connection.execute_request.side_effect = ValueError("fail")
+        spy_logger = mocker.patch(target="pywebtransport.session._logger")
+
+        await session.close()
+
+        spy_logger.warning.assert_called_with("wt_session close failed session_id=%d err=%s", 1, mocker.ANY)
+
+    @pytest.mark.asyncio
+    async def test_close_session_error_warning(
+        self, session: WebTransportSession, mock_connection: MagicMock, mocker: MockerFixture
+    ) -> None:
+        mock_connection.execute_request.side_effect = SessionError(message="fail", session_id=1)
+        spy_logger = mocker.patch(target="pywebtransport.session._logger")
+
+        await session.close()
+
+        spy_logger.warning.assert_called_with("wt_session close failed session_id=%d err=%s", 1, mocker.ANY)
 
     @pytest.mark.asyncio
     async def test_context_manager(self, session: WebTransportSession, mocker: MockerFixture) -> None:
@@ -273,6 +315,22 @@ class TestWebTransportSession:
         spy_close.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_create_stream_cancelled(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
+        mock_connection.execute_request.side_effect = asyncio.CancelledError
+
+        with pytest.raises(expected_exception=asyncio.CancelledError):
+            await session.create_bidirectional_stream()
+
+    @pytest.mark.asyncio
+    async def test_create_stream_connection_error(
+        self, session: WebTransportSession, mock_connection: MagicMock
+    ) -> None:
+        mock_connection.execute_request.side_effect = ConnectionError(message="fail")
+
+        with pytest.raises(expected_exception=ConnectionError):
+            await session.create_bidirectional_stream()
+
+    @pytest.mark.asyncio
     async def test_create_stream_connection_gone(self, session: WebTransportSession) -> None:
         session._connection = lambda: None  # type: ignore[assignment]
 
@@ -280,24 +338,16 @@ class TestWebTransportSession:
             await session.create_bidirectional_stream()
 
     @pytest.mark.asyncio
-    async def test_create_stream_generic_error(self, session: WebTransportSession, mock_controller: MagicMock) -> None:
-        fut: asyncio.Future[int] = asyncio.Future()
-        mock_controller._pending_manager.create_request.side_effect = None
-        mock_controller._pending_manager.create_request.return_value = (1, fut)
-        fut.set_exception(ValueError("Fail"))
+    async def test_create_stream_generic_error(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
+        mock_connection.execute_request.side_effect = ValueError("fail")
 
-        with pytest.raises(expected_exception=ValueError, match="Fail"):
+        with pytest.raises(expected_exception=StreamError, match="wt_stream create failed session_id=1"):
             await session.create_bidirectional_stream()
 
     @pytest.mark.asyncio
-    async def test_create_stream_handle_missing(
-        self, session: WebTransportSession, mock_controller: MagicMock, mock_connection: MagicMock
-    ) -> None:
-        fut: asyncio.Future[int] = asyncio.Future()
-        mock_controller._pending_manager.create_request.side_effect = None
-        mock_controller._pending_manager.create_request.return_value = (1, fut)
+    async def test_create_stream_handle_missing(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
+        mock_connection.execute_request.return_value = 103
         mock_connection._stream_handles = {}
-        fut.set_result(103)
 
         with pytest.raises(expected_exception=StreamError, match="wt_stream resolve failed stream_id=103"):
             await session.create_bidirectional_stream()
@@ -306,16 +356,12 @@ class TestWebTransportSession:
     async def test_create_stream_invalid_handle_type(
         self,
         session: WebTransportSession,
-        mock_controller: MagicMock,
         mock_connection: MagicMock,
         mocker: MockerFixture,
     ) -> None:
-        fut: asyncio.Future[int] = asyncio.Future()
-        mock_controller._pending_manager.create_request.side_effect = None
-        mock_controller._pending_manager.create_request.return_value = (1, fut)
+        mock_connection.execute_request.return_value = 104
         mock_recv = mocker.Mock(spec=WebTransportReceiveStream)
         mock_connection._stream_handles = {104: mock_recv}
-        fut.set_result(104)
 
         with pytest.raises(expected_exception=StreamError, match=r"wt_stream validate invalid actual=.* stream_id=104"):
             await session.create_bidirectional_stream()
@@ -339,19 +385,15 @@ class TestWebTransportSession:
     async def test_create_stream_mismatch_type(
         self,
         session: WebTransportSession,
-        mock_controller: MagicMock,
         mock_connection: MagicMock,
         mocker: MockerFixture,
         method: str,
         wrong_type: type,
         error_msg: str,
     ) -> None:
-        fut: asyncio.Future[int] = asyncio.Future()
-        mock_controller._pending_manager.create_request.side_effect = None
-        mock_controller._pending_manager.create_request.return_value = (1, fut)
+        mock_connection.execute_request.return_value = 105
         mock_wrong = mocker.Mock(spec=wrong_type)
         mock_connection._stream_handles = {105: mock_wrong}
-        fut.set_result(105)
         create_method = getattr(session, method)
 
         with pytest.raises(expected_exception=StreamError, match=error_msg):
@@ -368,7 +410,6 @@ class TestWebTransportSession:
     async def test_create_stream_success(
         self,
         session: WebTransportSession,
-        mock_controller: MagicMock,
         mock_connection: MagicMock,
         mocker: MockerFixture,
         method: str,
@@ -376,47 +417,39 @@ class TestWebTransportSession:
         is_uni: bool,
         req_id: int,
     ) -> None:
-        fut: asyncio.Future[int] = asyncio.Future()
-        mock_controller._pending_manager.create_request.side_effect = None
-        mock_controller._pending_manager.create_request.return_value = (1, fut)
+        mock_connection.execute_request.return_value = req_id
         mock_stream = mocker.Mock(spec=stream_type)
         mock_connection._stream_handles = {req_id: mock_stream}
-        fut.set_result(req_id)
         create_method = getattr(session, method)
 
         stream = await create_method()
 
         assert stream is mock_stream
-        kwargs = mock_controller.send_user_event.call_args[1]
+        mock_connection.execute_request.assert_awaited_once()
+        event = mock_connection.execute_request.call_args.kwargs["event_factory"](123)
 
-        assert kwargs["handle"] == 42
-        event = kwargs["event"]
         assert isinstance(event, UserCreateStream)
         assert event.is_unidirectional is is_uni
 
     @pytest.mark.asyncio
-    async def test_create_stream_timeout(
-        self, session: WebTransportSession, mock_controller: MagicMock, mocker: MockerFixture
-    ) -> None:
-        fut: asyncio.Future[int] = asyncio.Future()
-        mock_controller._pending_manager.create_request.side_effect = None
-        mock_controller._pending_manager.create_request.return_value = (1, fut)
-        mocker.patch(target="asyncio.timeout", side_effect=asyncio.TimeoutError)
+    async def test_create_stream_timeout(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
+        mock_connection.execute_request.side_effect = asyncio.TimeoutError
 
-        with pytest.raises(
-            expected_exception=TimeoutError,
-            match="wt_stream create failed session_id=1",
-        ):
+        with pytest.raises(expected_exception=TimeoutError, match="wt_stream create failed session_id=1"):
             await session.create_bidirectional_stream()
 
     @pytest.mark.asyncio
-    async def test_diagnostics_connection_error(self, session: WebTransportSession, mock_controller: MagicMock) -> None:
-        fut: asyncio.Future[dict[str, Any]] = asyncio.Future()
-        mock_controller._pending_manager.create_request.side_effect = None
-        mock_controller._pending_manager.create_request.return_value = (1, fut)
-        fut.set_exception(ConnectionError(message="Closed"))
+    async def test_diagnostics_cancelled(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
+        mock_connection.execute_request.side_effect = asyncio.CancelledError
 
-        with pytest.raises(expected_exception=SessionError, match="wt_session resolve failed session_id=1"):
+        with pytest.raises(expected_exception=asyncio.CancelledError):
+            await session.diagnostics()
+
+    @pytest.mark.asyncio
+    async def test_diagnostics_connection_error(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
+        mock_connection.execute_request.side_effect = ConnectionError(message="Closed")
+
+        with pytest.raises(expected_exception=ConnectionError):
             await session.diagnostics()
 
     @pytest.mark.asyncio
@@ -427,10 +460,21 @@ class TestWebTransportSession:
             await session.diagnostics()
 
     @pytest.mark.asyncio
-    async def test_diagnostics_success(self, session: WebTransportSession, mock_controller: MagicMock) -> None:
-        fut: asyncio.Future[dict[str, Any]] = asyncio.Future()
-        mock_controller._pending_manager.create_request.side_effect = None
-        mock_controller._pending_manager.create_request.return_value = (1, fut)
+    async def test_diagnostics_generic_error(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
+        mock_connection.execute_request.side_effect = ValueError("fail")
+
+        with pytest.raises(expected_exception=SessionError, match="wt_session resolve failed session_id=1"):
+            await session.diagnostics()
+
+    @pytest.mark.asyncio
+    async def test_diagnostics_session_error(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
+        mock_connection.execute_request.side_effect = SessionError(message="fail", session_id=1)
+
+        with pytest.raises(expected_exception=SessionError):
+            await session.diagnostics()
+
+    @pytest.mark.asyncio
+    async def test_diagnostics_success(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
         data: dict[str, Any] = {
             "active_streams": [],
             "blocked_streams": [],
@@ -468,7 +512,7 @@ class TestWebTransportSession:
             "state": SessionState.CONNECTED,
             "wt_protocol": "p1",
         }
-        fut.set_result(data)
+        mock_connection.execute_request.return_value = data
         session._wt_available_protocols = ["p1"]
 
         diag = await session.diagnostics()
@@ -476,10 +520,9 @@ class TestWebTransportSession:
         assert isinstance(diag, SessionDiagnostics)
         assert diag.session_id == 1
         assert diag.wt_available_protocols == ["p1"]
-        kwargs = mock_controller.send_user_event.call_args[1]
+        mock_connection.execute_request.assert_awaited_once()
+        event = mock_connection.execute_request.call_args.kwargs["event_factory"](123)
 
-        assert kwargs["handle"] == 42
-        event = kwargs["event"]
         assert isinstance(event, UserGetSessionDiagnostics)
 
     def test_enqueue_stream_bidi(self, session: WebTransportSession, mocker: MockerFixture) -> None:
@@ -525,6 +568,24 @@ class TestWebTransportSession:
         assert True
 
     @pytest.mark.asyncio
+    async def test_export_keying_material_cancelled(
+        self, session: WebTransportSession, mock_connection: MagicMock
+    ) -> None:
+        mock_connection.execute_request.side_effect = asyncio.CancelledError
+
+        with pytest.raises(expected_exception=asyncio.CancelledError):
+            await session.export_keying_material(label="test", context=b"", length=32)
+
+    @pytest.mark.asyncio
+    async def test_export_keying_material_connection_error(
+        self, session: WebTransportSession, mock_connection: MagicMock
+    ) -> None:
+        mock_connection.execute_request.side_effect = ConnectionError(message="fail")
+
+        with pytest.raises(expected_exception=ConnectionError):
+            await session.export_keying_material(label="test", context=b"", length=32)
+
+    @pytest.mark.asyncio
     async def test_export_keying_material_connection_gone(self, session: WebTransportSession) -> None:
         session._connection = lambda: None  # type: ignore[assignment]
 
@@ -532,21 +593,35 @@ class TestWebTransportSession:
             await session.export_keying_material(label="test", context=b"", length=32)
 
     @pytest.mark.asyncio
-    async def test_export_keying_material_success(
-        self, session: WebTransportSession, mock_controller: MagicMock
+    async def test_export_keying_material_generic_error(
+        self, session: WebTransportSession, mock_connection: MagicMock
     ) -> None:
-        fut: asyncio.Future[bytes] = asyncio.Future()
-        mock_controller._pending_manager.create_request.side_effect = None
-        mock_controller._pending_manager.create_request.return_value = (1, fut)
-        fut.set_result(b"key_material_bytes")
+        mock_connection.execute_request.side_effect = ValueError("fail")
+
+        with pytest.raises(expected_exception=SessionError, match="wt_session resolve failed session_id=1"):
+            await session.export_keying_material(label="test", context=b"", length=32)
+
+    @pytest.mark.asyncio
+    async def test_export_keying_material_session_error(
+        self, session: WebTransportSession, mock_connection: MagicMock
+    ) -> None:
+        mock_connection.execute_request.side_effect = SessionError(message="fail", session_id=1)
+
+        with pytest.raises(expected_exception=SessionError):
+            await session.export_keying_material(label="test", context=b"", length=32)
+
+    @pytest.mark.asyncio
+    async def test_export_keying_material_success(
+        self, session: WebTransportSession, mock_connection: MagicMock
+    ) -> None:
+        mock_connection.execute_request.return_value = b"key_material_bytes"
 
         result = await session.export_keying_material(label="exporter", context=b"ctx", length=18)
 
         assert result == b"key_material_bytes"
-        kwargs = mock_controller.send_user_event.call_args[1]
+        mock_connection.execute_request.assert_awaited_once()
+        event = mock_connection.execute_request.call_args.kwargs["event_factory"](123)
 
-        assert kwargs["handle"] == 42
-        event = kwargs["event"]
         assert isinstance(event, UserExportKeyingMaterial)
         assert event.session_id == 1
         assert event.label == "exporter"
@@ -554,34 +629,96 @@ class TestWebTransportSession:
         assert event.length == 18
 
     @pytest.mark.asyncio
-    async def test_grant_data_credit(self, session: WebTransportSession, mock_controller: MagicMock) -> None:
-        fut: asyncio.Future[None] = asyncio.Future()
-        mock_controller._pending_manager.create_request.side_effect = None
-        mock_controller._pending_manager.create_request.return_value = (1, fut)
-        fut.set_result(None)
+    async def test_grant_data_credit_cancelled(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
+        mock_connection.execute_request.side_effect = asyncio.CancelledError
+
+        with pytest.raises(expected_exception=asyncio.CancelledError):
+            await session.grant_data_credit(max_data=1000)
+
+    @pytest.mark.asyncio
+    async def test_grant_data_credit_connection_error(
+        self, session: WebTransportSession, mock_connection: MagicMock
+    ) -> None:
+        mock_connection.execute_request.side_effect = ConnectionError(message="fail")
+
+        with pytest.raises(expected_exception=ConnectionError):
+            await session.grant_data_credit(max_data=1000)
+
+    @pytest.mark.asyncio
+    async def test_grant_data_credit_generic_error(
+        self, session: WebTransportSession, mock_connection: MagicMock
+    ) -> None:
+        mock_connection.execute_request.side_effect = ValueError("fail")
+
+        with pytest.raises(expected_exception=SessionError, match="wt_session resolve failed session_id=1"):
+            await session.grant_data_credit(max_data=1000)
+
+    @pytest.mark.asyncio
+    async def test_grant_data_credit_session_error(
+        self, session: WebTransportSession, mock_connection: MagicMock
+    ) -> None:
+        mock_connection.execute_request.side_effect = SessionError(message="fail", session_id=1)
+
+        with pytest.raises(expected_exception=SessionError):
+            await session.grant_data_credit(max_data=1000)
+
+    @pytest.mark.asyncio
+    async def test_grant_data_credit_success(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
+        mock_connection.execute_request.return_value = None
 
         await session.grant_data_credit(max_data=1000)
 
-        kwargs = mock_controller.send_user_event.call_args[1]
+        mock_connection.execute_request.assert_awaited_once()
+        event = mock_connection.execute_request.call_args.kwargs["event_factory"](123)
 
-        assert kwargs["handle"] == 42
-        event = kwargs["event"]
         assert isinstance(event, UserGrantDataCredit)
         assert event.max_data == 1000
 
     @pytest.mark.asyncio
-    async def test_grant_streams_credit(self, session: WebTransportSession, mock_controller: MagicMock) -> None:
-        fut: asyncio.Future[None] = asyncio.Future()
-        mock_controller._pending_manager.create_request.side_effect = None
-        mock_controller._pending_manager.create_request.return_value = (1, fut)
-        fut.set_result(None)
+    async def test_grant_streams_credit_cancelled(
+        self, session: WebTransportSession, mock_connection: MagicMock
+    ) -> None:
+        mock_connection.execute_request.side_effect = asyncio.CancelledError
+
+        with pytest.raises(expected_exception=asyncio.CancelledError):
+            await session.grant_streams_credit(is_unidirectional=True, max_streams=5)
+
+    @pytest.mark.asyncio
+    async def test_grant_streams_credit_connection_error(
+        self, session: WebTransportSession, mock_connection: MagicMock
+    ) -> None:
+        mock_connection.execute_request.side_effect = ConnectionError(message="fail")
+
+        with pytest.raises(expected_exception=ConnectionError):
+            await session.grant_streams_credit(is_unidirectional=True, max_streams=5)
+
+    @pytest.mark.asyncio
+    async def test_grant_streams_credit_generic_error(
+        self, session: WebTransportSession, mock_connection: MagicMock
+    ) -> None:
+        mock_connection.execute_request.side_effect = ValueError("fail")
+
+        with pytest.raises(expected_exception=SessionError, match="wt_session resolve failed session_id=1"):
+            await session.grant_streams_credit(is_unidirectional=True, max_streams=5)
+
+    @pytest.mark.asyncio
+    async def test_grant_streams_credit_session_error(
+        self, session: WebTransportSession, mock_connection: MagicMock
+    ) -> None:
+        mock_connection.execute_request.side_effect = SessionError(message="fail", session_id=1)
+
+        with pytest.raises(expected_exception=SessionError):
+            await session.grant_streams_credit(is_unidirectional=True, max_streams=5)
+
+    @pytest.mark.asyncio
+    async def test_grant_streams_credit_success(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
+        mock_connection.execute_request.return_value = None
 
         await session.grant_streams_credit(is_unidirectional=True, max_streams=5)
 
-        kwargs = mock_controller.send_user_event.call_args[1]
+        mock_connection.execute_request.assert_awaited_once()
+        event = mock_connection.execute_request.call_args.kwargs["event_factory"](123)
 
-        assert kwargs["handle"] == 42
-        event = kwargs["event"]
         assert isinstance(event, UserGrantStreamsCredit)
         assert event.max_streams == 5
         assert event.is_unidirectional is True
@@ -692,6 +829,42 @@ class TestWebTransportSession:
         assert session.wt_protocol == "test-proto"
 
     @pytest.mark.asyncio
+    async def test_reject_cancelled(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
+        mock_connection.execute_request.side_effect = asyncio.CancelledError
+
+        await session.reject(status_code=404)
+
+        assert session.state == SessionState.CLOSED
+        assert session._incoming_bidi_streams.qsize() == 1
+        assert session._incoming_bidi_streams.get_nowait() is None
+        assert session._incoming_uni_streams.qsize() == 1
+        assert session._incoming_uni_streams.get_nowait() is None
+
+    @pytest.mark.asyncio
+    async def test_reject_connection_error_channel_closed(
+        self, session: WebTransportSession, mock_connection: MagicMock, mocker: MockerFixture
+    ) -> None:
+        mock_connection.execute_request.side_effect = ConnectionError(message="channel closed")
+        spy_logger = mocker.patch(target="pywebtransport.session._logger")
+
+        await session.reject(status_code=404)
+
+        spy_logger.warning.assert_not_called()
+        assert session.state == SessionState.CLOSED
+
+    @pytest.mark.asyncio
+    async def test_reject_connection_error_warning(
+        self, session: WebTransportSession, mock_connection: MagicMock, mocker: MockerFixture
+    ) -> None:
+        mock_connection.execute_request.side_effect = ConnectionError(message="fail")
+        spy_logger = mocker.patch(target="pywebtransport.session._logger")
+
+        await session.reject(status_code=404)
+
+        spy_logger.warning.assert_called_with("wt_session reject failed session_id=%d err=%s", 1, mocker.ANY)
+        assert session.state == SessionState.CLOSED
+
+    @pytest.mark.asyncio
     async def test_reject_connection_gone(self, session: WebTransportSession) -> None:
         session._connection = lambda: None  # type: ignore[assignment]
 
@@ -699,18 +872,26 @@ class TestWebTransportSession:
             await session.reject()
 
     @pytest.mark.asyncio
-    async def test_reject_success(self, session: WebTransportSession, mock_controller: MagicMock) -> None:
-        fut: asyncio.Future[None] = asyncio.Future()
-        mock_controller._pending_manager.create_request.side_effect = None
-        mock_controller._pending_manager.create_request.return_value = (1, fut)
-        fut.set_result(None)
+    async def test_reject_generic_error(
+        self, session: WebTransportSession, mock_connection: MagicMock, mocker: MockerFixture
+    ) -> None:
+        mock_connection.execute_request.side_effect = ValueError("fail")
+        spy_logger = mocker.patch(target="pywebtransport.session._logger")
 
         await session.reject(status_code=404)
 
-        kwargs = mock_controller.send_user_event.call_args[1]
+        spy_logger.warning.assert_called_with("wt_session reject failed session_id=%d err=%s", 1, mocker.ANY)
+        assert session.state == SessionState.CLOSED
 
-        assert kwargs["handle"] == 42
-        event = kwargs["event"]
+    @pytest.mark.asyncio
+    async def test_reject_success(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
+        mock_connection.execute_request.return_value = None
+
+        await session.reject(status_code=404)
+
+        mock_connection.execute_request.assert_awaited_once()
+        event = mock_connection.execute_request.call_args.kwargs["event_factory"](123)
+
         assert isinstance(event, UserRejectSession)
         assert event.session_id == 1
         assert event.status_code == 404
@@ -738,17 +919,50 @@ class TestWebTransportSession:
         assert "state=" in repr(session)
 
     @pytest.mark.asyncio
-    async def test_send_datagram(self, session: WebTransportSession, mock_controller: MagicMock) -> None:
-        fut: asyncio.Future[None] = asyncio.Future()
-        mock_controller._pending_manager.create_request.side_effect = None
-        mock_controller._pending_manager.create_request.return_value = (1, fut)
-        fut.set_result(None)
+    async def test_send_datagram_cancelled(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
+        mock_connection.execute_request.side_effect = asyncio.CancelledError
+
+        with pytest.raises(expected_exception=asyncio.CancelledError):
+            await session.send_datagram(data=b"test")
+
+    @pytest.mark.asyncio
+    async def test_send_datagram_connection_error(
+        self, session: WebTransportSession, mock_connection: MagicMock
+    ) -> None:
+        mock_connection.execute_request.side_effect = ConnectionError(message="fail")
+
+        with pytest.raises(expected_exception=ConnectionError):
+            await session.send_datagram(data=b"test")
+
+    @pytest.mark.asyncio
+    async def test_send_datagram_datagram_error(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
+        mock_connection.execute_request.side_effect = DatagramError(message="fail")
+
+        with pytest.raises(expected_exception=DatagramError):
+            await session.send_datagram(data=b"test")
+
+    @pytest.mark.asyncio
+    async def test_send_datagram_generic_error(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
+        mock_connection.execute_request.side_effect = ValueError("fail")
+
+        with pytest.raises(expected_exception=SessionError, match="wt_session send failed session_id=1"):
+            await session.send_datagram(data=b"test")
+
+    @pytest.mark.asyncio
+    async def test_send_datagram_session_error(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
+        mock_connection.execute_request.side_effect = SessionError(message="fail", session_id=1)
+
+        with pytest.raises(expected_exception=SessionError):
+            await session.send_datagram(data=b"test")
+
+    @pytest.mark.asyncio
+    async def test_send_datagram_success(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
+        mock_connection.execute_request.return_value = None
 
         await session.send_datagram(data=b"test")
 
-        kwargs = mock_controller.send_user_event.call_args[1]
+        mock_connection.execute_request.assert_awaited_once()
+        event = mock_connection.execute_request.call_args.kwargs["event_factory"](123)
 
-        assert kwargs["handle"] == 42
-        event = kwargs["event"]
         assert isinstance(event, UserSendDatagram)
         assert event.data == b"test"

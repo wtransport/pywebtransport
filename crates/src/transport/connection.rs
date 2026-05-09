@@ -12,7 +12,9 @@ use quinn_proto::{
 };
 use tracing::debug;
 
-use crate::common::constants::ERR_LIB_INTERNAL_ERROR;
+use crate::common::constants::{
+    ERR_H3_INTERNAL_ERROR, ERR_H3_STREAM_CREATION_ERROR, ERR_LIB_INTERNAL_ERROR,
+};
 use crate::common::types::ErrorSource;
 use crate::protocol::engine::WebTransportEngine;
 use crate::protocol::events::{Effect, ProtocolEvent, RequestResult};
@@ -216,10 +218,24 @@ impl TransportConnection {
                             u64::from(d_id),
                         ) {
                             Ok(effects) => self.process_effects(effects, now, now_instant),
-                            Err(e) => debug!("h3_connection open failed err={e:?}"),
+                            Err(e) => {
+                                debug!("h3_stream open failed err={e:?}");
+                                self.quic.close(
+                                    now_instant,
+                                    VarInt::try_from(ERR_H3_INTERNAL_ERROR)
+                                        .unwrap_or(VarInt::from(0u32)),
+                                    Bytes::from_static("h3_stream open failed".as_bytes()),
+                                );
+                            }
                         }
                     } else {
                         debug!("quic_stream create failed");
+                        self.quic.close(
+                            now_instant,
+                            VarInt::try_from(ERR_H3_STREAM_CREATION_ERROR)
+                                .unwrap_or(VarInt::from(0u32)),
+                            Bytes::from_static("quic_stream create failed".as_bytes()),
+                        );
                     }
                 }
                 QuinnEvent::ConnectionLost { reason } => {
@@ -308,6 +324,7 @@ impl TransportConnection {
                                 );
                             }
                             Err(e) => {
+                                debug!("wt_session encode failed err={e:?}");
                                 self.dispatch_protocol_event(
                                     ProtocolEvent::InternalFailH3Session {
                                         request_id,
@@ -434,18 +451,24 @@ impl TransportConnection {
                     capsule_data,
                     end_stream,
                 } => {
-                    if let Ok(h3_effects) = WebTransportEngine::encode_capsule(
+                    match WebTransportEngine::encode_capsule(
                         stream_id,
                         capsule_type,
                         capsule_data,
                         end_stream,
                     ) {
-                        self.process_effects(h3_effects, now, now_instant);
+                        Ok(h3_effects) => self.process_effects(h3_effects, now, now_instant),
+                        Err(e) => {
+                            debug!("wt_capsule encode failed err={e:?}");
+                        }
                     }
                 }
                 Effect::SendH3Datagram { stream_id, data } => {
-                    if let Ok(h3_effects) = WebTransportEngine::encode_datagram(stream_id, data) {
-                        self.process_effects(h3_effects, now, now_instant);
+                    match WebTransportEngine::encode_datagram(stream_id, data) {
+                        Ok(h3_effects) => self.process_effects(h3_effects, now, now_instant),
+                        Err(e) => {
+                            debug!("wt_datagram encode failed err={e:?}");
+                        }
                     }
                 }
                 Effect::SendH3Goaway => {
@@ -457,13 +480,12 @@ impl TransportConnection {
                     stream_id,
                     headers,
                     end_stream,
-                } => {
-                    if let Ok(h3_effects) =
-                        self.engine.encode_headers(stream_id, &headers, end_stream)
-                    {
-                        self.process_effects(h3_effects, now, now_instant);
+                } => match self.engine.encode_headers(stream_id, &headers, end_stream) {
+                    Ok(h3_effects) => self.process_effects(h3_effects, now, now_instant),
+                    Err(e) => {
+                        debug!("h3_headers encode failed err={e:?}");
                     }
-                }
+                },
                 Effect::SendQuicData {
                     stream_id,
                     data,

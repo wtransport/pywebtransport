@@ -99,6 +99,19 @@ class TestEndpointController:
         assert not controller._pending_manager._requests
 
     @pytest.mark.asyncio
+    async def test_connect_failure_connection_error(
+        self, controller: EndpointController, mock_endpoint: MagicMock
+    ) -> None:
+        exc = ConnectionError(message="native connection error")
+        mock_endpoint.connect.side_effect = exc
+
+        with pytest.raises(expected_exception=ConnectionError) as exc_info:
+            await controller.connect(remote_host="127.0.0.1", remote_port=443, server_name="localhost")
+
+        assert exc_info.value is exc
+        assert not controller._pending_manager._requests
+
+    @pytest.mark.asyncio
     async def test_connect_success(self, controller: EndpointController, mock_endpoint: MagicMock) -> None:
         def mock_connect(*args: Any, **kwargs: Any) -> None:
             req_id = kwargs["request_id"]
@@ -110,6 +123,40 @@ class TestEndpointController:
 
         assert result == 42
         mock_endpoint.connect.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_execute_request_dispatcher_exception(self, controller: EndpointController) -> None:
+        def dispatcher(req_id: int) -> None:
+            raise ValueError("dispatch error")
+
+        with pytest.raises(expected_exception=ValueError, match="dispatch error"):
+            await controller.execute_request(dispatcher=dispatcher)
+
+        assert not controller._pending_manager._requests
+
+    @pytest.mark.asyncio
+    async def test_execute_request_future_cancelled(self, controller: EndpointController) -> None:
+        def dispatcher(req_id: int) -> None:
+            pass
+
+        task = asyncio.create_task(controller.execute_request(dispatcher=dispatcher))
+        await asyncio.sleep(0)
+        task.cancel()
+
+        with pytest.raises(expected_exception=asyncio.CancelledError):
+            await task
+
+        assert not controller._pending_manager._requests
+
+    @pytest.mark.asyncio
+    async def test_execute_request_success(self, controller: EndpointController) -> None:
+        def dispatcher(req_id: int) -> None:
+            controller._pending_manager.complete_request(request_id=req_id, result="done")
+
+        result = await controller.execute_request(dispatcher=dispatcher)
+
+        assert result == "done"
+        assert not controller._pending_manager._requests
 
     def test_execute_effects_cleanup_h3_stream(self, controller: EndpointController) -> None:
         effects = [(abi.CLEANUP_H3_STREAM, None)]

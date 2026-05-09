@@ -76,15 +76,28 @@ class EndpointController:
 
     async def connect(self, *, remote_host: str, remote_port: int, server_name: str) -> int:
         """Dispatch an outbound connection request to the reactor."""
+
+        def _dispatch_connect(request_id: int) -> None:
+            try:
+                self._endpoint.connect(
+                    request_id=request_id, remote=(remote_host, remote_port), server_name=server_name
+                )
+            except ConnectionError:
+                raise
+            except Exception as e:
+                raise ConnectionError.from_cause(message="wt_connection open failed", cause=e) from e
+
+        return cast(int, await self.execute_request(dispatcher=_dispatch_connect))
+
+    async def execute_request(self, *, dispatcher: Callable[[int], None]) -> Any:
+        """Execute an asynchronous IPC request via a synchronous ingress dispatcher."""
         request_id, future = self._pending_manager.create_request()
 
         try:
-            self._endpoint.connect(request_id=request_id, remote=(remote_host, remote_port), server_name=server_name)
-        except Exception as e:
-            self._pending_manager.fail_request(request_id=request_id, exception=e)
-            raise ConnectionError.from_cause(message="wt_connection open failed", cause=e) from e
-
-        return cast(int, await future)
+            dispatcher(request_id)
+            return await future
+        finally:
+            self._pending_manager.unregister_request(request_id=request_id)
 
     def get_local_addresses(self) -> list[Address]:
         """Return the synchronized OS-allocated local socket addresses."""

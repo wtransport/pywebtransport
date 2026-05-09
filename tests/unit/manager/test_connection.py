@@ -155,6 +155,39 @@ class TestConnectionManager:
     async def test_remove_connection_not_active(self, manager: ConnectionManager) -> None:
         assert await manager.remove_connection(connection_handle=1) is None
 
+    @pytest.mark.asyncio
+    async def test_schedule_close_handles_cancelled_error(
+        self, manager: ConnectionManager, mock_connection: MagicMock
+    ) -> None:
+        mock_connection.close.side_effect = asyncio.CancelledError()
+
+        manager._schedule_close(connection=mock_connection)
+
+        for _ in range(5):
+            if len(manager._closing_tasks) == 0:
+                break
+            await asyncio.sleep(delay=0)
+
+        assert len(manager._closing_tasks) == 0
+
+    @pytest.mark.asyncio
+    async def test_schedule_close_handles_exception(
+        self, manager: ConnectionManager, mock_connection: MagicMock, mocker: MockerFixture
+    ) -> None:
+        mock_connection.close.side_effect = ValueError("unexpected failure")
+        mock_log = mocker.patch.object(target=manager, attribute="_log")
+
+        manager._schedule_close(connection=mock_connection)
+
+        for _ in range(5):
+            if len(manager._closing_tasks) == 0:
+                break
+            await asyncio.sleep(delay=0)
+
+        assert len(manager._closing_tasks) == 0
+        mock_log.debug.assert_called_once()
+        assert "rt_task resolve failed" in mock_log.debug.call_args[0][0]
+
     def test_schedule_close_idempotency(self, manager: ConnectionManager, mock_connection: MagicMock) -> None:
         mock_connection.is_closed = True
 

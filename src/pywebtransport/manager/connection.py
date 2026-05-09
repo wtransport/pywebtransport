@@ -113,4 +113,14 @@ class ConnectionManager(BaseResourceManager[ConnectionHandle, WebTransportConnec
 
         task = asyncio.create_task(coro=connection.close())
         self._closing_tasks.add(task)
-        task.add_done_callback(self._closing_tasks.discard)
+
+        def _on_close_done(t: asyncio.Task[None]) -> None:
+            self._closing_tasks.discard(t)
+            try:
+                t.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                self._log.debug("rt_task resolve failed connection_handle=%d actual=%s", connection.handle, e)
+
+        task.add_done_callback(_on_close_done)
