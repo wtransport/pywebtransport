@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin>=1.13.1,<2.0"]
+requires = ["maturin>=1.13.3,<2.0"]
 build-backend = "maturin"
 
 [project]
@@ -42,11 +42,11 @@ classifiers = [
 
 [project.optional-dependencies]
 dev = [
-    "black>=26.3.1,<27.0.0",
+    "black>=26.5.1,<27.0.0",
     "flake8>=7.3.0,<8.0.0",
     "isort>=8.0.1,<9.0.0",
-    "maturin[patchelf]>=1.13.1,<2.0",
-    "mypy>=1.20.1,<2.0.0",
+    "maturin[patchelf]>=1.13.3,<2.0",
+    "mypy>=2.1.0,<3.0.0",
     "pywebtransport[test]",
 ]
 docs = [
@@ -61,7 +61,7 @@ test = [
     "pytest-benchmark>=5.2.3,<6.0.0",
     "pytest-cov>=7.1.0,<8.0.0",
     "pytest-mock>=3.15.1,<4.0.0",
-    "types-psutil>=7.2.2.20260408,<8.0.0",
+    "types-psutil>=7.2.2.20260518,<8.0.0",
     "uvloop>=0.22.1,<1.0.0",
 ]
 
@@ -159,7 +159,7 @@ commands = [
 
 [tool.tox.env.lint]
 description = "Run code quality checks"
-base_python = ["python3.12"]
+base_python = ["python3.14"]
 package = "skip"
 deps = "-r dev-requirements.txt"
 commands = [

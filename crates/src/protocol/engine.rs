@@ -15,7 +15,7 @@ use crate::common::types::{ConnectionHandle, ErrorCode, ErrorSource, Headers, St
 use crate::protocol::connection::{Connection, ConnectionParams};
 use crate::protocol::events::{Effect, ProtocolEvent};
 use crate::protocol::h3::{H3, H3Params};
-use crate::protocol::utils::{merge_headers, write_varint};
+use crate::protocol::utils::write_varint;
 
 // Engine initialization constraints and thresholds.
 #[derive(Clone, Copy, Debug)]
@@ -118,16 +118,11 @@ impl WebTransportEngine {
         stream_id: StreamId,
         data: Bytes,
     ) -> Result<Vec<Effect>, WebTransportError> {
-        let payload = H3::encode_datagram(stream_id, data)?;
-        let total_len = payload.iter().map(Bytes::len).sum();
-        let mut merged = BytesMut::with_capacity(total_len);
-        for p in payload {
-            merged.extend_from_slice(&p);
-        }
+        let mut parts = H3::encode_datagram(stream_id, data)?.into_iter();
+        let header = parts.next().unwrap_or_default();
+        let payload = parts.next().unwrap_or_default();
 
-        Ok(vec![Effect::SendQuicDatagram {
-            data: merged.freeze(),
-        }])
+        Ok(vec![Effect::SendQuicDatagram { header, payload }])
     }
 
     // GOAWAY frame encoding.
@@ -169,7 +164,7 @@ impl WebTransportEngine {
         authority: String,
         headers: &Headers,
     ) -> Result<Vec<Effect>, WebTransportError> {
-        let initial_headers: Headers = vec![
+        let mut request_headers: Headers = vec![
             (
                 Bytes::from_static(b":method"),
                 Bytes::from_static(b"CONNECT"),
@@ -182,8 +177,10 @@ impl WebTransportEngine {
                 Bytes::from_static(WT_UPGRADE_TOKEN),
             ),
         ];
-        let final_headers = merge_headers(&initial_headers, headers);
-        self.h3.encode_headers(stream_id, &final_headers, false)
+
+        request_headers.extend_from_slice(headers);
+
+        self.h3.encode_headers(stream_id, &request_headers, false)
     }
 
     // Stream creation preamble encoding.
@@ -435,7 +432,7 @@ impl WebTransportEngine {
                 } => {
                     new_effects.extend(
                         self.connection.export_keying_material(
-                            session_id, request_id, label, &context, length,
+                            session_id, request_id, &label, &context, length,
                         ),
                     );
                 }
@@ -524,7 +521,7 @@ impl WebTransportEngine {
                 } => {
                     new_effects.extend(
                         self.connection
-                            .send_stream_data(stream_id, request_id, data, end_stream),
+                            .send_stream_data(stream_id, request_id, data, end_stream, now),
                     );
                 }
                 ProtocolEvent::UserStopSending {
@@ -633,6 +630,7 @@ impl WebTransportEngine {
         reason: &'static str,
     ) -> Vec<Effect> {
         let mut effects = Vec::new();
+
         while let Some(action) = self.pending_user_actions.pop_front() {
             let req_id = match action {
                 ProtocolEvent::UserCreateSession { request_id, .. }

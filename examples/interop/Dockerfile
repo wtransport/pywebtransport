@@ -1,6 +1,6 @@
 # PyWebTransport Interop Server Dockerfile
 
-FROM python:3.12-slim-bookworm
+FROM python:3.14-slim-trixie
 
 LABEL org.opencontainers.image.source="https://github.com/wtransport/pywebtransport"
 LABEL org.opencontainers.image.description="WebTransport interoperability server"

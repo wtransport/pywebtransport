@@ -368,27 +368,6 @@ class WebTransportClient(EventEmitter):
         return f"WebTransportClient(status={status}, connections={conn_count})"
 
 
-def _format_duration(*, seconds: float) -> str:
-    """Format a duration in seconds into a human-readable string."""
-    if seconds < 1e-6:
-        return f"{seconds * 1e9:.0f}ns"
-    if seconds < 1e-3:
-        return f"{seconds * 1e6:.1f}µs"
-    if seconds < 1:
-        return f"{seconds * 1000:.1f}ms"
-    if seconds < 60:
-        return f"{seconds:.1f}s"
-    if seconds < 3600:
-        minutes = int(seconds // 60)
-        secs = seconds % 60
-        return f"{minutes}m{secs:.1f}s"
-
-    hours = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    secs = seconds % 60
-    return f"{hours}h{minutes}m{secs:.1f}s"
-
-
 def _merge_headers(*, base: Headers, update: Headers | None) -> Headers:
     """Combine two header collections."""
     if update is None:

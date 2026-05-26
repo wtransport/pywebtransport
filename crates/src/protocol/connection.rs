@@ -190,24 +190,33 @@ impl Connection {
         now: f64,
     ) -> Vec<Effect> {
         let mut effects = Vec::new();
-        if !matches!(
+
+        if matches!(
             self.state,
             ConnectionState::Closed | ConnectionState::Closing
         ) {
-            debug!(
-                "wt_connection close actual={:?} connection_handle={} request_id={request_id}",
-                self.state, self.handle
-            );
-            self.state = ConnectionState::Closing;
-            self.close_code = Some(error_code);
-            self.close_reason = reason.clone().map(Cow::into_owned);
-            self.closed_at = Some(now);
-            effects.push(Effect::CloseQuicConnection { error_code, reason });
+            effects.push(Effect::NotifyRequestDone {
+                request_id,
+                result: RequestResult::None,
+            });
+            return effects;
         }
+
+        debug!(
+            "wt_connection close actual={:?} connection_handle={} request_id={request_id}",
+            self.state, self.handle
+        );
+        self.close_code = Some(error_code);
+        self.close_reason = reason.clone().map(Cow::into_owned);
+        self.closed_at = Some(now);
+        self.state = ConnectionState::Closing;
+
+        effects.push(Effect::CloseQuicConnection { error_code, reason });
         effects.push(Effect::NotifyRequestDone {
             request_id,
             result: RequestResult::None,
         });
+
         effects
     }
 
@@ -238,7 +247,7 @@ impl Connection {
         &mut self,
         request_id: RequestId,
         path: String,
-        mut headers: Headers,
+        headers: Headers,
         wt_available_protocols: Option<Vec<String>>,
         now: f64,
     ) -> Vec<Effect> {
@@ -301,6 +310,11 @@ impl Connection {
                 reason: "wt_session validate exceeded".into(),
             }];
         }
+
+        let mut headers: Headers = headers
+            .into_iter()
+            .filter(|(k, _)| !k.starts_with(b":"))
+            .collect();
 
         if let Some(ref protos) = wt_available_protocols {
             match encode_wt_protocol_list(protos) {
@@ -375,7 +389,7 @@ impl Connection {
         &self,
         session_id: SessionId,
         request_id: RequestId,
-        label: String,
+        label: &str,
         context: &[u8],
         length: u32,
     ) -> Vec<Effect> {
@@ -530,8 +544,8 @@ impl Connection {
                 "wt_connection open actual={:?} connection_handle={}",
                 self.state, self.handle
             );
-            self.state = ConnectionState::Connected;
             self.connected_at = Some(now);
+            self.state = ConnectionState::Connected;
             effects.push(Effect::EmitConnectionEvent {
                 connection_handle: self.handle,
                 event_type: EventType::ConnectionEstablished,
@@ -571,7 +585,7 @@ impl Connection {
     pub(super) fn is_pre_connected(&self) -> bool {
         matches!(
             self.state,
-            ConnectionState::Idle | ConnectionState::Connecting
+            ConnectionState::Connecting | ConnectionState::Idle
         )
     }
 
@@ -650,27 +664,6 @@ impl Connection {
 
         for stream_id in streams_to_remove {
             self.early_event_buffer.remove(&stream_id);
-            if !self.sessions.contains_key(&stream_id) {
-                debug!(
-                    "wt_stream abort connection_handle={} stream_id={stream_id}",
-                    self.handle
-                );
-                if is_unidirectional_stream(stream_id) {
-                    effects.push(Effect::StopQuicStream {
-                        stream_id,
-                        error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
-                    });
-                } else {
-                    effects.push(Effect::ResetQuicStream {
-                        stream_id,
-                        error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
-                    });
-                    effects.push(Effect::StopQuicStream {
-                        stream_id,
-                        error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
-                    });
-                }
-            }
         }
 
         effects
@@ -930,6 +923,13 @@ impl Connection {
                     "wt_session abort connection_handle={} err={status_val:?}",
                     self.handle
                 );
+
+                if let Some(events) = self.early_event_buffer.remove(&stream_id)
+                    && self.early_event_count >= events.len()
+                {
+                    self.early_event_count -= events.len();
+                }
+
                 effects.push(Effect::NotifyRequestFailed {
                     request_id,
                     source: ErrorSource::Session,
@@ -1141,9 +1141,8 @@ impl Connection {
         fin: bool,
         now: f64,
     ) -> Vec<Effect> {
-        self.stream_map.entry(stream_id).or_insert(session_id);
-
         if let Some(session) = self.sessions.get_mut(&session_id) {
+            self.stream_map.entry(stream_id).or_insert(session_id);
             return session.recv_stream_data(stream_id, data, fin, now);
         }
 
@@ -1285,9 +1284,10 @@ impl Connection {
         request_id: RequestId,
         data: Bytes,
         end_stream: bool,
+        now: f64,
     ) -> Vec<Effect> {
         if let Some(session) = self.session_for_stream_mut(stream_id) {
-            return session.send_stream_data(stream_id, request_id, data, end_stream);
+            return session.send_stream_data(stream_id, request_id, data, end_stream, now);
         }
         debug!(
             "wt_stream resolve failed connection_handle={} request_id={request_id} stream_id={stream_id}",
@@ -1404,9 +1404,9 @@ impl Connection {
         let previous_state = self.state;
 
         if self.state != ConnectionState::Closing {
-            self.closed_at = Some(now);
             self.close_code = Some(error_code);
             self.close_reason = Some(reason.clone().into_owned());
+            self.closed_at = Some(now);
         }
         self.state = ConnectionState::Closed;
 
@@ -1488,8 +1488,8 @@ impl Connection {
                 "wt_connection open actual={:?} connection_handle={}",
                 self.state, self.handle
             );
-            self.state = ConnectionState::Connected;
             self.connected_at = Some(now);
+            self.state = ConnectionState::Connected;
 
             let effects = vec![Effect::EmitConnectionEvent {
                 connection_handle: self.handle,

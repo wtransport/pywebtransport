@@ -255,7 +255,7 @@ fn test_encode_capsule() {
 #[rstest]
 fn test_encode_datagram() {
     let data = Bytes::from_static(b"payload");
-    let res = WebTransportEngine::encode_datagram(0, data);
+    let res = WebTransportEngine::encode_datagram(0, data.clone());
 
     let effects = match res {
         Ok(e) => e,
@@ -265,9 +265,10 @@ fn test_encode_datagram() {
             return;
         }
     };
+
     assert!(matches!(
         effects.as_slice(),
-        [Effect::SendQuicDatagram { .. }]
+        [Effect::SendQuicDatagram { header: _, payload }] if payload == &data
     ));
 }
 
@@ -322,7 +323,10 @@ fn test_encode_headers(mut fixture_engine_server: WebTransportEngine) {
 
 #[rstest]
 fn test_encode_session_request(mut fixture_engine_client: WebTransportEngine) {
-    let headers = vec![];
+    let headers = vec![(
+        Bytes::from_static(b"user-agent"),
+        Bytes::from_static(b"rust-test"),
+    )];
     let res = fixture_engine_client.encode_session_request(
         0,
         "/test".into(),
@@ -659,8 +663,11 @@ fn test_internal_bind_session(mut fixture_engine_server: WebTransportEngine) {
 
 #[rstest]
 fn test_internal_cleanup_events(mut fixture_engine_server: WebTransportEngine) {
-    let event = ProtocolEvent::TransportDatagramFrameReceived {
+    let event = ProtocolEvent::WebTransportStreamDataReceived {
+        session_id: 0,
+        stream_id: 4,
         data: Bytes::from_static(b"abc"),
+        stream_ended: false,
     };
     fixture_engine_server.handle_event(event, 0.0);
 
@@ -745,6 +752,14 @@ fn test_user_stream_actions_not_found(
 #[rstest]
 fn test_user_stream_operations_success(mut fixture_engine_server: WebTransportEngine) {
     fixture_engine_server.handle_event(ProtocolEvent::TransportHandshakeCompleted, 0.0);
+
+    let settings_event = ProtocolEvent::H3SettingsReceived {
+        settings: crate::protocol::H3Settings {
+            wt_initial_max_data: Some(10000),
+            ..Default::default()
+        },
+    };
+    fixture_engine_server.handle_event(settings_event, 0.0);
 
     let headers = vec![
         (

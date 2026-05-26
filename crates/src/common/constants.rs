@@ -184,6 +184,8 @@ pub(crate) const ERR_WT_FLOW_CONTROL_ERROR: u64 = 0x045D_4487;
 pub(crate) const ERR_WT_REQUIREMENTS_NOT_MET: u64 = 0x212C_0D48;
 // WebTransport error: `WT_SESSION_GONE`.
 pub(crate) const ERR_WT_SESSION_GONE: u64 = 0x170D_7B68;
+// WebTransport error: stream buffer capacity exceeded.
+pub(crate) const ERR_WT_STREAM_BUFFER_EXCEEDED: u64 = ERR_WT_APPLICATION_ERROR_FIRST + 1;
 // HTTP/3 frame type: `CANCEL_PUSH`.
 pub(crate) const H3_FRAME_TYPE_CANCEL_PUSH: u64 = 0x03;
 // HTTP/3 frame type: `DATA`.
@@ -260,6 +262,8 @@ pub(crate) const WT_CAPSULE_TYPE_STREAMS_BLOCKED_BIDI: u64 = 0x190B_4D43;
 pub(crate) const WT_CAPSULE_TYPE_STREAMS_BLOCKED_UNI: u64 = 0x190B_4D44;
 // WebTransport capsule type: `STREAM_DATA_BLOCKED`.
 pub(crate) const WT_CAPSULE_TYPE_STREAM_DATA_BLOCKED: u64 = 0x190B_4D42;
+// WebTransport TLS exporter label: `EXPORTER-WebTransport`.
+pub(crate) const WT_EXPORTER_LABEL: &str = "EXPORTER-WebTransport";
 // WebTransport maximum close reason size.
 pub(crate) const WT_MAX_CLOSE_REASON_SIZE: u64 = 1024;
 // WebTransport header: `wt-protocol`.

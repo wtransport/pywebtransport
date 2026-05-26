@@ -148,6 +148,7 @@ class TestErrorCodes:
             (ErrorCodes.WT_FLOW_CONTROL_ERROR, 0x045D4487),
             (ErrorCodes.WT_REQUIREMENTS_NOT_MET, 0x212C0D48),
             (ErrorCodes.WT_SESSION_GONE, 0x170D7B68),
+            (ErrorCodes.WT_STREAM_BUFFER_EXCEEDED, 0x52E4A40FA8DC),
         ],
     )
     def test_error_code_values(self, member: ErrorCodes, expected_value: int) -> None:

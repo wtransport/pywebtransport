@@ -4,7 +4,7 @@ use bytes::Bytes;
 
 // WebTransport connection handle.
 pub(crate) type ConnectionHandle = u64;
-// Application-level error code.
+// Protocol error code.
 pub(crate) type ErrorCode = u64;
 // Canonicalized HTTP/3 header byte pairs.
 pub(crate) type Headers = Vec<(Bytes, Bytes)>;

@@ -21,9 +21,9 @@ env:
 
 jobs:
   lint:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     container:
-      image: python:3.12-slim-bookworm
+      image: python:3.14-slim-trixie
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -62,13 +62,13 @@ jobs:
 
   test:
     needs: lint
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
     container:
-      image: python:${{ matrix.python-version }}-slim-bookworm
+      image: python:${{ matrix.python-version }}-slim-trixie
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -116,10 +116,10 @@ jobs:
 
   report:
     needs: test
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     if: github.event_name == 'push'
     container:
-      image: python:3.12-slim-bookworm
+      image: python:3.14-slim-trixie
     steps:
       - name: Checkout code
         uses: actions/checkout@v6

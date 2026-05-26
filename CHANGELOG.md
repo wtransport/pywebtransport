@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(No planned changes for the next release yet.)_
 
+## [0.18.0] - 2026-05-26
+
+This release focuses on optimizing the datagram transmission pipeline, hardening protocol state machines, and enforcing strict compliance with WebTransport binary encoding specifications.
+
+### Changed
+
+- **CI/CD Infrastructure**: Upgraded continuous integration runners to Ubuntu 26.04 and migrated test container base images to Debian 13 (Trixie). Established CPython 3.14 as the default testing runtime and explicitly pinned the existing Rust 1.93.1 compiler requirement via `rust-toolchain.toml` to enforce build determinism.
+- **Datagram Pipeline Optimization**: Restructured the datagram encoding lifecycle to eliminate intermediate heap allocations within the protocol engine. Segmented headers and payloads are now concatenated strictly at the transport adapter boundary to satisfy contiguous memory constraints of the underlying QUIC layer.
+- **State Machine Hardening**: Transitioned stream I/O validations to an explicit whitelist strategy, securely rejecting operations incongruent with topological directionality. Introduced a unified `abort` pipeline for fail-fast termination and safe buffer sanitization during cascading closures.
+- **Header Processing Efficiency**: Replaced redundant header cloning with in-place mutations (`extend_from_slice`) and enforced strict HTTP/3 pseudo-header (`:`) filtering during session creation to guarantee QPACK encoding compliance.
+- **Execution Flow Flattening**: Refactored connection closure routines utilizing strict guard clauses to prevent implicit execution fallthroughs and dangling side-effects in terminal states.
+
+### Fixed
+
+- **Protocol Encoding Compliance**: Corrected `CLOSE_SESSION` capsule serialization to utilize a fixed 32-bit big-endian integer for application error codes, eliminating the non-compliant variable-length integer (`varint`) implementation.
+- **Type Boundary Enforcement**: Constrained WebTransport application error codes strictly to `u32` at the protocol utility boundary, natively enforcing architectural limits at the type level and neutralizing redundant runtime capacity validations.
+- **TLS Exporter Standardization**: Overhauled the keying material export context to strictly comply with protocol specifications, injecting the mandatory `EXPORTER-WebTransport` label and enforcing `u8` bounds on length parameters.
+- **Memory Leak Eradication**: Resolved resource leakage vectors within the `early_event_buffer` during unaccepted session teardowns, and restricted `stream_map` routing table allocations strictly to valid parent session scopes.
+- **MTU Overflow Prevention**: Integrated dynamic `varint_size` deductions for Quarter Stream ID headers to accurately restrict maximum application payloads, preventing downstream packet size overflows and silent drop errors.
+- **Control Frame Throttling**: Implemented strict debouncing heuristics within the session flow control evaluator to mitigate redundant control-frame storms during capacity threshold saturation.
+
 ## [0.17.1] - 2026-05-09
 
 This release resolves initialization race conditions, asynchronous task memory leaks, and Windows NT kernel compatibility issues to stabilize the core runtime environment.
@@ -930,7 +951,8 @@ This is a major release focused on enhancing runtime safety and modernizing the 
 - cryptography (>=45.0.4,<46.0.0) for SSL/TLS operations
 - typing-extensions (>=4.14.0,<5.0.0) for Python <3.10 support
 
-[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.17.1...HEAD
+[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/wtransport/pywebtransport/compare/v0.17.1...v0.18.0
 [0.17.1]: https://github.com/wtransport/pywebtransport/compare/v0.17.0...v0.17.1
 [0.17.0]: https://github.com/wtransport/pywebtransport/compare/v0.16.1...v0.17.0
 [0.16.1]: https://github.com/wtransport/pywebtransport/compare/v0.16.0...v0.16.1

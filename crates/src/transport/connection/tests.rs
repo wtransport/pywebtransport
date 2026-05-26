@@ -188,28 +188,6 @@ fn test_handle_user_event_dispatches_cleanly() {
     assert!(connection.pending_effects.is_empty());
 }
 
-#[test]
-fn test_poll_endpoint_events_delegates_cleanly() {
-    let mut connection = create_test_connection();
-
-    let _ = connection.poll_endpoint_events();
-}
-
-#[test]
-fn test_poll_events_returns_none_initially() {
-    let mut connection = create_test_connection();
-
-    assert!(connection.poll_events().is_none());
-}
-
-#[test]
-fn test_poll_transmit_delegates_cleanly() {
-    let mut connection = create_test_connection();
-    let mut workspace = Vec::new();
-
-    let _ = connection.poll_transmit(&mut workspace, Instant::now());
-}
-
 #[rstest]
 #[case(Some(Duration::from_secs(5)), Some(Duration::from_secs(10)))]
 #[case(None, Some(Duration::from_secs(10)))]
@@ -233,6 +211,28 @@ fn test_new_initialization_sets_correct_timer_states(
         connection.next_early_event_time,
         early_event_ttl.map(|interval| now + interval)
     );
+}
+
+#[test]
+fn test_poll_endpoint_events_delegates_cleanly() {
+    let mut connection = create_test_connection();
+
+    let _ = connection.poll_endpoint_events();
+}
+
+#[test]
+fn test_poll_events_returns_none_initially() {
+    let mut connection = create_test_connection();
+
+    assert!(connection.poll_events().is_none());
+}
+
+#[test]
+fn test_poll_transmit_delegates_cleanly() {
+    let mut connection = create_test_connection();
+    let mut workspace = Vec::new();
+
+    let _ = connection.poll_transmit(&mut workspace, Instant::now());
 }
 
 #[test]
@@ -402,7 +402,8 @@ fn test_process_effects_send_quic_data_appends_to_send_buffer() {
 fn test_process_effects_send_quic_datagram_processes_safely() {
     let mut connection = create_test_connection();
     let effects = vec![Effect::SendQuicDatagram {
-        data: Bytes::from_static(b"test"),
+        header: Bytes::from_static(b"head"),
+        payload: Bytes::from_static(b"load"),
     }];
 
     connection.process_effects(effects, 0.0, Instant::now());

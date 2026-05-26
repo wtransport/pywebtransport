@@ -3,13 +3,13 @@
 version: 2
 
 build:
-  os: "ubuntu-24.04"
+  os: "ubuntu-26.04"
   apt_packages:
     - build-essential
     - clang
     - pkg-config
   tools:
-    python: "3.12"
+    python: "3.14"
   jobs:
     post_create_environment:
       - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.1

@@ -299,6 +299,10 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         constants::ERR_WT_REQUIREMENTS_NOT_MET,
     )?;
     m.add("ERR_WT_SESSION_GONE", constants::ERR_WT_SESSION_GONE)?;
+    m.add(
+        "ERR_WT_STREAM_BUFFER_EXCEEDED",
+        constants::ERR_WT_STREAM_BUFFER_EXCEEDED,
+    )?;
     m.add("UDP_MAX_DATAGRAM_SIZE", constants::UDP_MAX_DATAGRAM_SIZE)?;
     m.add("WT_STREAMS_LIMIT", constants::WT_STREAMS_LIMIT)?;
 

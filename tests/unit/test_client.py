@@ -19,7 +19,6 @@ from pywebtransport import (
 from pywebtransport.client import (
     ClientDiagnostics,
     ClientStats,
-    _format_duration,
     _merge_headers,
     _normalize_headers,
     _parse_webtransport_url,
@@ -198,7 +197,6 @@ class TestWebTransportClient:
     @pytest.fixture(autouse=True)
     def setup_common_mocks(self, mocker: MockerFixture) -> None:
         mocker.patch(target="pywebtransport.client._parse_webtransport_url", return_value=("example.com", 443, "/"))
-        mocker.patch(target="pywebtransport.client._format_duration")
         mocker.patch(target="time.perf_counter", return_value=1000.0)
         mocker.patch(
             target="pywebtransport.client._resolve_host",
@@ -1078,23 +1076,6 @@ class TestWebTransportClient:
         client._closed = True
 
         assert str(client) == "WebTransportClient(status=closed, connections=5)"
-
-
-@pytest.mark.parametrize(
-    argnames="seconds, expected",
-    argvalues=[
-        (1e-7, "100ns"),
-        (5e-5, "50.0µs"),
-        (0.1234, "123.4ms"),
-        (5.67, "5.7s"),
-        (90.5, "1m30.5s"),
-        (3723.1, "1h2m3.1s"),
-    ],
-)
-def test_format_duration(seconds: float, expected: str) -> None:
-    result = _format_duration(seconds=seconds)
-
-    assert result == expected
 
 
 def test_merge_headers_dict() -> None:

@@ -30,6 +30,11 @@ fn fixture_error_source() -> ErrorSource {
 }
 
 #[fixture]
+fn fixture_header_bytes() -> Bytes {
+    Bytes::from_static(b"header_data")
+}
+
+#[fixture]
 fn fixture_headers() -> Headers {
     vec![
         (Bytes::from("content-type"), Bytes::from("application/json")),
@@ -230,6 +235,24 @@ fn test_effect_send_h3_headers_lifecycle_success(
         assert_eq!(s1, s2);
         assert_eq!(h1, h2);
         assert_eq!(e1, e2);
+    }
+}
+
+#[rstest]
+fn test_effect_send_quic_datagram_structure_success(
+    fixture_header_bytes: Bytes,
+    fixture_bytes: Bytes,
+) {
+    let effect = Effect::SendQuicDatagram {
+        header: fixture_header_bytes.clone(),
+        payload: fixture_bytes.clone(),
+    };
+
+    assert!(matches!(effect, Effect::SendQuicDatagram { .. }));
+
+    if let Effect::SendQuicDatagram { header, payload } = effect {
+        assert_eq!(header, fixture_header_bytes);
+        assert_eq!(payload, fixture_bytes);
     }
 }
 

@@ -274,7 +274,8 @@ pub(crate) enum Effect {
         end_stream: bool,
     },
     SendQuicDatagram {
-        data: Bytes,
+        header: Bytes,
+        payload: Bytes,
     },
     StopQuicStream {
         stream_id: StreamId,

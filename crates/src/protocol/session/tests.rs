@@ -6,12 +6,13 @@ use rstest::*;
 use super::*;
 use crate::common::constants::{
     ERR_H3_DATAGRAM_ERROR, ERR_H3_FRAME_UNEXPECTED, ERR_H3_GENERAL_PROTOCOL_ERROR,
-    ERR_LIB_INTERNAL_ERROR, ERR_LIB_SESSION_STATE_ERROR, ERR_LIB_STREAM_STATE_ERROR,
-    ERR_WT_FLOW_CONTROL_ERROR, WT_CAPSULE_TYPE_CLOSE_SESSION, WT_CAPSULE_TYPE_DATA_BLOCKED,
-    WT_CAPSULE_TYPE_DRAIN_SESSION, WT_CAPSULE_TYPE_MAX_DATA, WT_CAPSULE_TYPE_MAX_STREAM_DATA,
-    WT_CAPSULE_TYPE_MAX_STREAMS_BIDI, WT_CAPSULE_TYPE_MAX_STREAMS_UNI,
-    WT_CAPSULE_TYPE_STREAM_DATA_BLOCKED, WT_CAPSULE_TYPE_STREAMS_BLOCKED_BIDI,
-    WT_CAPSULE_TYPE_STREAMS_BLOCKED_UNI, WT_PROTOCOL, WT_STREAMS_LIMIT,
+    ERR_H3_MESSAGE_ERROR, ERR_LIB_INTERNAL_ERROR, ERR_LIB_SESSION_STATE_ERROR,
+    ERR_LIB_STREAM_STATE_ERROR, ERR_WT_FLOW_CONTROL_ERROR, WT_CAPSULE_TYPE_CLOSE_SESSION,
+    WT_CAPSULE_TYPE_DATA_BLOCKED, WT_CAPSULE_TYPE_DRAIN_SESSION, WT_CAPSULE_TYPE_MAX_DATA,
+    WT_CAPSULE_TYPE_MAX_STREAM_DATA, WT_CAPSULE_TYPE_MAX_STREAMS_BIDI,
+    WT_CAPSULE_TYPE_MAX_STREAMS_UNI, WT_CAPSULE_TYPE_STREAM_DATA_BLOCKED,
+    WT_CAPSULE_TYPE_STREAMS_BLOCKED_BIDI, WT_CAPSULE_TYPE_STREAMS_BLOCKED_UNI,
+    WT_MAX_CLOSE_REASON_SIZE, WT_PROTOCOL, WT_STREAMS_LIMIT,
 };
 use crate::common::types::{ErrorSource, EventType, SessionState, StreamDirection};
 use crate::protocol::events::{Effect, RequestResult};
@@ -217,23 +218,59 @@ fn test_close_closing_session(mut fixture_server_session: Session) {
 }
 
 #[rstest]
-fn test_close_session_resets_streams(mut fixture_server_session: Session) {
+fn test_close_session_aborts_pending_requests(mut fixture_client_session: Session) {
+    fixture_client_session.state = SessionState::Connected;
+    fixture_client_session.local_streams_bidi_opened = 5;
+    fixture_client_session.local_streams_uni_opened = 5;
+
+    fixture_client_session.create_stream(501, false);
+    fixture_client_session.create_stream(502, true);
+
+    let effects = fixture_client_session.close(500, 0, None, 1.0);
+
+    let failed_bidi = effects.iter().any(|e| {
+        matches!(
+            e,
+            Effect::NotifyRequestFailed {
+                request_id: 501,
+                reason,
+                ..
+            } if reason == "wt_session abort"
+        )
+    });
+    let failed_uni = effects.iter().any(|e| {
+        matches!(
+            e,
+            Effect::NotifyRequestFailed {
+                request_id: 502,
+                reason,
+                ..
+            } if reason == "wt_session abort"
+        )
+    });
+
+    assert!(failed_bidi);
+    assert!(failed_uni);
+}
+
+#[rstest]
+fn test_close_session_aborts_streams(mut fixture_server_session: Session) {
     fixture_server_session.state = SessionState::Connected;
     fixture_server_session.bind_stream(4, 1, false, 1.0);
     fixture_server_session.bind_stream(8, 2, false, 1.0);
 
     let effects = fixture_server_session.close(500, 0, None, 1.0);
 
-    let resets = effects
+    let aborts = effects
         .iter()
         .filter(|e| matches!(e, Effect::ResetQuicStream { .. }))
         .count();
-    assert_eq!(resets, 2);
+    assert_eq!(aborts, 2);
     assert!(fixture_server_session.active_streams.is_empty());
 }
 
 #[rstest]
-fn test_close_session_resets_streams_by_direction(mut fixture_server_session: Session) {
+fn test_close_session_aborts_streams_by_direction(mut fixture_server_session: Session) {
     fixture_server_session.state = SessionState::Connected;
     fixture_server_session.bind_stream(1, 1, false, 1.0);
     fixture_server_session.recv_stream_data(2, Bytes::from_static(b"data"), false, 1.0);
@@ -277,6 +314,40 @@ fn test_close_session_success(mut fixture_server_session: Session) {
 }
 
 #[rstest]
+fn test_close_session_with_long_reason_truncation(mut fixture_server_session: Session) {
+    fixture_server_session.state = SessionState::Connected;
+
+    let long_reason = "あ".repeat(1000);
+    let effects = fixture_server_session.close(500, 404, Some(long_reason.into()), 1.0);
+
+    let limit = usize::try_from(WT_MAX_CLOSE_REASON_SIZE).unwrap_or(1024);
+
+    let has_valid_capsule = effects.iter().any(|e| {
+        if let Effect::SendH3Capsule {
+            capsule_type,
+            capsule_data,
+            end_stream,
+            ..
+        } = e
+        {
+            let is_close = *capsule_type == WT_CAPSULE_TYPE_CLOSE_SESSION;
+            let is_end = *end_stream;
+            let is_len_valid = capsule_data.len() <= 4 + limit;
+
+            let is_utf8 = capsule_data
+                .get(4..)
+                .is_some_and(|payload| std::str::from_utf8(payload).is_ok());
+
+            is_close && is_end && is_len_valid && is_utf8
+        } else {
+            false
+        }
+    });
+
+    assert!(has_valid_capsule);
+}
+
+#[rstest]
 fn test_close_session_with_reason_capsule(mut fixture_server_session: Session) {
     fixture_server_session.state = SessionState::Connected;
 
@@ -294,6 +365,54 @@ fn test_close_session_with_reason_capsule(mut fixture_server_session: Session) {
         )
     });
     assert!(has_close_capsule);
+}
+
+#[rstest]
+fn test_create_stream_debounce_streams_blocked_bidi_capsule(mut fixture_client_session: Session) {
+    fixture_client_session.state = SessionState::Connected;
+    fixture_client_session.local_streams_bidi_opened = 5;
+
+    let effects1 = fixture_client_session.create_stream(500, false);
+    assert!(effects1.iter().any(|e| matches!(
+        e,
+        Effect::SendH3Capsule {
+            capsule_type: WT_CAPSULE_TYPE_STREAMS_BLOCKED_BIDI,
+            ..
+        }
+    )));
+
+    let effects2 = fixture_client_session.create_stream(501, false);
+    assert!(!effects2.iter().any(|e| matches!(
+        e,
+        Effect::SendH3Capsule {
+            capsule_type: WT_CAPSULE_TYPE_STREAMS_BLOCKED_BIDI,
+            ..
+        }
+    )));
+}
+
+#[rstest]
+fn test_create_stream_debounce_streams_blocked_uni_capsule(mut fixture_client_session: Session) {
+    fixture_client_session.state = SessionState::Connected;
+    fixture_client_session.local_streams_uni_opened = 5;
+
+    let effects1 = fixture_client_session.create_stream(500, true);
+    assert!(effects1.iter().any(|e| matches!(
+        e,
+        Effect::SendH3Capsule {
+            capsule_type: WT_CAPSULE_TYPE_STREAMS_BLOCKED_UNI,
+            ..
+        }
+    )));
+
+    let effects2 = fixture_client_session.create_stream(501, true);
+    assert!(!effects2.iter().any(|e| matches!(
+        e,
+        Effect::SendH3Capsule {
+            capsule_type: WT_CAPSULE_TYPE_STREAMS_BLOCKED_UNI,
+            ..
+        }
+    )));
 }
 
 #[rstest]
@@ -452,11 +571,31 @@ fn test_drain_session_wrong_state(mut fixture_server_session: Session) {
 }
 
 #[rstest]
+fn test_export_keying_material_invalid_length(mut fixture_client_session: Session) {
+    fixture_client_session.state = SessionState::Connected;
+    let long_label = "a".repeat(256);
+    let effects = fixture_client_session.export_keying_material(500, &long_label, b"ctx", 32);
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Session,
+            error_code: None,
+            ..
+        }]
+    ));
+
+    if let [Effect::NotifyRequestFailed { reason, .. }] = effects.as_slice() {
+        assert_eq!(reason, "wt_session validate invalid");
+    }
+}
+
+#[rstest]
 fn test_export_keying_material_success(mut fixture_client_session: Session) {
     fixture_client_session.state = SessionState::Connected;
     let context = b"test_context";
-    let effects =
-        fixture_client_session.export_keying_material(500, "EXPORTER-test".to_owned(), context, 32);
+    let label = "test_label";
+    let effects = fixture_client_session.export_keying_material(500, label, context, 32);
 
     assert!(matches!(
         effects.as_slice(),
@@ -469,20 +608,29 @@ fn test_export_keying_material_success(mut fixture_client_session: Session) {
 
     if let [
         Effect::ExportTlsKeyingMaterial {
+            label: export_label,
             context: exported_ctx,
             ..
         },
     ] = effects.as_slice()
     {
-        assert_eq!(exported_ctx.get(8..), Some(context.as_slice()));
+        assert_eq!(export_label, "EXPORTER-WebTransport");
+
+        let mut expected_ctx = BytesMut::new();
+        expected_ctx.put_u64(100);
+        expected_ctx.put_u8(u8::try_from(label.len()).unwrap_or_default());
+        expected_ctx.put_slice(label.as_bytes());
+        expected_ctx.put_u8(u8::try_from(context.len()).unwrap_or_default());
+        expected_ctx.put_slice(context);
+
+        assert_eq!(exported_ctx, &expected_ctx.freeze());
     }
 }
 
 #[rstest]
 fn test_export_keying_material_wrong_state(mut fixture_client_session: Session) {
     fixture_client_session.state = SessionState::Connecting;
-    let effects =
-        fixture_client_session.export_keying_material(500, "label".to_owned(), b"ctx", 32);
+    let effects = fixture_client_session.export_keying_material(500, "label", b"ctx", 32);
 
     assert!(matches!(
         effects.as_slice(),
@@ -506,7 +654,7 @@ fn test_flush_blocked_writes_on_max_data_update(mut fixture_server_session: Sess
     fixture_server_session.state = SessionState::Connected;
     fixture_server_session.bind_stream(4, 500, false, 1.0);
     fixture_server_session.local_data_sent = 10_000;
-    fixture_server_session.send_stream_data(4, 500, Bytes::from_static(b"pending"), false);
+    fixture_server_session.send_stream_data(4, 500, Bytes::from_static(b"pending"), false, 1.0);
     assert!(fixture_server_session.blocked_streams.contains(&4));
 
     let new_max = 11_000;
@@ -524,6 +672,33 @@ fn test_flush_blocked_writes_on_max_data_update(mut fixture_server_session: Sess
             .any(|e| matches!(e, Effect::SendQuicData { .. }))
     );
     assert!(!fixture_server_session.blocked_streams.contains(&4));
+}
+
+#[rstest]
+fn test_grant_data_credit_connecting_state(mut fixture_server_session: Session) {
+    let effects = fixture_server_session.grant_data_credit(500, 20_000);
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Session,
+            error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
+            ..
+        }]
+    ));
+}
+
+#[rstest]
+fn test_grant_data_credit_draining_state(mut fixture_server_session: Session) {
+    fixture_server_session.state = SessionState::Draining;
+    let effects = fixture_server_session.grant_data_credit(500, 20_000);
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Session,
+            error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
+            ..
+        }]
+    ));
 }
 
 #[rstest]
@@ -576,6 +751,33 @@ fn test_grant_data_credit_varint_error(mut fixture_server_session: Session) {
 fn test_grant_data_credit_wrong_state(mut fixture_server_session: Session) {
     fixture_server_session.state = SessionState::Closed;
     let effects = fixture_server_session.grant_data_credit(500, 10_010);
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Session,
+            error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
+            ..
+        }]
+    ));
+}
+
+#[rstest]
+fn test_grant_streams_credit_connecting_state(mut fixture_server_session: Session) {
+    let effects = fixture_server_session.grant_streams_credit(500, false, 100);
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Session,
+            error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
+            ..
+        }]
+    ));
+}
+
+#[rstest]
+fn test_grant_streams_credit_draining_state(mut fixture_server_session: Session) {
+    fixture_server_session.state = SessionState::Draining;
+    let effects = fixture_server_session.grant_streams_credit(500, false, 100);
     assert!(matches!(
         effects.as_slice(),
         [Effect::NotifyRequestFailed {
@@ -677,10 +879,7 @@ fn test_prune_closed_streams(mut fixture_server_session: Session) {
 fn test_recv_capsule_close_session(mut fixture_server_session: Session) {
     fixture_server_session.state = SessionState::Connected;
     let mut buf = BytesMut::new();
-    assert_eq!(
-        write_varint(&mut buf, 404).map_err(|e| e.to_string()),
-        Ok(())
-    );
+    buf.put_u32(404);
     buf.put_slice(b"Reason");
 
     let effects =
@@ -698,6 +897,25 @@ fn test_recv_capsule_close_session(mut fixture_server_session: Session) {
         [
             Effect::EmitSessionEvent {
                 event_type: EventType::SessionClosed,
+                ..
+            },
+            ..
+        ]
+    ));
+}
+
+#[rstest]
+fn test_recv_capsule_close_session_malformed(mut fixture_server_session: Session) {
+    fixture_server_session.state = SessionState::Connected;
+    let buf = Bytes::from(vec![0x00, 0x01]);
+
+    let effects = fixture_server_session.recv_capsule(WT_CAPSULE_TYPE_CLOSE_SESSION, &buf, 1.0);
+
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            Effect::ResetQuicStream {
+                error_code: ERR_H3_MESSAGE_ERROR,
                 ..
             },
             ..
@@ -732,6 +950,24 @@ fn test_recv_capsule_data_blocked_replenishes_credit(mut fixture_server_session:
         fixture_server_session.recv_capsule(WT_CAPSULE_TYPE_DATA_BLOCKED, &Bytes::new(), 1.0);
 
     assert!(fixture_server_session.local_max_data > 100);
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::SendH3Capsule {
+            capsule_type: WT_CAPSULE_TYPE_MAX_DATA,
+            ..
+        }]
+    ));
+}
+
+#[rstest]
+fn test_recv_capsule_data_blocked_replenishes_credit_draining(mut fixture_server_session: Session) {
+    fixture_server_session.state = SessionState::Draining;
+    fixture_server_session.local_max_data = 100;
+    fixture_server_session.local_data_consumed = 90;
+
+    let effects =
+        fixture_server_session.recv_capsule(WT_CAPSULE_TYPE_DATA_BLOCKED, &Bytes::new(), 1.0);
+
     assert!(matches!(
         effects.as_slice(),
         [Effect::SendH3Capsule {
@@ -1004,6 +1240,30 @@ fn test_recv_capsule_streams_blocked_replenishes_credit(mut fixture_server_sessi
 }
 
 #[rstest]
+fn test_recv_capsule_streams_blocked_replenishes_credit_draining(
+    mut fixture_server_session: Session,
+) {
+    fixture_server_session.state = SessionState::Draining;
+    fixture_server_session.local_max_streams_uni = 10;
+    fixture_server_session.peer_streams_uni_closed = 8;
+    fixture_server_session.initial_max_streams_uni = 10;
+
+    let effects = fixture_server_session.recv_capsule(
+        WT_CAPSULE_TYPE_STREAMS_BLOCKED_UNI,
+        &Bytes::new(),
+        1.0,
+    );
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::SendH3Capsule {
+            capsule_type: WT_CAPSULE_TYPE_MAX_STREAMS_UNI,
+            ..
+        }]
+    ));
+}
+
+#[rstest]
 fn test_recv_connect_close(mut fixture_server_session: Session) {
     fixture_server_session.state = SessionState::Connected;
     let effects = fixture_server_session.recv_connect_close(1.0);
@@ -1036,6 +1296,12 @@ fn test_recv_connect_close_when_closing(mut fixture_server_session: Session) {
 
     assert_eq!(fixture_server_session.state, SessionState::Closed);
     assert_eq!(fixture_server_session.closed_at, Some(0.5));
+    assert!(effects.is_empty());
+}
+
+#[rstest]
+fn test_recv_datagram_connecting_state(mut fixture_server_session: Session) {
+    let effects = fixture_server_session.recv_datagram(Bytes::from_static(b"recv"));
     assert!(effects.is_empty());
 }
 
@@ -1080,6 +1346,34 @@ fn test_recv_stream_data_closed_session(mut fixture_server_session: Session) {
     fixture_server_session.state = SessionState::Closed;
     let effects = fixture_server_session.recv_stream_data(4, Bytes::new(), false, 1.0);
     assert!(effects.is_empty());
+}
+
+#[rstest]
+fn test_recv_stream_data_connecting_state(mut fixture_server_session: Session) {
+    let stream_id = 4;
+    let data = Bytes::from_static(b"hello");
+    let effects = fixture_server_session.recv_stream_data(stream_id, data, false, 1.0);
+    assert!(effects.is_empty());
+}
+
+#[rstest]
+fn test_recv_stream_data_draining_state(mut fixture_server_session: Session) {
+    fixture_server_session.state = SessionState::Draining;
+    let stream_id = 4;
+    let data = Bytes::from_static(b"hello");
+    let effects = fixture_server_session.recv_stream_data(stream_id, data, false, 1.0);
+    assert!(!effects.is_empty());
+
+    let has_opened = effects.iter().any(|e| {
+        matches!(
+            e,
+            Effect::EmitStreamEvent {
+                event_type: EventType::StreamOpened,
+                ..
+            }
+        )
+    });
+    assert!(has_opened);
 }
 
 #[rstest]
@@ -1306,6 +1600,38 @@ fn test_reset_stream_user_command(mut fixture_server_session: Session) {
 }
 
 #[rstest]
+fn test_send_datagram_exact_boundary_success(mut fixture_server_session: Session) {
+    fixture_server_session.state = SessionState::Connected;
+    let data = Bytes::from(vec![0u8; 1499]);
+    let effects = fixture_server_session.send_datagram(500, data, 1500);
+
+    assert_eq!(fixture_server_session.datagrams_sent, 1);
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            Effect::SendH3Datagram { .. },
+            Effect::NotifyRequestDone { .. }
+        ]
+    ));
+}
+
+#[rstest]
+fn test_send_datagram_peer_max_too_small_failure(mut fixture_server_session: Session) {
+    fixture_server_session.state = SessionState::Connected;
+    let data = Bytes::from_static(b"a");
+    let effects = fixture_server_session.send_datagram(500, data, 0);
+
+    assert_eq!(fixture_server_session.datagrams_sent, 0);
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Datagram,
+            ..
+        }]
+    ));
+}
+
+#[rstest]
 fn test_send_datagram_success(mut fixture_server_session: Session) {
     fixture_server_session.state = SessionState::Connected;
     let data = Bytes::from_static(b"dgram");
@@ -1324,7 +1650,7 @@ fn test_send_datagram_success(mut fixture_server_session: Session) {
 #[rstest]
 fn test_send_datagram_too_large_failure(mut fixture_server_session: Session) {
     fixture_server_session.state = SessionState::Connected;
-    let data = Bytes::from(vec![0u8; 2000]);
+    let data = Bytes::from(vec![0u8; 1500]);
     let effects = fixture_server_session.send_datagram(500, data, 1500);
 
     assert_eq!(fixture_server_session.datagrams_sent, 0);
@@ -1369,7 +1695,7 @@ fn test_send_stream_data_blocked_by_session_window(mut fixture_server_session: S
     fixture_server_session.local_data_sent = 10_000;
 
     let data = Bytes::from_static(b"blocked");
-    let effects = fixture_server_session.send_stream_data(4, 500, data, false);
+    let effects = fixture_server_session.send_stream_data(4, 500, data, false, 1.0);
 
     assert_eq!(fixture_server_session.local_data_sent, 10_000);
     assert!(fixture_server_session.blocked_streams.contains(&4));
@@ -1384,18 +1710,51 @@ fn test_send_stream_data_blocked_by_session_window(mut fixture_server_session: S
 }
 
 #[rstest]
+fn test_send_stream_data_debounce_data_blocked_capsule(mut fixture_server_session: Session) {
+    fixture_server_session.state = SessionState::Connected;
+    fixture_server_session.bind_stream(4, 500, false, 1.0);
+
+    fixture_server_session.local_data_sent = 10_000;
+
+    let data1 = Bytes::from_static(b"blocked1");
+    let effects1 = fixture_server_session.send_stream_data(4, 501, data1, false, 1.0);
+
+    assert!(effects1.iter().any(|e| matches!(
+        e,
+        Effect::SendH3Capsule {
+            capsule_type: WT_CAPSULE_TYPE_DATA_BLOCKED,
+            ..
+        }
+    )));
+
+    let data2 = Bytes::from_static(b"blocked2");
+    let effects2 = fixture_server_session.send_stream_data(4, 502, data2, false, 1.0);
+
+    let has_blocked_capsule = effects2.iter().any(|e| {
+        matches!(
+            e,
+            Effect::SendH3Capsule {
+                capsule_type: WT_CAPSULE_TYPE_DATA_BLOCKED,
+                ..
+            }
+        )
+    });
+    assert!(!has_blocked_capsule);
+}
+
+#[rstest]
 fn test_send_stream_data_fin_cleanup(mut fixture_server_session: Session) {
     fixture_server_session.state = SessionState::Connected;
     fixture_server_session.bind_stream(4, 500, false, 1.0);
 
-    let effects = fixture_server_session.send_stream_data(4, 500, Bytes::new(), true);
+    let effects = fixture_server_session.send_stream_data(4, 500, Bytes::new(), true, 1.0);
 
     assert!(!effects.is_empty());
 }
 
 #[rstest]
 fn test_send_stream_data_not_found(mut fixture_server_session: Session) {
-    let effects = fixture_server_session.send_stream_data(99, 500, Bytes::new(), false);
+    let effects = fixture_server_session.send_stream_data(99, 500, Bytes::new(), false, 1.0);
     assert!(matches!(
         effects.as_slice(),
         [Effect::NotifyRequestFailed {
@@ -1412,7 +1771,7 @@ fn test_send_stream_data_success(mut fixture_server_session: Session) {
     fixture_server_session.bind_stream(4, 500, false, 1.0);
 
     let data = Bytes::from_static(b"payload");
-    let effects = fixture_server_session.send_stream_data(4, 500, data, false);
+    let effects = fixture_server_session.send_stream_data(4, 500, data, false, 1.0);
 
     assert_eq!(fixture_server_session.local_data_sent, 7);
     assert!(
@@ -1504,6 +1863,7 @@ fn test_stream_read_not_found(mut fixture_server_session: Session) {
 
 #[rstest]
 fn test_stream_read_success(mut fixture_server_session: Session) {
+    fixture_server_session.state = SessionState::Connected;
     fixture_server_session.bind_stream(4, 500, false, 1.0);
 
     fixture_server_session.recv_stream_data(4, Bytes::from_static(b"data"), false, 1.0);

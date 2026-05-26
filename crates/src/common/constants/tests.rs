@@ -212,6 +212,7 @@ fn test_webtransport_capsule_types() {
 #[case(ERR_WT_FLOW_CONTROL_ERROR, 0x045D_4487)]
 #[case(ERR_WT_REQUIREMENTS_NOT_MET, 0x212C_0D48)]
 #[case(ERR_WT_SESSION_GONE, 0x170D_7B68)]
+#[case(ERR_WT_STREAM_BUFFER_EXCEEDED, 0x52E4_A40F_A8DC)]
 fn test_webtransport_error_codes_match_spec(#[case] error_code: u64, #[case] expected: u64) {
     assert_eq!(error_code, expected);
 }

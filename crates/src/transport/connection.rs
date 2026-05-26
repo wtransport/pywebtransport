@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
-use bytes::{Buf, Bytes};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use quinn_proto::{
     Connection as QuinnConnection, ConnectionEvent, Dir as QuinnDir, EndpointEvent,
     Event as QuinnEvent, ReadError, StreamEvent, StreamId as QuinnStreamId, Transmit, VarInt,
@@ -508,8 +508,11 @@ impl TransportConnection {
 
                     self.flush_stream(q_id);
                 }
-                Effect::SendQuicDatagram { data } => {
-                    let _transmit = self.quic.datagrams().send(data, false);
+                Effect::SendQuicDatagram { header, payload } => {
+                    let mut buf = BytesMut::with_capacity(header.len() + payload.len());
+                    buf.put(header);
+                    buf.put(payload);
+                    let _transmit = self.quic.datagrams().send(buf.freeze(), false);
                 }
                 Effect::StopQuicStream {
                     stream_id,

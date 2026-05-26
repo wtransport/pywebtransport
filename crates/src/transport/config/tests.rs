@@ -12,7 +12,7 @@ fn mock_base_config() -> RustBaseConfig {
     RustBaseConfig {
         alpn_protocols: vec!["h3".to_owned()],
         congestion_control_algorithm: "cubic".to_owned(),
-        connection_idle_timeout: Duration::from_secs(60),
+        connection_idle_timeout: Duration::from_mins(1),
         flow_control_window: 1_048_576,
         flow_control_window_auto_scale_enabled: true,
         initial_max_data: 10_485_760,

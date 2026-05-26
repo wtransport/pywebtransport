@@ -278,9 +278,14 @@ fn test_client_create_session_success(
     fixture_headers: Headers,
 ) {
     fixture_client_connection.state = ConnectionState::Connected;
+    let mut input_headers = fixture_headers;
+    input_headers.push((
+        Bytes::from_static(b"user-agent"),
+        Bytes::from_static(b"test"),
+    ));
 
     let effects =
-        fixture_client_connection.create_session(100, "/".into(), fixture_headers, None, 1.0);
+        fixture_client_connection.create_session(100, "/".into(), input_headers, None, 1.0);
 
     assert!(
         fixture_client_connection
@@ -289,7 +294,7 @@ fn test_client_create_session_success(
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::CreateH3Session { .. }]
+        [Effect::CreateH3Session { headers, .. }] if headers.len() == 1 && headers.first().is_some_and(|(k, _)| k.as_ref() == b"user-agent")
     ));
 }
 
@@ -347,7 +352,7 @@ fn test_client_create_session_with_wt_available_protocols(
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::CreateH3Session { .. }]
+        [Effect::CreateH3Session { headers, .. }] if headers.len() == 1 && headers.first().is_some_and(|(k, _)| k.as_ref() == WT_AVAILABLE_PROTOCOLS)
     ));
 }
 
@@ -436,11 +441,18 @@ fn test_client_recv_headers_rejects_non_200(
     fixture_client_connection.state = ConnectionState::Connected;
     fixture_client_connection.pending_requests.insert(0, 100);
     fixture_client_connection.create_session(100, "/".into(), fixture_headers, None, 1.0);
-    let response_headers = vec![(Bytes::from_static(b":status"), Bytes::from_static(b"404"))];
+    fixture_client_connection.recv_stream_data(0, 4, Bytes::from_static(b"early"), false, 1.5);
 
+    let response_headers = vec![(Bytes::from_static(b":status"), Bytes::from_static(b"404"))];
     let effects = fixture_client_connection.recv_headers(0, response_headers, false, 2.0);
 
     assert!(!fixture_client_connection.sessions.contains_key(&0));
+    assert_eq!(fixture_client_connection.early_event_count, 0);
+    assert!(
+        !fixture_client_connection
+            .early_event_buffer
+            .contains_key(&0)
+    );
     assert!(matches!(
         effects.as_slice(),
         [Effect::NotifyRequestFailed {
@@ -626,8 +638,7 @@ fn test_export_keying_material_delegates(
     let response_headers = vec![(Bytes::from_static(b":status"), Bytes::from_static(b"200"))];
     fixture_client_connection.recv_headers(0, response_headers, false, 2.0);
 
-    let effects =
-        fixture_client_connection.export_keying_material(0, 101, "label".into(), &[1, 2, 3], 32);
+    let effects = fixture_client_connection.export_keying_material(0, 101, "label", &[1, 2, 3], 32);
 
     assert!(matches!(
         effects.as_slice(),
@@ -638,7 +649,7 @@ fn test_export_keying_material_delegates(
 #[rstest]
 fn test_export_keying_material_not_found(fixture_server_connection: Connection) {
     let effects =
-        fixture_server_connection.export_keying_material(999, 100, "label".into(), &[1, 2, 3], 32);
+        fixture_server_connection.export_keying_material(999, 100, "label", &[1, 2, 3], 32);
 
     assert!(matches!(
         effects.as_slice(),
@@ -1120,10 +1131,16 @@ fn test_recv_stream_data_routes_and_buffers(
             .early_event_buffer
             .contains_key(&0)
     );
+    assert_eq!(fixture_server_connection.stream_map.get(&4), None);
 
-    fixture_server_connection.recv_headers(0, fixture_headers, false, 2.0);
+    let effects = fixture_server_connection.recv_headers(0, fixture_headers, false, 2.0);
 
-    assert_eq!(fixture_server_connection.stream_map.get(&4), Some(&0));
+    assert_eq!(fixture_server_connection.stream_map.get(&4), None);
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::ProcessProtocolEvent { .. }))
+    );
 }
 
 #[rstest]
@@ -1264,8 +1281,25 @@ fn test_send_datagram_not_found(mut fixture_server_connection: Connection) {
 }
 
 #[rstest]
+fn test_send_stream_data_delegates(
+    mut fixture_server_connection: Connection,
+    fixture_headers: Headers,
+) {
+    fixture_server_connection.state = ConnectionState::Connected;
+    fixture_server_connection.peer_initial_max_data = 1000;
+    fixture_server_connection.recv_headers(0, fixture_headers, false, 1.0);
+    fixture_server_connection.accept_session(0, 100, None, 1.5);
+    fixture_server_connection.bind_stream(0, 4, 101, false, 2.0);
+
+    let effects =
+        fixture_server_connection.send_stream_data(4, 102, Bytes::from_static(b"data"), false, 3.0);
+
+    assert!(!effects.is_empty());
+}
+
+#[rstest]
 fn test_send_stream_data_not_found(mut fixture_server_connection: Connection) {
-    let effects = fixture_server_connection.send_stream_data(4, 100, Bytes::new(), false);
+    let effects = fixture_server_connection.send_stream_data(4, 100, Bytes::new(), false, 1.0);
 
     assert!(matches!(
         effects.as_slice(),

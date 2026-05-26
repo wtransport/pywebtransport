@@ -85,7 +85,7 @@ pub(super) fn find_header(headers: &Headers, key: &str) -> Option<Bytes> {
 }
 
 // HTTP/3 to WebTransport error code mapping.
-pub(super) fn http_to_wt_error(http_error_code: u64) -> Option<ErrorCode> {
+pub(super) fn http_to_wt_error(http_error_code: ErrorCode) -> Option<u32> {
     if !(ERR_WT_APPLICATION_ERROR_FIRST..=ERR_WT_APPLICATION_ERROR_LAST).contains(&http_error_code)
     {
         return None;
@@ -98,7 +98,7 @@ pub(super) fn http_to_wt_error(http_error_code: u64) -> Option<ErrorCode> {
     let shifted = http_error_code - ERR_WT_APPLICATION_ERROR_FIRST;
     let result = shifted - (shifted / H3_ERROR_RESERVED_MODULO);
 
-    Some(result)
+    u32::try_from(result).ok()
 }
 
 // Bidirectional stream check.
@@ -123,13 +123,6 @@ pub(super) fn is_request_response_stream(stream_id: StreamId) -> bool {
 // Unidirectional stream check.
 pub(super) fn is_unidirectional_stream(stream_id: StreamId) -> bool {
     (stream_id & QUIC_STREAM_DIRECTION_MASK) != 0
-}
-
-// Header set merging operation.
-pub(super) fn merge_headers(base: &Headers, update: &Headers) -> Headers {
-    let mut out = base.clone();
-    out.extend_from_slice(update);
-    out
 }
 
 // Data limit auto-scaling calculation.
@@ -254,6 +247,19 @@ pub(super) fn read_varint(buf: &mut Cursor<&[u8]>) -> Result<u64, ErrorCode> {
     Ok(val)
 }
 
+// Variable-length integer byte length calculation.
+pub(crate) fn varint_size(value: u64) -> usize {
+    if value <= 63 {
+        1
+    } else if value <= 16383 {
+        2
+    } else if value <= 1_073_741_823 {
+        4
+    } else {
+        8
+    }
+}
+
 // Stream direction resolution from ID.
 pub(super) fn stream_dir_from_id(stream_id: StreamId, is_client: bool) -> StreamDirection {
     if cfg!(debug_assertions) {
@@ -275,14 +281,15 @@ pub(super) fn stream_dir_from_id(stream_id: StreamId, is_client: bool) -> Stream
 }
 
 // WebTransport to HTTP/3 error code mapping.
-pub(super) fn wt_to_http_error(app_error_code: ErrorCode) -> Option<u64> {
+pub(super) fn wt_to_http_error(app_error_code: u32) -> ErrorCode {
+    let app_error_code = u64::from(app_error_code);
     let base = ERR_WT_APPLICATION_ERROR_FIRST;
     let divisor = WT_ERROR_MAP_DIVISOR;
 
-    let shifted = base.checked_add(app_error_code)?;
+    let shifted = base + app_error_code;
     let offset = app_error_code / divisor;
 
-    Some(shifted + offset)
+    shifted + offset
 }
 
 // Variable-length integer encoding.

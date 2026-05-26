@@ -20,13 +20,16 @@ variables:
 
 lint:
   stage: lint
-  image: python:3.12-slim-bookworm
+  image: python:3.14-slim-trixie
   cache:
     paths:
       - .cache/pip
       - .cargo/registry
       - crates/target/
   before_script:
+    - cp "$INTERNAL_CA_CERT" /usr/local/share/ca-certificates/internal_ca.crt
+    - update-ca-certificates
+    - sed -i -e "s|http://deb.debian.org/debian-security|$APT_SECURITY_PROXY_URL|g" -e "s|http://deb.debian.org/debian|$APT_PROXY_URL|g" /etc/apt/sources.list.d/debian.sources
     - apt-get update && apt-get install -y curl build-essential clang
     - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.1
     - export PATH="$CARGO_HOME/bin:$PATH"
@@ -48,13 +51,16 @@ test:
   parallel:
     matrix:
       - PYTHON_VERSION: ["3.12", "3.13", "3.14"]
-  image: python:$PYTHON_VERSION-slim-bookworm
+  image: python:$PYTHON_VERSION-slim-trixie
   cache:
     paths:
       - .cache/pip
       - .cargo/registry
       - crates/target/
   before_script:
+    - cp "$INTERNAL_CA_CERT" /usr/local/share/ca-certificates/internal_ca.crt
+    - update-ca-certificates
+    - sed -i -e "s|http://deb.debian.org/debian-security|$APT_SECURITY_PROXY_URL|g" -e "s|http://deb.debian.org/debian|$APT_PROXY_URL|g" /etc/apt/sources.list.d/debian.sources
     - apt-get update && apt-get install -y curl build-essential clang
     - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.1
     - export PATH="$CARGO_HOME/bin:$PATH"
@@ -71,7 +77,7 @@ test:
 
 build:
   stage: build
-  image: python:3.12-slim-bookworm
+  image: python:3.14-slim-trixie
   variables:
     GIT_DEPTH: 0
   cache:
@@ -80,6 +86,9 @@ build:
       - .cargo/registry
       - crates/target/
   before_script:
+    - cp "$INTERNAL_CA_CERT" /usr/local/share/ca-certificates/internal_ca.crt
+    - update-ca-certificates
+    - sed -i -e "s|http://deb.debian.org/debian-security|$APT_SECURITY_PROXY_URL|g" -e "s|http://deb.debian.org/debian|$APT_PROXY_URL|g" /etc/apt/sources.list.d/debian.sources
     - apt-get update && apt-get install -y curl build-essential clang
     - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.1
     - export PATH="$CARGO_HOME/bin:$PATH"
@@ -89,7 +98,7 @@ build:
     - maturin build --release --strip --out dist --manifest-path crates/Cargo.toml
     - maturin sdist --out dist --manifest-path crates/Cargo.toml
     - echo "VERSION=$(python -c "import tomllib; print(tomllib.load(open('crates/Cargo.toml', 'rb'))['package']['version'])")" >> build.env
-    - echo "Built version $(python -c "import tomllib; print(tomllib.load(open('crates/Cargo.toml', 'rb'))['package']['version'])")"
+    - echo "built version $(python -c "import tomllib; print(tomllib.load(open('crates/Cargo.toml', 'rb'))['package']['version'])")"
     - ls -la dist/
   artifacts:
     paths:
@@ -103,18 +112,19 @@ build:
 
 deploy-release:
   stage: deploy
-  image: python:3.12-slim-bookworm
+  image: python:3.14-slim-trixie
   variables:
     GIT_DEPTH: 0
   cache: []
   dependencies:
     - build
   before_script:
-    - apt-get update && apt-get install -y ca-certificates git gnupg
     - cp "$INTERNAL_CA_CERT" /usr/local/share/ca-certificates/internal_ca.crt
     - update-ca-certificates
+    - sed -i -e "s|http://deb.debian.org/debian-security|$APT_SECURITY_PROXY_URL|g" -e "s|http://deb.debian.org/debian|$APT_PROXY_URL|g" /etc/apt/sources.list.d/debian.sources
+    - apt-get update && apt-get install -y git gnupg
     - export GPG_TTY=$(tty)
-    - gpg --batch --import "$GPG_PRIVATE_KEY"
+    - gpg --batch --import "$GITHUB_GPG_PRIVATE_KEY"
     - 'git config user.signingkey $(gpg --list-secret-keys --with-colons | grep "^sec:" | cut -d: -f5 | head -n1)'
     - git config commit.gpgsign true
     - python -m pip install --upgrade pip
@@ -123,7 +133,7 @@ deploy-release:
     - REMOTE_TAGS=$(git ls-remote --tags origin) || exit 1
     - |
       if echo "$REMOTE_TAGS" | grep -q "refs/tags/v$VERSION"; then
-        echo "Version v$VERSION already released - skipping"
+        echo "version v$VERSION already released - skipping"
         exit 0
       fi
     - twine check dist/*
@@ -131,7 +141,7 @@ deploy-release:
     - git config user.name "WTransport Bot"
     - git config user.email "251935624+wtransport-bot@users.noreply.github.com"
     - git tag -s -m "Release v$VERSION" "v$VERSION"
-    - git push "https://oauth2:$GITLAB_DEPLOY_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git" "v$VERSION"
+    - git push "https://oauth2:$GITLAB_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git" "v$VERSION"
     - git push "https://$GITHUB_TOKEN@github.com/wtransport/pywebtransport.git" $CI_COMMIT_SHA:refs/heads/$CI_COMMIT_BRANCH
     - git push "https://$GITHUB_TOKEN@github.com/wtransport/pywebtransport.git" --tags
   environment:
@@ -143,9 +153,9 @@ deploy-release:
 
 deploy-image:
   stage: deploy
-  image: docker:29.1
+  image: docker:29.5
   services:
-    - docker:29.1-dind
+    - docker:29.5-dind
   variables:
     DOCKER_DRIVER: overlay2
     DOCKER_TLS_CERTDIR: ""
@@ -163,7 +173,7 @@ deploy-image:
     - REMOTE_TAGS=$(git ls-remote --tags origin) || exit 1
     - |
       if echo "$REMOTE_TAGS" | grep -q "refs/tags/v$VERSION"; then
-        echo "Version v$VERSION already released - skipping Docker push to prevent overwriting immutable tags"
+        echo "version v$VERSION already released - skipping docker push to prevent overwriting immutable tags"
         exit 0
       fi
     - docker build -t $IMAGE_NAME:$VERSION -t $IMAGE_NAME:latest -f examples/interop/Dockerfile .

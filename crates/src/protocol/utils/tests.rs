@@ -132,8 +132,8 @@ fn test_find_header_str_missing_key() {
 #[case(ERR_WT_APPLICATION_ERROR_FIRST + 1, Some(1))]
 #[case(ERR_WT_APPLICATION_ERROR_FIRST + 31, Some(30))]
 fn test_http_to_wt_error_mapping_logic(
-    #[case] http_code: u64,
-    #[case] expected: Option<ErrorCode>,
+    #[case] http_code: ErrorCode,
+    #[case] expected: Option<u32>,
 ) {
     let result = http_to_wt_error(http_code);
 
@@ -218,21 +218,6 @@ fn test_is_unidirectional_stream_logic(#[case] stream_id: u64, #[case] expected:
     let result = is_unidirectional_stream(stream_id);
 
     assert_eq!(result, expected);
-}
-
-#[test]
-fn test_merge_headers_updates_correctly() {
-    let base = vec![
-        (Bytes::from("a"), Bytes::from("1")),
-        (Bytes::from("b"), Bytes::from("2")),
-    ];
-    let update = vec![(Bytes::from("c"), Bytes::from("3"))];
-
-    let result = merge_headers(&base, &update);
-
-    assert_eq!(result.len(), 3);
-    assert_eq!(result.first(), Some(&(Bytes::from("a"), Bytes::from("1"))));
-    assert_eq!(result.get(2), Some(&(Bytes::from("c"), Bytes::from("3"))));
 }
 
 #[rstest]
@@ -360,6 +345,22 @@ fn test_stream_dir_from_id_resolution(
     assert!(matches!(result, _x if result == expected));
 }
 
+#[rstest]
+#[case(0, 1)]
+#[case(63, 1)]
+#[case(64, 2)]
+#[case(16383, 2)]
+#[case(16384, 4)]
+#[case(1_073_741_823, 4)]
+#[case(1_073_741_824, 8)]
+#[case(4_611_686_018_427_387_903, 8)]
+#[case(u64::MAX, 8)]
+fn test_varint_size_calculation(#[case] value: u64, #[case] expected: usize) {
+    let result = varint_size(value);
+
+    assert_eq!(result, expected);
+}
+
 #[test]
 fn test_write_varint_too_large() {
     let mut buf = BytesMut::new();
@@ -388,20 +389,11 @@ fn test_write_varint_valid_encoding(#[case] val: u64, #[case] expected_len: usiz
     assert_eq!(decoded, Ok(val));
 }
 
-#[test]
-fn test_wt_to_http_error_mapping_overflow() {
-    let huge_code = u64::MAX;
-
-    let result = wt_to_http_error(huge_code);
-
-    assert!(result.is_none());
-}
-
 #[rstest]
-#[case(0, Some(ERR_WT_APPLICATION_ERROR_FIRST))]
-#[case(1, Some(ERR_WT_APPLICATION_ERROR_FIRST + 1))]
-#[case(30, Some(ERR_WT_APPLICATION_ERROR_FIRST + 31))]
-fn test_wt_to_http_error_mapping_valid(#[case] wt_code: ErrorCode, #[case] expected: Option<u64>) {
+#[case(0, ERR_WT_APPLICATION_ERROR_FIRST)]
+#[case(1, ERR_WT_APPLICATION_ERROR_FIRST + 1)]
+#[case(30, ERR_WT_APPLICATION_ERROR_FIRST + 31)]
+fn test_wt_to_http_error_mapping_valid(#[case] wt_code: u32, #[case] expected: ErrorCode) {
     let result = wt_to_http_error(wt_code);
 
     assert_eq!(result, expected);

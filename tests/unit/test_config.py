@@ -220,7 +220,7 @@ class TestServerConfig:
 
         config = ServerConfig.from_dict(config_dict=config_dict)
 
-        assert config.verify_mode == "INVALID_MODE"  # type: ignore[comparison-overlap]
+        assert getattr(config, "verify_mode") == "INVALID_MODE"
 
         with pytest.raises(expected_exception=ConfigurationError, match="cfg_verify_mode validate invalid"):
             config.validate()
