@@ -281,9 +281,10 @@ impl<'a, 'py> FromPyObject<'a, 'py> for ProtocolEvent {
             }),
             abi::USER_CREATE_SESSION => Ok(ProtocolEvent::UserCreateSession {
                 request_id: payload.get_item(0)?.extract()?,
-                path: payload.get_item(1)?.extract()?,
-                headers: extract_headers(&payload.get_item(2)?)?,
-                wt_available_protocols: payload.get_item(3)?.extract()?,
+                authority: payload.get_item(1)?.extract()?,
+                path: payload.get_item(2)?.extract()?,
+                headers: extract_headers(&payload.get_item(3)?)?,
+                wt_available_protocols: payload.get_item(4)?.extract()?,
             }),
             abi::USER_CREATE_STREAM => Ok(ProtocolEvent::UserCreateStream {
                 request_id: payload.get_item(0)?.extract()?,

@@ -212,10 +212,23 @@ fn test_client_create_session_limit_reached(
     fixture_client_connection.state = ConnectionState::Connected;
     fixture_client_connection.peer_initial_max_data = 100;
     fixture_client_connection.max_sessions = 1;
-    fixture_client_connection.create_session(100, "/".into(), fixture_headers.clone(), None, 1.0);
+    fixture_client_connection.create_session(
+        100,
+        "example.com".into(),
+        "/".into(),
+        fixture_headers.clone(),
+        None,
+        1.0,
+    );
 
-    let effects =
-        fixture_client_connection.create_session(101, "/".into(), fixture_headers, None, 1.0);
+    let effects = fixture_client_connection.create_session(
+        101,
+        "example.com".into(),
+        "/".into(),
+        fixture_headers,
+        None,
+        1.0,
+    );
 
     assert!(matches!(
         effects.as_slice(),
@@ -236,10 +249,23 @@ fn test_client_create_session_no_flow_control_limit_reached(
     fixture_client_connection.peer_initial_max_data = 0;
     fixture_client_connection.peer_initial_max_streams_bidi = 0;
     fixture_client_connection.peer_initial_max_streams_uni = 0;
-    fixture_client_connection.create_session(100, "/".into(), fixture_headers.clone(), None, 1.0);
+    fixture_client_connection.create_session(
+        100,
+        "example.com".into(),
+        "/".into(),
+        fixture_headers.clone(),
+        None,
+        1.0,
+    );
 
-    let effects =
-        fixture_client_connection.create_session(101, "/".into(), fixture_headers, None, 1.0);
+    let effects = fixture_client_connection.create_session(
+        101,
+        "example.com".into(),
+        "/".into(),
+        fixture_headers,
+        None,
+        1.0,
+    );
 
     assert!(matches!(
         effects.as_slice(),
@@ -259,8 +285,14 @@ fn test_client_create_session_peer_goaway_rejects(
     fixture_client_connection.state = ConnectionState::Connected;
     fixture_client_connection.peer_goaway_received = true;
 
-    let effects =
-        fixture_client_connection.create_session(100, "/".into(), fixture_headers, None, 1.0);
+    let effects = fixture_client_connection.create_session(
+        100,
+        "example.com".into(),
+        "/".into(),
+        fixture_headers,
+        None,
+        1.0,
+    );
 
     assert!(matches!(
         effects.as_slice(),
@@ -284,8 +316,14 @@ fn test_client_create_session_success(
         Bytes::from_static(b"test"),
     ));
 
-    let effects =
-        fixture_client_connection.create_session(100, "/".into(), input_headers, None, 1.0);
+    let effects = fixture_client_connection.create_session(
+        100,
+        "example.com".into(),
+        "/".into(),
+        input_headers,
+        None,
+        1.0,
+    );
 
     assert!(
         fixture_client_connection
@@ -294,7 +332,7 @@ fn test_client_create_session_success(
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::CreateH3Session { headers, .. }] if headers.len() == 1 && headers.first().is_some_and(|(k, _)| k.as_ref() == b"user-agent")
+        [Effect::CreateH3Session { authority, headers, .. }] if authority == "example.com" && headers.len() == 1 && headers.first().is_some_and(|(k, _)| k.as_ref() == b"user-agent")
     ));
 }
 
@@ -308,6 +346,7 @@ fn test_client_create_session_with_invalid_wt_available_protocols(
 
     let effects = fixture_client_connection.create_session(
         100,
+        "example.com".into(),
         "/".into(),
         fixture_headers,
         wt_available_protocols,
@@ -339,6 +378,7 @@ fn test_client_create_session_with_wt_available_protocols(
 
     let effects = fixture_client_connection.create_session(
         100,
+        "example.com".into(),
         "/".into(),
         fixture_headers,
         wt_available_protocols,
@@ -352,13 +392,20 @@ fn test_client_create_session_with_wt_available_protocols(
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::CreateH3Session { headers, .. }] if headers.len() == 1 && headers.first().is_some_and(|(k, _)| k.as_ref() == WT_AVAILABLE_PROTOCOLS)
+        [Effect::CreateH3Session { authority, headers, .. }] if authority == "example.com" && headers.len() == 1 && headers.first().is_some_and(|(k, _)| k.as_ref() == WT_AVAILABLE_PROTOCOLS)
     ));
 }
 
 #[rstest]
 fn test_client_create_session_wrong_state(mut fixture_client_connection: Connection) {
-    let effects = fixture_client_connection.create_session(100, "/".into(), vec![], None, 1.0);
+    let effects = fixture_client_connection.create_session(
+        100,
+        "example.com".into(),
+        "/".into(),
+        vec![],
+        None,
+        1.0,
+    );
 
     assert!(matches!(
         effects.as_slice(),
@@ -377,7 +424,14 @@ fn test_client_recv_headers_completes_session(
 ) {
     fixture_client_connection.state = ConnectionState::Connected;
     fixture_client_connection.pending_requests.insert(0, 100);
-    fixture_client_connection.create_session(100, "/".into(), fixture_headers, None, 1.0);
+    fixture_client_connection.create_session(
+        100,
+        "example.com".into(),
+        "/".into(),
+        fixture_headers,
+        None,
+        1.0,
+    );
     let response_headers = vec![(Bytes::from_static(b":status"), Bytes::from_static(b"200"))];
 
     let effects = fixture_client_connection.recv_headers(0, response_headers, false, 2.0);
@@ -440,7 +494,14 @@ fn test_client_recv_headers_rejects_non_200(
 ) {
     fixture_client_connection.state = ConnectionState::Connected;
     fixture_client_connection.pending_requests.insert(0, 100);
-    fixture_client_connection.create_session(100, "/".into(), fixture_headers, None, 1.0);
+    fixture_client_connection.create_session(
+        100,
+        "example.com".into(),
+        "/".into(),
+        fixture_headers,
+        None,
+        1.0,
+    );
     fixture_client_connection.recv_stream_data(0, 4, Bytes::from_static(b"early"), false, 1.5);
 
     let response_headers = vec![(Bytes::from_static(b":status"), Bytes::from_static(b"404"))];
@@ -551,7 +612,14 @@ fn test_connection_initialization(fixture_server_connection: Connection) {
 
 #[rstest]
 fn test_create_session_server_failure(mut fixture_server_connection: Connection) {
-    let effects = fixture_server_connection.create_session(100, "/".into(), vec![], None, 1.0);
+    let effects = fixture_server_connection.create_session(
+        100,
+        "example.com".into(),
+        "/".into(),
+        vec![],
+        None,
+        1.0,
+    );
 
     assert!(matches!(
         effects.as_slice(),
@@ -634,7 +702,14 @@ fn test_export_keying_material_delegates(
 ) {
     fixture_client_connection.state = ConnectionState::Connected;
     fixture_client_connection.pending_requests.insert(0, 100);
-    fixture_client_connection.create_session(100, "/".into(), fixture_headers, None, 1.0);
+    fixture_client_connection.create_session(
+        100,
+        "example.com".into(),
+        "/".into(),
+        fixture_headers,
+        None,
+        1.0,
+    );
     let response_headers = vec![(Bytes::from_static(b":status"), Bytes::from_static(b"200"))];
     fixture_client_connection.recv_headers(0, response_headers, false, 2.0);
 
@@ -663,7 +738,14 @@ fn test_export_keying_material_not_found(fixture_server_connection: Connection) 
 #[rstest]
 fn test_fail_session_cleans_pending(mut fixture_client_connection: Connection) {
     fixture_client_connection.state = ConnectionState::Connected;
-    fixture_client_connection.create_session(100, "/".into(), vec![], None, 1.0);
+    fixture_client_connection.create_session(
+        100,
+        "example.com".into(),
+        "/".into(),
+        vec![],
+        None,
+        1.0,
+    );
 
     let effects = fixture_client_connection.fail_session(100, None, "Error".into());
 
@@ -676,36 +758,6 @@ fn test_fail_session_cleans_pending(mut fixture_client_connection: Connection) {
         effects.as_slice(),
         [Effect::NotifyRequestFailed {
             source: ErrorSource::Session,
-            ..
-        }]
-    ));
-}
-
-#[rstest]
-fn test_fail_stream_delegates(mut fixture_server_connection: Connection, fixture_headers: Headers) {
-    fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, false, 1.0);
-    fixture_server_connection.accept_session(0, 100, None, 1.5);
-
-    let effects = fixture_server_connection.fail_stream(0, 101, false, None, "Reason".into());
-
-    assert!(matches!(
-        effects.as_slice(),
-        [Effect::NotifyRequestFailed {
-            source: ErrorSource::Stream,
-            ..
-        }]
-    ));
-}
-
-#[rstest]
-fn test_fail_stream_not_found(mut fixture_server_connection: Connection) {
-    let effects = fixture_server_connection.fail_stream(999, 100, false, None, "".into());
-
-    assert!(matches!(
-        effects.as_slice(),
-        [Effect::NotifyRequestFailed {
-            source: ErrorSource::Stream,
             ..
         }]
     ));

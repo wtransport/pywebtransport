@@ -2,7 +2,7 @@
 
 use pyo3::prelude::*;
 
-pub(super) const ABI_VERSION: u8 = 4;
+pub(super) const ABI_VERSION: u8 = 5;
 pub(super) const COMMAND_COMPLETED: u8 = 0x00;
 pub(super) const COMMAND_FAILED: u8 = 0x01;
 pub(super) const CONNECTION_EFFECTS: u8 = 0x02;

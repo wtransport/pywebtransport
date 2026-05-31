@@ -22,7 +22,13 @@ def pack_user_event(*, event: events.ProtocolEvent) -> tuple[int, tuple[Any, ...
         case events.UserCloseSession():
             return abi.USER_CLOSE_SESSION, (event.request_id, event.session_id, event.error_code, event.reason)
         case events.UserCreateSession():
-            return abi.USER_CREATE_SESSION, (event.request_id, event.path, event.headers, event.wt_available_protocols)
+            return abi.USER_CREATE_SESSION, (
+                event.request_id,
+                event.authority,
+                event.path,
+                event.headers,
+                event.wt_available_protocols,
+            )
         case events.UserCreateStream():
             return abi.USER_CREATE_STREAM, (event.request_id, event.session_id, event.is_unidirectional)
         case events.UserExportKeyingMaterial():

@@ -240,6 +240,8 @@ pub(crate) const SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI: u64 = 0x2B65;
 pub(crate) const SETTINGS_WT_INITIAL_MAX_STREAMS_UNI: u64 = 0x2B64;
 // UDP maximum datagram size payload limit.
 pub(crate) const UDP_MAX_DATAGRAM_SIZE: u64 = 65535;
+// UDP transmit batch allocation capacity.
+pub(crate) const UDP_TRANSMIT_BATCH_CAPACITY: usize = 64;
 // WebTransport header: `wt-available-protocols`.
 pub(crate) const WT_AVAILABLE_PROTOCOLS: &[u8] = b"wt-available-protocols";
 // WebTransport capsule type: `CLOSE_SESSION`.

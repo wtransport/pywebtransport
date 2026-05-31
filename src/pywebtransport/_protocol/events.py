@@ -56,6 +56,7 @@ class UserCloseSession(UserEvent[None]):
 class UserCreateSession(UserEvent[SessionId]):
     """User command to create a new WebTransport session."""
 
+    authority: str
     path: str
     headers: Headers
     wt_available_protocols: list[str] | None = None

@@ -15,7 +15,7 @@ from pywebtransport.constants import (
     DEFAULT_EVENT_QUEUE_CAPACITY,
     DEFAULT_MAX_EVENT_LISTENERS,
 )
-from pywebtransport.types import EventData, EventType, Future, Timeout
+from pywebtransport.types import EventData, EventType, Future
 
 __all__: list[str] = ["Event", "EventEmitter", "EventHandler"]
 
@@ -275,7 +275,7 @@ class EventEmitter:
         *,
         event_type: EventType | str | list[EventType | str],
         condition: Callable[[Event], bool] | None = None,
-        timeout: Timeout | None = None,
+        timeout: float | None = None,
     ) -> Event:
         """Await the emission of a specific event."""
         future: Future[Event] = asyncio.Future()

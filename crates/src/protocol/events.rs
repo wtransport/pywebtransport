@@ -51,13 +51,6 @@ pub(crate) enum ProtocolEvent {
         error_code: Option<ErrorCode>,
         reason: Cow<'static, str>,
     },
-    InternalFailQuicStream {
-        request_id: RequestId,
-        session_id: SessionId,
-        is_unidirectional: bool,
-        error_code: Option<ErrorCode>,
-        reason: Cow<'static, str>,
-    },
     TransportConnectionTerminated {
         error_code: ErrorCode,
         reason: Cow<'static, str>,
@@ -103,6 +96,7 @@ pub(crate) enum ProtocolEvent {
     },
     UserCreateSession {
         request_id: RequestId,
+        authority: String,
         path: String,
         headers: Headers,
         wt_available_protocols: Option<Vec<String>>,
@@ -192,6 +186,7 @@ pub(crate) enum Effect {
     },
     CreateH3Session {
         request_id: RequestId,
+        authority: String,
         path: String,
         headers: Headers,
     },

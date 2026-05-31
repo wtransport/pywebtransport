@@ -232,7 +232,7 @@ class TestWebTransportConnection:
         mock_controller.execute_request.side_effect = asyncio.CancelledError
 
         with pytest.raises(expected_exception=asyncio.CancelledError):
-            await connection.create_session(path="/")
+            await connection.create_session(authority="localhost:443", path="/")
 
     @pytest.mark.asyncio
     async def test_create_session_connection_error_propagates(
@@ -241,7 +241,7 @@ class TestWebTransportConnection:
         mock_controller.execute_request.side_effect = ConnectionError(message="Fail")
 
         with pytest.raises(expected_exception=ConnectionError):
-            await connection.create_session(path="/")
+            await connection.create_session(authority="localhost:443", path="/")
 
     @pytest.mark.asyncio
     async def test_create_session_generic_error(
@@ -250,7 +250,7 @@ class TestWebTransportConnection:
         mock_controller.execute_request.side_effect = ValueError("Fail")
 
         with pytest.raises(expected_exception=SessionError, match="wt_session create failed connection_handle=42"):
-            await connection.create_session(path="/")
+            await connection.create_session(authority="localhost:443", path="/")
 
     @pytest.mark.asyncio
     async def test_create_session_handle_missing(
@@ -259,7 +259,7 @@ class TestWebTransportConnection:
         mock_controller.execute_request.return_value = 1
 
         with pytest.raises(expected_exception=SessionError, match="wt_session resolve failed"):
-            await connection.create_session(path="/")
+            await connection.create_session(authority="localhost:443", path="/")
 
     @pytest.mark.asyncio
     async def test_create_session_server_error(self, connection: WebTransportConnection) -> None:
@@ -268,7 +268,7 @@ class TestWebTransportConnection:
         with pytest.raises(
             expected_exception=ConnectionError, match="wt_connection validate failed actual=False expected=true"
         ):
-            await connection.create_session(path="/")
+            await connection.create_session(authority="localhost:443", path="/")
 
     @pytest.mark.asyncio
     async def test_create_session_success(
@@ -282,7 +282,9 @@ class TestWebTransportConnection:
         session_mock = mocker.Mock(spec=WebTransportSession)
         connection._session_handles[1] = session_mock
 
-        session = await connection.create_session(path="/", headers={"a": "b"}, wt_available_protocols=["h3"])
+        session = await connection.create_session(
+            authority="localhost:443", path="/", headers={"a": "b"}, wt_available_protocols=["h3"]
+        )
 
         assert session is session_mock
         mock_controller.send_user_event.assert_called_once()
@@ -292,6 +294,7 @@ class TestWebTransportConnection:
         event = kwargs["event"]
         assert isinstance(event, UserCreateSession)
         assert event.request_id == 100
+        assert event.authority == "localhost:443"
         assert event.path == "/"
         assert event.headers == {"a": "b"}
         assert event.wt_available_protocols == ["h3"]
@@ -301,7 +304,7 @@ class TestWebTransportConnection:
         mock_controller.execute_request.side_effect = asyncio.TimeoutError
 
         with pytest.raises(expected_exception=TimeoutError, match="wt_session create failed connection_handle=42"):
-            await connection.create_session(path="/")
+            await connection.create_session(authority="localhost:443", path="/")
 
     @pytest.mark.asyncio
     async def test_diagnostics_cancelled(self, connection: WebTransportConnection, mock_controller: MagicMock) -> None:

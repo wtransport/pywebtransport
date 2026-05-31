@@ -55,13 +55,31 @@ class TestUserEvents:
             ),
             (
                 UserCreateSession,
-                {"request_id": 1, "path": "/test", "headers": {b":path": b"/test"}},
-                {"request_id": 1, "path": "/test", "headers": {b":path": b"/test"}, "wt_available_protocols": None},
+                {"request_id": 1, "authority": "localhost", "path": "/test", "headers": {b":path": b"/test"}},
+                {
+                    "request_id": 1,
+                    "authority": "localhost",
+                    "path": "/test",
+                    "headers": {b":path": b"/test"},
+                    "wt_available_protocols": None,
+                },
             ),
             (
                 UserCreateSession,
-                {"request_id": 1, "path": "/test", "headers": {}, "wt_available_protocols": ["p1", "p2"]},
-                {"request_id": 1, "path": "/test", "headers": {}, "wt_available_protocols": ["p1", "p2"]},
+                {
+                    "request_id": 1,
+                    "authority": "localhost",
+                    "path": "/test",
+                    "headers": {},
+                    "wt_available_protocols": ["p1", "p2"],
+                },
+                {
+                    "request_id": 1,
+                    "authority": "localhost",
+                    "path": "/test",
+                    "headers": {},
+                    "wt_available_protocols": ["p1", "p2"],
+                },
             ),
             (
                 UserCreateStream,

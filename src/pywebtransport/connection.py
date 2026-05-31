@@ -191,7 +191,12 @@ class WebTransportConnection:
             _logger.warning("wt_connection close failed connection_handle=%d err=%s", self._handle, e)
 
     async def create_session(
-        self, *, path: str, headers: Headers | None = None, wt_available_protocols: list[str] | None = None
+        self,
+        *,
+        authority: str,
+        path: str,
+        headers: Headers | None = None,
+        wt_available_protocols: list[str] | None = None,
     ) -> WebTransportSession:
         """Initiate a new WebTransport session."""
         if not self.is_client:
@@ -203,6 +208,7 @@ class WebTransportConnection:
                 await self.execute_request(
                     event_factory=lambda request_id: UserCreateSession(
                         request_id=request_id,
+                        authority=authority,
                         path=path,
                         headers=headers if headers is not None else {},
                         wt_available_protocols=wt_available_protocols,

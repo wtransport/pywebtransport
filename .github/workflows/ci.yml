@@ -13,15 +13,16 @@ permissions:
   contents: read
 
 env:
+  CARGO_HOME: ${{ github.workspace }}/.cargo
+  DEBIAN_FRONTEND: "noninteractive"
+  PIP_CACHE_DIR: ${{ github.workspace }}/.cache/pip
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
   PIP_NO_COLOR: "1"
   PIP_ROOT_USER_ACTION: "ignore"
-  PIP_CACHE_DIR: ${{ github.workspace }}/.cache/pip
-  CARGO_HOME: ${{ github.workspace }}/.cargo
 
 jobs:
   lint:
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     container:
       image: python:3.14-slim-trixie
     steps:
@@ -62,7 +63,7 @@ jobs:
 
   test:
     needs: lint
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -116,7 +117,7 @@ jobs:
 
   report:
     needs: test
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     if: github.event_name == 'push'
     container:
       image: python:3.14-slim-trixie
@@ -135,7 +136,7 @@ jobs:
           apt-get install -y --no-install-recommends git curl gpg
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: wtransport/pywebtransport

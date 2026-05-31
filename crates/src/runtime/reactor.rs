@@ -18,6 +18,8 @@ pub(crate) type WakerCallback = Arc<dyn Fn() + Send + Sync>;
 
 // Inbound UDP channel capacity between socket listeners and the reactor.
 const UDP_CHANNEL_CAPACITY: usize = 8192;
+// UDP maximum datagrams processed per reactor iteration.
+const UDP_POLL_DATAGRAMS: usize = 64;
 // UDP slab allocation block capacity.
 const UDP_SLAB_CAPACITY: usize = 65536;
 // UDP slab remaining threshold before reallocation.
@@ -110,6 +112,14 @@ impl Reactor {
                     let Some((data, remote, local)) = datagram_opt else { break; };
 
                     self.handle_datagram(remote, local, data).await;
+
+                    for _ in 1..UDP_POLL_DATAGRAMS {
+                        if let Ok((data, remote, local)) = self.datagram_rx.try_recv() {
+                            self.handle_datagram(remote, local, data).await;
+                        } else {
+                            break;
+                        }
+                    }
                 }
                 () = sleep_fut => {
                     self.handle_timeout();
@@ -296,6 +306,7 @@ impl Reactor {
     async fn send_transmit(&self, transmit: &Transmit) {
         let addr = transmit.destination;
         let size = transmit.size;
+        let segment_size = transmit.segment_size.unwrap_or(size);
         let workspace = self.endpoint.transmit_workspace();
 
         if let Some(data) = workspace.get(..size) {
@@ -306,10 +317,20 @@ impl Reactor {
                 .find(|s| s.local_addr().is_ok_and(|l| l.is_ipv4() == is_ipv4))
                 .or_else(|| self.sockets.first());
 
-            if let Some(socket) = target_socket
-                && let Err(e) = socket.send_to(data, addr).await
-            {
-                debug!("udp_datagram send failed err={e:?}");
+            if let Some(socket) = target_socket {
+                let mut offset = 0;
+                while offset < size {
+                    let chunk_len = std::cmp::min(segment_size, size - offset);
+                    let Some(chunk) = data.get(offset..offset + chunk_len) else {
+                        break;
+                    };
+
+                    if let Err(e) = socket.send_to(chunk, addr).await {
+                        debug!("udp_datagram send failed err={e:?}");
+                    }
+
+                    offset += chunk_len;
+                }
             }
         }
     }

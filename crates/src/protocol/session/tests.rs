@@ -643,13 +643,6 @@ fn test_export_keying_material_wrong_state(mut fixture_client_session: Session) 
 }
 
 #[rstest]
-fn test_fail_stream_decrements_counts(mut fixture_server_session: Session) {
-    fixture_server_session.local_streams_bidi_opened = 1;
-    fixture_server_session.fail_stream(500, false, Some(1), "Fail".into());
-    assert_eq!(fixture_server_session.local_streams_bidi_opened, 0);
-}
-
-#[rstest]
 fn test_flush_blocked_writes_on_max_data_update(mut fixture_server_session: Session) {
     fixture_server_session.state = SessionState::Connected;
     fixture_server_session.bind_stream(4, 500, false, 1.0);

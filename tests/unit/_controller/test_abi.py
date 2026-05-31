@@ -10,7 +10,7 @@ class TestAbi:
     @pytest.mark.parametrize(
         argnames="constant_name, expected_value",
         argvalues=[
-            ("ABI_VERSION", 4),
+            ("ABI_VERSION", 5),
             ("COMMAND_COMPLETED", 0x00),
             ("COMMAND_FAILED", 0x01),
             ("CONNECTION_EFFECTS", 0x02),

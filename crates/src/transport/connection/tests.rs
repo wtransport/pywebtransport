@@ -125,7 +125,7 @@ fn create_test_engine(is_client: bool) -> WebTransportEngine {
 }
 
 #[test]
-fn test_flush_stream_finished_buffer_remains_in_map() {
+fn test_flush_stream_finished_buffer_removes_from_map() {
     let mut connection = create_test_connection();
     let q_id = QuinnStreamId::from(VarInt::from_u32(1));
     let buffer = SendBuffer {
@@ -136,12 +136,7 @@ fn test_flush_stream_finished_buffer_remains_in_map() {
 
     connection.flush_stream(q_id);
 
-    let Some(final_buffer) = connection.send_buffers.get(&q_id) else {
-        assert_eq!("found", "missing", "SendBuffer should exist");
-        unreachable!()
-    };
-    assert!(final_buffer.chunks.is_empty());
-    assert!(final_buffer.finished);
+    assert!(!connection.send_buffers.contains_key(&q_id));
 }
 
 #[test]
@@ -238,47 +233,73 @@ fn test_poll_transmit_delegates_cleanly() {
 #[test]
 fn test_process_effects_close_quic_connection_processes_safely() {
     let mut connection = create_test_connection();
+    let mut event_queue = VecDeque::new();
     let effects = vec![Effect::CloseQuicConnection {
         error_code: 0,
         reason: None,
     }];
 
-    connection.process_effects(effects, 0.0, Instant::now());
+    connection.process_effects(effects, &mut event_queue, Instant::now());
 
     assert!(connection.pending_effects.is_empty());
+    assert!(event_queue.is_empty());
 }
 
 #[test]
-fn test_process_effects_create_h3_session_unconnected_dispatches_fail() {
+fn test_process_effects_create_h3_session_unconnected_queues_request() {
     let mut connection = create_test_connection();
+    let mut event_queue = VecDeque::new();
     let effects = vec![Effect::CreateH3Session {
         request_id: 1,
+        authority: "localhost".to_owned(),
         path: "/".to_owned(),
         headers: vec![],
     }];
 
-    connection.process_effects(effects, 0.0, Instant::now());
+    connection.process_effects(effects, &mut event_queue, Instant::now());
 
-    assert!(!connection.pending_effects.is_empty());
+    assert!(event_queue.is_empty());
+    assert_eq!(connection.pending_session_requests.len(), 1);
 }
 
 #[test]
-fn test_process_effects_create_quic_stream_unconnected_dispatches_fail() {
+fn test_process_effects_create_quic_stream_bidi_unconnected_queues_request() {
     let mut connection = create_test_connection();
+    let mut event_queue = VecDeque::new();
+    let effects = vec![Effect::CreateQuicStream {
+        request_id: 1,
+        session_id: 2,
+        is_unidirectional: false,
+    }];
+
+    connection.process_effects(effects, &mut event_queue, Instant::now());
+
+    assert!(event_queue.is_empty());
+    assert_eq!(connection.pending_bidi_stream_requests.len(), 1);
+    assert!(connection.pending_uni_stream_requests.is_empty());
+}
+
+#[test]
+fn test_process_effects_create_quic_stream_unconnected_queues_request() {
+    let mut connection = create_test_connection();
+    let mut event_queue = VecDeque::new();
     let effects = vec![Effect::CreateQuicStream {
         request_id: 1,
         session_id: 2,
         is_unidirectional: true,
     }];
 
-    connection.process_effects(effects, 0.0, Instant::now());
+    connection.process_effects(effects, &mut event_queue, Instant::now());
 
-    assert!(!connection.pending_effects.is_empty());
+    assert!(event_queue.is_empty());
+    assert_eq!(connection.pending_uni_stream_requests.len(), 1);
+    assert!(connection.pending_bidi_stream_requests.is_empty());
 }
 
 #[test]
 fn test_process_effects_export_tls_keying_material_processes_safely() {
     let mut connection = create_test_connection();
+    let mut event_queue = VecDeque::new();
     let effects = vec![Effect::ExportTlsKeyingMaterial {
         request_id: 1,
         label: "label".to_owned(),
@@ -286,7 +307,7 @@ fn test_process_effects_export_tls_keying_material_processes_safely() {
         length: 32,
     }];
 
-    connection.process_effects(effects, 0.0, Instant::now());
+    connection.process_effects(effects, &mut event_queue, Instant::now());
 
     let has_done_or_fail = connection.pending_effects.iter().any(|e| {
         matches!(
@@ -300,18 +321,21 @@ fn test_process_effects_export_tls_keying_material_processes_safely() {
 #[test]
 fn test_process_effects_process_protocol_event_processes_safely() {
     let mut connection = create_test_connection();
+    let mut event_queue = VecDeque::new();
     let effects = vec![Effect::ProcessProtocolEvent {
         event: Box::new(ProtocolEvent::InternalCleanupResources),
     }];
 
-    connection.process_effects(effects, 0.0, Instant::now());
+    connection.process_effects(effects, &mut event_queue, Instant::now());
 
+    assert!(!event_queue.is_empty());
     assert!(connection.pending_effects.is_empty());
 }
 
 #[test]
 fn test_process_effects_reset_quic_stream_removes_send_buffer() {
     let mut connection = create_test_connection();
+    let mut event_queue = VecDeque::new();
     let q_id = QuinnStreamId::from(VarInt::from_u32(1));
     let effects = vec![Effect::ResetQuicStream {
         stream_id: 1,
@@ -319,7 +343,7 @@ fn test_process_effects_reset_quic_stream_removes_send_buffer() {
     }];
     connection.send_buffers.insert(q_id, SendBuffer::default());
 
-    connection.process_effects(effects, 0.0, Instant::now());
+    connection.process_effects(effects, &mut event_queue, Instant::now());
 
     assert!(!connection.send_buffers.contains_key(&q_id));
 }
@@ -327,6 +351,7 @@ fn test_process_effects_reset_quic_stream_removes_send_buffer() {
 #[test]
 fn test_process_effects_send_h3_capsule_processes_safely() {
     let mut connection = create_test_connection();
+    let mut event_queue = VecDeque::new();
     let effects = vec![Effect::SendH3Capsule {
         stream_id: 1,
         capsule_type: 0,
@@ -334,7 +359,7 @@ fn test_process_effects_send_h3_capsule_processes_safely() {
         end_stream: false,
     }];
 
-    connection.process_effects(effects, 0.0, Instant::now());
+    connection.process_effects(effects, &mut event_queue, Instant::now());
 
     assert!(connection.pending_effects.is_empty());
 }
@@ -342,12 +367,13 @@ fn test_process_effects_send_h3_capsule_processes_safely() {
 #[test]
 fn test_process_effects_send_h3_datagram_processes_safely() {
     let mut connection = create_test_connection();
+    let mut event_queue = VecDeque::new();
     let effects = vec![Effect::SendH3Datagram {
         stream_id: 1,
         data: Bytes::from_static(b"test"),
     }];
 
-    connection.process_effects(effects, 0.0, Instant::now());
+    connection.process_effects(effects, &mut event_queue, Instant::now());
 
     assert!(connection.pending_effects.is_empty());
 }
@@ -355,9 +381,10 @@ fn test_process_effects_send_h3_datagram_processes_safely() {
 #[test]
 fn test_process_effects_send_h3_goaway_processes_safely() {
     let mut connection = create_test_connection();
+    let mut event_queue = VecDeque::new();
     let effects = vec![Effect::SendH3Goaway];
 
-    connection.process_effects(effects, 0.0, Instant::now());
+    connection.process_effects(effects, &mut event_queue, Instant::now());
 
     assert!(connection.pending_effects.is_empty());
 }
@@ -365,13 +392,14 @@ fn test_process_effects_send_h3_goaway_processes_safely() {
 #[test]
 fn test_process_effects_send_h3_headers_processes_safely() {
     let mut connection = create_test_connection();
+    let mut event_queue = VecDeque::new();
     let effects = vec![Effect::SendH3Headers {
         stream_id: 1,
         headers: vec![(Bytes::from_static(b":status"), Bytes::from_static(b"200"))],
         end_stream: false,
     }];
 
-    connection.process_effects(effects, 0.0, Instant::now());
+    connection.process_effects(effects, &mut event_queue, Instant::now());
 
     assert!(connection.pending_effects.is_empty());
 }
@@ -379,6 +407,7 @@ fn test_process_effects_send_h3_headers_processes_safely() {
 #[test]
 fn test_process_effects_send_quic_data_appends_to_send_buffer() {
     let mut connection = create_test_connection();
+    let mut event_queue = VecDeque::new();
     let stream_id = 1u64;
     let data = Bytes::from_static(b"payload");
     let effects = vec![Effect::SendQuicData {
@@ -388,7 +417,7 @@ fn test_process_effects_send_quic_data_appends_to_send_buffer() {
     }];
     let q_id = QuinnStreamId::from(VarInt::from_u32(1));
 
-    connection.process_effects(effects, 0.0, Instant::now());
+    connection.process_effects(effects, &mut event_queue, Instant::now());
 
     let Some(buffer) = connection.send_buffers.get(&q_id) else {
         assert_eq!("found", "missing", "SendBuffer should exist");
@@ -401,12 +430,13 @@ fn test_process_effects_send_quic_data_appends_to_send_buffer() {
 #[test]
 fn test_process_effects_send_quic_datagram_processes_safely() {
     let mut connection = create_test_connection();
+    let mut event_queue = VecDeque::new();
     let effects = vec![Effect::SendQuicDatagram {
         header: Bytes::from_static(b"head"),
         payload: Bytes::from_static(b"load"),
     }];
 
-    connection.process_effects(effects, 0.0, Instant::now());
+    connection.process_effects(effects, &mut event_queue, Instant::now());
 
     assert!(connection.pending_effects.is_empty());
 }
@@ -414,12 +444,13 @@ fn test_process_effects_send_quic_datagram_processes_safely() {
 #[test]
 fn test_process_effects_stop_quic_stream_processes_safely() {
     let mut connection = create_test_connection();
+    let mut event_queue = VecDeque::new();
     let effects = vec![Effect::StopQuicStream {
         stream_id: 1,
         error_code: 0,
     }];
 
-    connection.process_effects(effects, 0.0, Instant::now());
+    connection.process_effects(effects, &mut event_queue, Instant::now());
 
     assert!(connection.pending_effects.is_empty());
 }

@@ -34,14 +34,15 @@ impl TransportEndpoint {
         base_config: RustBaseConfig,
         client_config: ClientConfig,
     ) -> Result<Self, WebTransportError> {
-        let workspace_capacity =
-            usize::try_from(constants::UDP_MAX_DATAGRAM_SIZE).map_err(|e| {
+        let workspace_capacity = usize::try_from(constants::UDP_MAX_DATAGRAM_SIZE)
+            .map_err(|e| {
                 debug!("udp_max_datagram_size convert failed expected=usize err={e:?}");
                 WebTransportError::Unknown(
                     Some(constants::ERR_LIB_INTERNAL_ERROR),
                     "udp_max_datagram_size convert failed".into(),
                 )
-            })?;
+            })?
+            .saturating_mul(constants::UDP_TRANSMIT_BATCH_CAPACITY);
 
         Ok(Self {
             base_config,
@@ -59,14 +60,15 @@ impl TransportEndpoint {
         base_config: RustBaseConfig,
         server_config: RustServerConfig,
     ) -> Result<Self, WebTransportError> {
-        let workspace_capacity =
-            usize::try_from(constants::UDP_MAX_DATAGRAM_SIZE).map_err(|e| {
+        let workspace_capacity = usize::try_from(constants::UDP_MAX_DATAGRAM_SIZE)
+            .map_err(|e| {
                 debug!("udp_max_datagram_size convert failed expected=usize err={e:?}");
                 WebTransportError::Unknown(
                     Some(constants::ERR_LIB_INTERNAL_ERROR),
                     "udp_max_datagram_size convert failed".into(),
                 )
-            })?;
+            })?
+            .saturating_mul(constants::UDP_TRANSMIT_BATCH_CAPACITY);
 
         Ok(Self {
             base_config,

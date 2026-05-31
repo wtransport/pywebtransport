@@ -1,9 +1,9 @@
 //! Connection-level state machine and session manager.
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
 
 use bytes::Bytes;
+use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::debug;
 
 use crate::common::constants::{
@@ -53,7 +53,7 @@ pub(super) struct Connection {
     close_reason: Option<String>,
     closed_at: Option<f64>,
     connected_at: Option<f64>,
-    early_event_buffer: HashMap<StreamId, Vec<(f64, ProtocolEvent)>>,
+    early_event_buffer: FxHashMap<StreamId, Vec<(f64, ProtocolEvent)>>,
     early_event_count: usize,
     early_event_ttl: f64,
     flow_control_window: u64,
@@ -76,11 +76,11 @@ pub(super) struct Connection {
     peer_initial_max_streams_uni: u64,
     peer_max_datagram_frame_size: Option<u64>,
     peer_settings_received: bool,
-    pending_requests: HashMap<StreamId, RequestId>,
-    pending_session_configs: HashMap<RequestId, SessionInitData>,
-    sessions: HashMap<SessionId, Session>,
+    pending_requests: FxHashMap<StreamId, RequestId>,
+    pending_session_configs: FxHashMap<RequestId, SessionInitData>,
+    sessions: FxHashMap<SessionId, Session>,
     state: ConnectionState,
-    stream_map: HashMap<StreamId, SessionId>,
+    stream_map: FxHashMap<StreamId, SessionId>,
 }
 
 impl Connection {
@@ -91,7 +91,7 @@ impl Connection {
             close_reason: None,
             closed_at: None,
             connected_at: None,
-            early_event_buffer: HashMap::new(),
+            early_event_buffer: FxHashMap::default(),
             early_event_count: 0,
             early_event_ttl: params.early_event_ttl,
             flow_control_window: params.flow_control_window,
@@ -114,11 +114,11 @@ impl Connection {
             peer_initial_max_streams_uni: 0,
             peer_max_datagram_frame_size: None,
             peer_settings_received: false,
-            pending_requests: HashMap::new(),
-            pending_session_configs: HashMap::new(),
-            sessions: HashMap::new(),
+            pending_requests: FxHashMap::default(),
+            pending_session_configs: FxHashMap::default(),
+            sessions: FxHashMap::default(),
             state: ConnectionState::Idle,
-            stream_map: HashMap::new(),
+            stream_map: FxHashMap::default(),
         }
     }
 
@@ -246,6 +246,7 @@ impl Connection {
     pub(super) fn create_session(
         &mut self,
         request_id: RequestId,
+        authority: String,
         path: String,
         headers: Headers,
         wt_available_protocols: Option<Vec<String>>,
@@ -348,6 +349,7 @@ impl Connection {
 
         vec![Effect::CreateH3Session {
             request_id,
+            authority,
             path,
             headers,
         }]
@@ -423,30 +425,6 @@ impl Connection {
         vec![Effect::NotifyRequestFailed {
             request_id,
             source: ErrorSource::Session,
-            error_code,
-            reason,
-        }]
-    }
-
-    // QUIC stream creation failure handling (delegated).
-    pub(super) fn fail_stream(
-        &mut self,
-        session_id: SessionId,
-        request_id: RequestId,
-        is_unidirectional: bool,
-        error_code: Option<ErrorCode>,
-        reason: Cow<'static, str>,
-    ) -> Vec<Effect> {
-        if let Some(session) = self.sessions.get_mut(&session_id) {
-            return session.fail_stream(request_id, is_unidirectional, error_code, reason);
-        }
-        debug!(
-            "wt_session resolve failed connection_handle={} request_id={request_id} session_id={session_id}",
-            self.handle
-        );
-        vec![Effect::NotifyRequestFailed {
-            request_id,
-            source: ErrorSource::Stream,
             error_code,
             reason,
         }]
@@ -603,7 +581,7 @@ impl Connection {
     pub(super) fn prune_early_events(&mut self, now: f64) -> Vec<Effect> {
         let mut effects = Vec::new();
         let mut streams_to_remove = Vec::new();
-        let mut terminated_child_streams = HashSet::new();
+        let mut terminated_child_streams = FxHashSet::default();
 
         let mut stream_ids: Vec<StreamId> = self.early_event_buffer.keys().copied().collect();
         stream_ids.sort_unstable();
@@ -681,7 +659,7 @@ impl Connection {
             .collect();
 
         closed_session_ids.sort_unstable();
-        let closed_session_set: HashSet<SessionId> = closed_session_ids.iter().copied().collect();
+        let closed_session_set: FxHashSet<SessionId> = closed_session_ids.iter().copied().collect();
 
         for sid in closed_session_ids {
             debug!(

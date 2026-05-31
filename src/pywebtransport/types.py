@@ -56,7 +56,7 @@ type StreamId = int
 type Timeout = float | None
 type Timestamp = float
 type URL = str
-type URLParts = tuple[str, int, str]
+type URLParts = tuple[str, str, int, str]
 type Weight = int
 
 

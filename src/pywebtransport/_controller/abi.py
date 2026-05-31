@@ -6,7 +6,7 @@ from typing import Final
 
 __all__: list[str] = []
 
-ABI_VERSION: Final[int] = 4
+ABI_VERSION: Final[int] = 5
 COMMAND_COMPLETED: Final[int] = 0x00
 COMMAND_FAILED: Final[int] = 0x01
 CONNECTION_EFFECTS: Final[int] = 0x02

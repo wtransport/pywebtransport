@@ -4,7 +4,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bytes::BytesMut;
 use crossbeam_queue::ArrayQueue;
@@ -123,6 +123,31 @@ fn create_dummy_rust_server_config() -> RustServerConfig {
 
 fn create_dummy_socket_addr() -> SocketAddr {
     SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 443)
+}
+
+async fn create_client_reactor(
+    event_capacity: usize,
+) -> (
+    Reactor,
+    mpsc::Sender<RuntimeCommand>,
+    Arc<ArrayQueue<RuntimeEvent>>,
+    Arc<AtomicBool>,
+) {
+    let (cmd_tx, cmd_rx) = mpsc::channel(10);
+    let event_tx = Arc::new(ArrayQueue::new(event_capacity));
+    let waker_called = Arc::new(AtomicBool::new(false));
+    let waker_called_clone = Arc::clone(&waker_called);
+    let waker: WakerCallback = Arc::new(move || {
+        waker_called_clone.store(true, Ordering::SeqCst);
+    });
+    let Ok(socket) = UdpSocket::bind("127.0.0.1:0").await else {
+        assert_eq!("ok", "err", "Failed to bind UDP socket");
+        unreachable!()
+    };
+    let endpoint = create_dummy_endpoint(false);
+    let reactor = Reactor::new(cmd_rx, endpoint, Arc::clone(&event_tx), vec![socket], waker);
+
+    (reactor, cmd_tx, event_tx, waker_called)
 }
 
 async fn create_test_reactor(
@@ -447,6 +472,53 @@ async fn test_reactor_run_loop_full_tick_and_waker() {
 }
 
 #[tokio::test]
+async fn test_reactor_run_loop_processes_multiple_datagrams() {
+    let (reactor, cmd_tx, event_tx, _) = create_test_reactor(10).await;
+    let local = tokio::task::LocalSet::new();
+    let Some(socket) = reactor.sockets.first() else {
+        assert_eq!("some", "none", "Expected socket in reactor");
+        unreachable!()
+    };
+    let Ok(addr) = socket.local_addr() else {
+        assert_eq!("ok", "err", "Failed to read local socket address");
+        unreachable!()
+    };
+    let Ok(sender) = UdpSocket::bind("127.0.0.1:0").await else {
+        assert_eq!("ok", "err", "Failed to bind sender socket");
+        unreachable!()
+    };
+
+    for _ in 0..3 {
+        let Ok(_) = sender.send_to(b"test", addr).await else {
+            assert_eq!("ok", "err", "Failed to send datagram");
+            unreachable!()
+        };
+    }
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    local
+        .run_until(async move {
+            let handle = tokio::task::spawn_local(reactor.run());
+            let Ok(()) = cmd_tx.send(RuntimeCommand::Shutdown).await else {
+                assert_eq!("ok", "err", "Failed to send shutdown command");
+                unreachable!()
+            };
+            let Ok(()) = handle.await else {
+                assert_eq!("ok", "err", "Reactor task panicked");
+                unreachable!()
+            };
+        })
+        .await;
+
+    let Some(event) = event_tx.pop() else {
+        assert_eq!("some", "none", "Expected shutdown event in queue");
+        unreachable!()
+    };
+    assert!(matches!(event, RuntimeEvent::ReactorShutDown));
+}
+
+#[tokio::test]
 async fn test_reactor_run_loop_terminates_on_shutdown() {
     let (reactor, cmd_tx, event_tx, _) = create_test_reactor(10).await;
     let local = tokio::task::LocalSet::new();
@@ -561,6 +633,27 @@ async fn test_send_transmit_executes_safely() {
         src_ip: None,
     };
 
+    reactor.send_transmit(&transmit).await;
+
+    assert!(!reactor.events_emitted);
+}
+
+#[tokio::test]
+async fn test_send_transmit_segments_data_safely() {
+    let (mut reactor, _, _, _) = create_client_reactor(10).await;
+    let remote = create_dummy_socket_addr();
+    let now = Instant::now();
+
+    let Ok(_) = reactor.endpoint.connect(remote, "localhost", now) else {
+        assert_eq!("ok", "err", "Failed to connect endpoint");
+        unreachable!()
+    };
+    let Some(mut transmit) = reactor.endpoint.poll_transmit(now) else {
+        assert_eq!("some", "none", "Expected transmit after connect");
+        unreachable!()
+    };
+
+    transmit.segment_size = Some(100);
     reactor.send_transmit(&transmit).await;
 
     assert!(!reactor.events_emitted);

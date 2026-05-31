@@ -160,8 +160,8 @@ impl WebTransportEngine {
     pub(crate) fn encode_session_request(
         &mut self,
         stream_id: StreamId,
-        path: String,
         authority: String,
+        path: String,
         headers: &Headers,
     ) -> Result<Vec<Effect>, WebTransportError> {
         let mut request_headers: Headers = vec![
@@ -278,21 +278,6 @@ impl WebTransportEngine {
                     new_effects
                         .extend(self.connection.fail_session(request_id, error_code, reason));
                 }
-                ProtocolEvent::InternalFailQuicStream {
-                    request_id,
-                    session_id,
-                    is_unidirectional,
-                    error_code,
-                    reason,
-                } => {
-                    new_effects.extend(self.connection.fail_stream(
-                        session_id,
-                        request_id,
-                        is_unidirectional,
-                        error_code,
-                        reason,
-                    ));
-                }
                 ProtocolEvent::TransportConnectionTerminated { error_code, reason } => {
                     new_effects.extend(self.connection.terminated(error_code, reason.clone(), now));
                     new_effects.extend(self.fail_pending_user_actions(
@@ -381,6 +366,7 @@ impl WebTransportEngine {
                 }
                 ProtocolEvent::UserCreateSession {
                     request_id,
+                    authority,
                     path,
                     headers,
                     wt_available_protocols,
@@ -389,6 +375,7 @@ impl WebTransportEngine {
                         self.pending_user_actions
                             .push_back(ProtocolEvent::UserCreateSession {
                                 request_id,
+                                authority,
                                 path,
                                 headers,
                                 wt_available_protocols,
@@ -396,6 +383,7 @@ impl WebTransportEngine {
                     } else {
                         new_effects.extend(self.connection.create_session(
                             request_id,
+                            authority,
                             path,
                             headers,
                             wt_available_protocols,

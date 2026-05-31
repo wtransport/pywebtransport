@@ -2,7 +2,6 @@
 
 use std::cell::UnsafeCell;
 use std::cmp;
-use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_void};
 use std::marker::PhantomPinned;
 use std::mem::MaybeUninit;
@@ -11,6 +10,7 @@ use std::ptr;
 use std::slice;
 
 use bytes::Bytes;
+use rustc_hash::FxHashMap;
 use tracing::debug;
 
 use crate::common::types::Headers;
@@ -42,7 +42,7 @@ pub(super) enum DecodeStatus {
 // High-level wrapper for the QPACK Decoder.
 pub(super) struct Decoder {
     inner: Pin<Box<InnerDecoder>>,
-    pending_blocks: HashMap<u64, Pin<Box<PendingBlock>>>,
+    pending_blocks: FxHashMap<u64, Pin<Box<PendingBlock>>>,
 }
 
 unsafe impl Send for Decoder {}
@@ -77,7 +77,7 @@ impl Decoder {
 
         Self {
             inner,
-            pending_blocks: HashMap::new(),
+            pending_blocks: FxHashMap::default(),
         }
     }
 

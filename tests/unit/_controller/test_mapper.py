@@ -32,9 +32,13 @@ class TestMapper:
             ),
             (
                 events.UserCreateSession(
-                    request_id=5, path="/test", headers={b":method": b"CONNECT"}, wt_available_protocols=["h3"]
+                    request_id=5,
+                    authority="localhost",
+                    path="/test",
+                    headers={b":method": b"CONNECT"},
+                    wt_available_protocols=["h3"],
                 ),
-                (abi.USER_CREATE_SESSION, (5, "/test", {b":method": b"CONNECT"}, ["h3"])),
+                (abi.USER_CREATE_SESSION, (5, "localhost", "/test", {b":method": b"CONNECT"}, ["h3"])),
             ),
             (
                 events.UserCreateStream(request_id=6, session_id=10, is_unidirectional=True),

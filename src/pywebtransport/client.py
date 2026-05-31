@@ -170,7 +170,7 @@ class WebTransportClient(EventEmitter):
         if self._closed:
             raise ClientError(message="app_client validate failed")
 
-        host, port, path = _parse_webtransport_url(url=url)
+        authority, host, port, path = _parse_webtransport_url(url=url)
         connect_timeout = timeout if timeout is not None else self._config.connect_timeout
         self._stats.connections_attempted += 1
 
@@ -222,7 +222,10 @@ class WebTransportClient(EventEmitter):
                 await self._connection_manager.add_connection(connection=connection)
 
                 session = await connection.create_session(
-                    path=path, headers=normalized_headers, wt_available_protocols=effective_wt_available_protocols
+                    authority=authority,
+                    path=path,
+                    headers=normalized_headers,
+                    wt_available_protocols=effective_wt_available_protocols,
                 )
 
                 elapsed = time.perf_counter() - start_time
@@ -393,7 +396,7 @@ def _normalize_headers(*, headers: Headers) -> Headers:
 
 
 def _parse_webtransport_url(*, url: URL) -> URLParts:
-    """Parse the WebTransport URL into host, port, and path components."""
+    """Parse the WebTransport URL into authority, host, port, and path components."""
     parsed = urllib.parse.urlparse(url=url)
     if parsed.scheme != "https":
         raise ValueError(f"wt_url validate invalid actual={parsed.scheme} expected=https")
@@ -407,7 +410,7 @@ def _parse_webtransport_url(*, url: URL) -> URLParts:
     if parsed.query:
         path += f"?{parsed.query}"
 
-    return (parsed.hostname, port, path)
+    return (parsed.netloc.split("@")[-1], parsed.hostname, port, path)
 
 
 async def _resolve_host(*, host: str, port: int = 0) -> list[str]:

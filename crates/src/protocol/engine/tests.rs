@@ -69,6 +69,7 @@ fn test_buffer_create_stream_when_connecting(mut fixture_engine_client: WebTrans
 fn test_buffer_user_actions_when_connecting(mut fixture_engine_client: WebTransportEngine) {
     let event = ProtocolEvent::UserCreateSession {
         request_id: 100,
+        authority: "localhost".into(),
         path: "/".into(),
         headers: vec![],
         wt_available_protocols: None,
@@ -89,6 +90,7 @@ fn test_buffer_user_actions_when_connecting(mut fixture_engine_client: WebTransp
 fn test_buffer_user_actions_when_idle(mut fixture_engine_client: WebTransportEngine) {
     let event = ProtocolEvent::UserCreateSession {
         request_id: 100,
+        authority: "localhost".into(),
         path: "/".into(),
         headers: vec![],
         wt_available_protocols: None,
@@ -122,6 +124,7 @@ fn test_client_immediate_actions_when_connected(mut fixture_engine_client: WebTr
 
     let session_event = ProtocolEvent::UserCreateSession {
         request_id: 100,
+        authority: "localhost".into(),
         path: "/".into(),
         headers: vec![],
         wt_available_protocols: None,
@@ -193,6 +196,7 @@ fn test_connection_close_event_fails_pending_actions(
 
     let create_session_event = ProtocolEvent::UserCreateSession {
         request_id: 2,
+        authority: "localhost".into(),
         path: "/".into(),
         headers: vec![],
         wt_available_protocols: None,
@@ -329,8 +333,8 @@ fn test_encode_session_request(mut fixture_engine_client: WebTransportEngine) {
     )];
     let res = fixture_engine_client.encode_session_request(
         0,
-        "/test".into(),
         "localhost".into(),
+        "/test".into(),
         &headers,
     );
 
@@ -366,6 +370,7 @@ fn test_encode_stream_creation(mut fixture_engine_server: WebTransportEngine) {
 fn test_fail_pending_actions_on_termination(mut fixture_engine_client: WebTransportEngine) {
     let create_event = ProtocolEvent::UserCreateSession {
         request_id: 100,
+        authority: "localhost".into(),
         path: "/".into(),
         headers: vec![],
         wt_available_protocols: None,
@@ -441,13 +446,6 @@ fn test_handle_internal_events(mut fixture_engine_server: WebTransportEngine) {
         ProtocolEvent::InternalCleanupResources,
         ProtocolEvent::InternalFailH3Session {
             request_id: 100,
-            error_code: None,
-            reason: "fail".into(),
-        },
-        ProtocolEvent::InternalFailQuicStream {
-            request_id: 100,
-            session_id: 0,
-            is_unidirectional: false,
             error_code: None,
             reason: "fail".into(),
         },
@@ -685,6 +683,7 @@ fn test_internal_cleanup_events(mut fixture_engine_server: WebTransportEngine) {
 fn test_replay_user_actions_on_handshake(mut fixture_engine_client: WebTransportEngine) {
     let create_event = ProtocolEvent::UserCreateSession {
         request_id: 100,
+        authority: "localhost".into(),
         path: "/".into(),
         headers: vec![],
         wt_available_protocols: None,
@@ -715,6 +714,7 @@ fn test_replay_user_actions_on_handshake(mut fixture_engine_client: WebTransport
 fn test_server_immediate_actions(mut fixture_engine_server: WebTransportEngine) {
     let event = ProtocolEvent::UserCreateSession {
         request_id: 100,
+        authority: "localhost".into(),
         path: "/".into(),
         headers: vec![],
         wt_available_protocols: None,

@@ -193,6 +193,12 @@ fn test_time_configuration_defaults_are_positive(#[case] timeout_value: f64) {
 }
 
 #[test]
+fn test_udp_transmit_batch_capacity_is_valid() {
+    const { assert!(UDP_TRANSMIT_BATCH_CAPACITY > 0) };
+    assert_eq!(UDP_TRANSMIT_BATCH_CAPACITY, 64);
+}
+
+#[test]
 fn test_webtransport_application_error_range() {
     assert_eq!(ERR_WT_APPLICATION_ERROR_FIRST, 0x52E4_A40F_A8DB);
     assert_eq!(ERR_WT_APPLICATION_ERROR_LAST, 0x52E5_AC98_3162);

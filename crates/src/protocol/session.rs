@@ -1,11 +1,12 @@
 //! Session-level state machine and resource aggregator.
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::io::Cursor;
 use std::slice;
 
 use bytes::{BufMut, Bytes, BytesMut};
+use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::debug;
 
 use crate::common::constants::{
@@ -32,8 +33,8 @@ use crate::protocol::utils::{
 // Diagnostic information snapshot for a session.
 #[derive(Clone, Debug)]
 pub(crate) struct SessionDiagnostics {
-    pub(crate) active_streams: HashSet<StreamId>,
-    pub(crate) blocked_streams: HashSet<StreamId>,
+    pub(crate) active_streams: FxHashSet<StreamId>,
+    pub(crate) blocked_streams: FxHashSet<StreamId>,
     pub(crate) close_code: Option<ErrorCode>,
     pub(crate) close_reason: Option<String>,
     pub(crate) closed_at: Option<f64>,
@@ -71,8 +72,8 @@ pub(crate) struct SessionDiagnostics {
 
 // Representation of a WebTransport session.
 pub(super) struct Session {
-    active_streams: HashSet<StreamId>,
-    blocked_streams: HashSet<StreamId>,
+    active_streams: FxHashSet<StreamId>,
+    blocked_streams: FxHashSet<StreamId>,
     blocked_streams_queue: VecDeque<StreamId>,
     close_code: Option<ErrorCode>,
     close_reason: Option<String>,
@@ -115,7 +116,7 @@ pub(super) struct Session {
     pending_uni_stream_requests: VecDeque<RequestId>,
     ready_at: Option<f64>,
     state: SessionState,
-    streams: HashMap<StreamId, Stream>,
+    streams: FxHashMap<StreamId, Stream>,
     wt_protocol: Option<String>,
 }
 
@@ -136,8 +137,8 @@ impl Session {
         created_at: f64,
     ) -> Self {
         Self {
-            active_streams: HashSet::new(),
-            blocked_streams: HashSet::new(),
+            active_streams: FxHashSet::default(),
+            blocked_streams: FxHashSet::default(),
             blocked_streams_queue: VecDeque::new(),
             close_code: None,
             close_reason: None,
@@ -180,7 +181,7 @@ impl Session {
             pending_uni_stream_requests: VecDeque::new(),
             ready_at: None,
             state,
-            streams: HashMap::new(),
+            streams: FxHashMap::default(),
             wt_protocol,
         }
     }
@@ -600,34 +601,6 @@ impl Session {
             label: WT_EXPORTER_LABEL.to_owned(),
             context: exporter_context.freeze(),
             length,
-        }]
-    }
-
-    // Failed QUIC stream creation handling.
-    pub(super) fn fail_stream(
-        &mut self,
-        request_id: RequestId,
-        is_unidirectional: bool,
-        error_code: Option<ErrorCode>,
-        reason: Cow<'static, str>,
-    ) -> Vec<Effect> {
-        debug!(
-            "wt_stream create failed request_id={request_id} session_id={}",
-            self.id
-        );
-        if is_unidirectional {
-            if self.local_streams_uni_opened > 0 {
-                self.local_streams_uni_opened -= 1;
-            }
-        } else if self.local_streams_bidi_opened > 0 {
-            self.local_streams_bidi_opened -= 1;
-        }
-
-        vec![Effect::NotifyRequestFailed {
-            request_id,
-            source: ErrorSource::Stream,
-            error_code,
-            reason,
         }]
     }
 

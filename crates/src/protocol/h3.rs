@@ -1,9 +1,9 @@
 //! Internal specialized H3 protocol engine logic.
 
-use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{debug, trace};
 
 use crate::common::constants::{
@@ -75,7 +75,7 @@ pub(super) struct H3 {
     local_encoder_stream_id: Option<StreamId>,
     max_table_capacity: u32,
     params: H3Params,
-    partial_frames: HashMap<StreamId, PartialFrameInfo>,
+    partial_frames: FxHashMap<StreamId, PartialFrameInfo>,
     peer_control_stream_id: Option<StreamId>,
     peer_decoder_stream_id: Option<StreamId>,
     peer_encoder_stream_id: Option<StreamId>,
@@ -112,7 +112,7 @@ impl H3 {
             local_encoder_stream_id: None,
             max_table_capacity,
             params,
-            partial_frames: HashMap::new(),
+            partial_frames: FxHashMap::default(),
             peer_control_stream_id: None,
             peer_decoder_stream_id: None,
             peer_encoder_stream_id: None,
@@ -1841,7 +1841,7 @@ fn validate_request_headers(
     stream_id: StreamId,
     headers: &Headers,
 ) -> Result<(), WebTransportError> {
-    let mut seen_pseudo = HashSet::new();
+    let mut seen_pseudo = FxHashSet::default();
     let mut after_pseudo = false;
     let mut scheme: Option<&[u8]> = None;
     let mut authority: Option<&[u8]> = None;
@@ -1942,7 +1942,7 @@ fn validate_response_headers(
     stream_id: StreamId,
     headers: &Headers,
 ) -> Result<(), WebTransportError> {
-    let mut seen_pseudo = HashSet::new();
+    let mut seen_pseudo = FxHashSet::default();
     let mut after_pseudo = false;
 
     for (k, v) in headers {

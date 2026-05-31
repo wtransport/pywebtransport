@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(No planned changes for the next release yet.)_
 
+## [0.18.1] - 2026-05-31
+
+This release focuses on optimizing transport I/O throughput, refining internal state data structures, and enforcing explicit HTTP/3 authority semantics across the API boundary.
+
+### Changed
+
+- **Transport I/O Optimization**: Implemented UDP transmit batching with a user-space segmentation fallback, and introduced a bounded receive-side polling loop to process datagrams per reactor iteration.
+- **State Machine Optimization**: Migrated internal protocol routing tables to non-cryptographic hash maps to reduce CPU cycles required for integer-key lookups across the core state machines.
+- **Concurrency Control**: Introduced a queuing mechanism for stream and session requests to manage QUIC resource limits and backpressure, replacing the previous immediate failure path.
+- **HTTP/3 Semantics**: Restructured the client URL parser and FFI contract to explicitly extract and propagate the `:authority` pseudo-header, decoupling it from dynamic header parsing.
+
+### Fixed
+
+- **Memory Management**: Cleared internal send buffers upon stream termination to prevent memory accumulation.
+- **Data Integrity**: Enforced strictly ordered byte reads (`recv.read(false)`) at the QUIC transport layer to maintain data sequence integrity.
+
 ## [0.18.0] - 2026-05-26
 
 This release focuses on optimizing the datagram transmission pipeline, hardening protocol state machines, and enforcing strict compliance with WebTransport binary encoding specifications.
@@ -951,7 +967,8 @@ This is a major release focused on enhancing runtime safety and modernizing the 
 - cryptography (>=45.0.4,<46.0.0) for SSL/TLS operations
 - typing-extensions (>=4.14.0,<5.0.0) for Python <3.10 support
 
-[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.18.1...HEAD
+[0.18.1]: https://github.com/wtransport/pywebtransport/compare/v0.18.0...v0.18.1
 [0.18.0]: https://github.com/wtransport/pywebtransport/compare/v0.17.1...v0.18.0
 [0.17.1]: https://github.com/wtransport/pywebtransport/compare/v0.17.0...v0.17.1
 [0.17.0]: https://github.com/wtransport/pywebtransport/compare/v0.16.1...v0.17.0

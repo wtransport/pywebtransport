@@ -1,7 +1,7 @@
 //! Unit tests for the `crate::protocol::events` module.
 
 use std::borrow::Cow;
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 
 use bytes::Bytes;
 use rstest::*;
@@ -55,6 +55,20 @@ fn fixture_session_id() -> SessionId {
 #[fixture]
 fn fixture_stream_id() -> StreamId {
     4
+}
+
+#[rstest]
+fn test_effect_create_h3_session_success(fixture_request_id: RequestId, fixture_headers: Headers) {
+    let effect = Effect::CreateH3Session {
+        request_id: fixture_request_id,
+        authority: "example.com".to_owned(),
+        path: "/".to_owned(),
+        headers: fixture_headers,
+    };
+
+    let debug_output = format!("{effect:?}");
+    assert!(debug_output.contains("CreateH3Session"));
+    assert!(debug_output.contains("example.com"));
 }
 
 #[rstest]
@@ -380,6 +394,7 @@ fn test_protocol_event_user_create_session_success(
 ) {
     let event = ProtocolEvent::UserCreateSession {
         request_id: fixture_request_id,
+        authority: "localhost".to_owned(),
         path: "/path".to_owned(),
         headers: fixture_headers,
         wt_available_protocols: Some(vec!["p1".to_owned()]),
@@ -387,6 +402,7 @@ fn test_protocol_event_user_create_session_success(
 
     let debug_output = format!("{event:?}");
     assert!(debug_output.contains("UserCreateSession"));
+    assert!(debug_output.contains("localhost"));
     assert!(debug_output.contains("p1"));
 }
 
@@ -475,8 +491,8 @@ fn test_request_result_read_data_content_success(fixture_bytes: Bytes) {
     flow_control_negotiated: true,
     ready_at: None,
     state: SessionState::Connected,
-    active_streams: HashSet::new(),
-    blocked_streams: HashSet::new(),
+    active_streams: Default::default(),
+    blocked_streams: Default::default(),
     pending_bidi_stream_requests: VecDeque::new(),
     pending_uni_stream_requests: VecDeque::new(),
     datagram_bytes_received: 0,

@@ -196,7 +196,10 @@ class TestWebTransportClient:
 
     @pytest.fixture(autouse=True)
     def setup_common_mocks(self, mocker: MockerFixture) -> None:
-        mocker.patch(target="pywebtransport.client._parse_webtransport_url", return_value=("example.com", 443, "/"))
+        mocker.patch(
+            target="pywebtransport.client._parse_webtransport_url",
+            return_value=("example.com", "example.com", 443, "/"),
+        )
         mocker.patch(target="time.perf_counter", return_value=1000.0)
         mocker.patch(
             target="pywebtransport.client._resolve_host",
@@ -796,6 +799,7 @@ class TestWebTransportClient:
         mock_webtransport_connection.create_session.assert_awaited_once()
 
         _, session_kwargs = mock_webtransport_connection.create_session.call_args
+        assert session_kwargs["authority"] == "example.com"
         assert session_kwargs["path"] == "/"
         assert session_kwargs["wt_available_protocols"] is None
 
@@ -1147,13 +1151,14 @@ def test_parse_webtransport_url_raises_error(url: str, error_msg: str) -> None:
 @pytest.mark.parametrize(
     argnames="url, expected",
     argvalues=[
-        ("https://example.com", ("example.com", 443, "/")),
-        ("https://example.com:0", ("example.com", 0, "/")),
-        ("https://localhost:8080/path", ("localhost", 8080, "/path")),
-        ("https://[::1]:9090/q?a=1#f", ("::1", 9090, "/q?a=1")),
+        ("https://example.com", ("example.com", "example.com", 443, "/")),
+        ("https://example.com:0", ("example.com:0", "example.com", 0, "/")),
+        ("https://localhost:8080/path", ("localhost:8080", "localhost", 8080, "/path")),
+        ("https://[::1]:9090/q?a=1#f", ("[::1]:9090", "::1", 9090, "/q?a=1")),
+        ("https://user:pass@test.com:4433", ("test.com:4433", "test.com", 4433, "/")),
     ],
 )
-def test_parse_webtransport_url_success(url: str, expected: tuple[str, int, str]) -> None:
+def test_parse_webtransport_url_success(url: str, expected: tuple[str, str, int, str]) -> None:
     parsed_url = _parse_webtransport_url(url=url)
 
     assert parsed_url == expected
