@@ -77,8 +77,12 @@ fn mock_base_config() -> RustBaseConfig {
         max_stream_read_buffer_size: 1_048_576,
         max_stream_write_buffer_size: 1_048_576,
         max_total_pending_events: 1000,
-        max_transport_streams: 256,
         pending_event_ttl: Duration::from_secs(30),
+        quic_max_concurrent_bidi_streams: 65535,
+        quic_max_concurrent_uni_streams: 65535,
+        quic_receive_window: 33_554_432,
+        quic_send_window: 33_554_432,
+        quic_stream_receive_window: 2_097_152,
         resource_cleanup_interval: Duration::from_secs(5),
     }
 }

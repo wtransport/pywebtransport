@@ -38,13 +38,20 @@ from pywebtransport.constants import (
     DEFAULT_MAX_STREAM_READ_BUFFER_SIZE,
     DEFAULT_MAX_STREAM_WRITE_BUFFER_SIZE,
     DEFAULT_MAX_TOTAL_PENDING_EVENTS,
-    DEFAULT_MAX_TRANSPORT_STREAMS,
     DEFAULT_PENDING_EVENT_TTL,
+    DEFAULT_QUIC_MAX_CONCURRENT_BIDI_STREAMS,
+    DEFAULT_QUIC_MAX_CONCURRENT_UNI_STREAMS,
+    DEFAULT_QUIC_RECEIVE_WINDOW,
+    DEFAULT_QUIC_SEND_WINDOW,
+    DEFAULT_QUIC_STREAM_RECEIVE_WINDOW,
     DEFAULT_READ_TIMEOUT,
     DEFAULT_RESOURCE_CLEANUP_INTERVAL,
     DEFAULT_STREAM_CREATION_TIMEOUT,
     DEFAULT_WRITE_TIMEOUT,
+    H3_MIN_UNI_STREAM_COUNT,
+    QUIC_VARINT_LIMIT,
     UDP_MAX_DATAGRAM_SIZE,
+    WT_SESSION_CONTROL_BIDI_STREAM_COUNT,
     WT_STREAMS_LIMIT,
 )
 from pywebtransport.exceptions import ConfigurationError
@@ -84,8 +91,12 @@ class BaseConfig(ABC):
     max_stream_read_buffer_size: int = DEFAULT_MAX_STREAM_READ_BUFFER_SIZE
     max_stream_write_buffer_size: int = DEFAULT_MAX_STREAM_WRITE_BUFFER_SIZE
     max_total_pending_events: int = DEFAULT_MAX_TOTAL_PENDING_EVENTS
-    max_transport_streams: int = DEFAULT_MAX_TRANSPORT_STREAMS
     pending_event_ttl: float = DEFAULT_PENDING_EVENT_TTL
+    quic_max_concurrent_bidi_streams: int = DEFAULT_QUIC_MAX_CONCURRENT_BIDI_STREAMS
+    quic_max_concurrent_uni_streams: int = DEFAULT_QUIC_MAX_CONCURRENT_UNI_STREAMS
+    quic_receive_window: int = DEFAULT_QUIC_RECEIVE_WINDOW
+    quic_send_window: int = DEFAULT_QUIC_SEND_WINDOW
+    quic_stream_receive_window: int = DEFAULT_QUIC_STREAM_RECEIVE_WINDOW
     read_timeout: float | None = DEFAULT_READ_TIMEOUT
     resource_cleanup_interval: float = DEFAULT_RESOURCE_CLEANUP_INTERVAL
     stream_creation_timeout: float = DEFAULT_STREAM_CREATION_TIMEOUT
@@ -211,6 +222,27 @@ class BaseConfig(ABC):
                 config_value=self.flow_control_window,
             )
 
+        if self.initial_max_data < 0 or self.initial_max_data > QUIC_VARINT_LIMIT:
+            raise ConfigurationError(
+                message=f"cfg_initial_max_data validate invalid actual={self.initial_max_data}",
+                config_key="initial_max_data",
+                config_value=self.initial_max_data,
+            )
+
+        if self.initial_max_streams_bidi < 0 or self.initial_max_streams_bidi > WT_STREAMS_LIMIT:
+            raise ConfigurationError(
+                message=f"cfg_initial_max_streams_bidi validate invalid actual={self.initial_max_streams_bidi}",
+                config_key="initial_max_streams_bidi",
+                config_value=self.initial_max_streams_bidi,
+            )
+
+        if self.initial_max_streams_uni < 0 or self.initial_max_streams_uni > WT_STREAMS_LIMIT:
+            raise ConfigurationError(
+                message=f"cfg_initial_max_streams_uni validate invalid actual={self.initial_max_streams_uni}",
+                config_key="initial_max_streams_uni",
+                config_value=self.initial_max_streams_uni,
+            )
+
         try:
             _validate_timeout(timeout=self.keep_alive_interval)
         except (TypeError, ValueError) as e:
@@ -290,13 +322,6 @@ class BaseConfig(ABC):
                 config_value=self.max_total_pending_events,
             )
 
-        if self.max_transport_streams <= 0 or self.max_transport_streams > WT_STREAMS_LIMIT:
-            raise ConfigurationError(
-                message=f"cfg_max_transport_streams validate invalid actual={self.max_transport_streams}",
-                config_key="max_transport_streams",
-                config_value=self.max_transport_streams,
-            )
-
         try:
             _validate_timeout(timeout=self.pending_event_ttl)
         except (TypeError, ValueError) as e:
@@ -305,6 +330,53 @@ class BaseConfig(ABC):
                 config_key="pending_event_ttl",
                 config_value=self.pending_event_ttl,
             ) from e
+
+        if (
+            self.quic_max_concurrent_bidi_streams < WT_SESSION_CONTROL_BIDI_STREAM_COUNT
+            or self.quic_max_concurrent_bidi_streams > WT_STREAMS_LIMIT
+        ):
+            raise ConfigurationError(
+                message=(
+                    f"cfg_quic_max_concurrent_bidi_streams validate invalid "
+                    f"actual={self.quic_max_concurrent_bidi_streams}"
+                ),
+                config_key="quic_max_concurrent_bidi_streams",
+                config_value=self.quic_max_concurrent_bidi_streams,
+            )
+
+        if (
+            self.quic_max_concurrent_uni_streams < H3_MIN_UNI_STREAM_COUNT
+            or self.quic_max_concurrent_uni_streams > WT_STREAMS_LIMIT
+        ):
+            raise ConfigurationError(
+                message=(
+                    f"cfg_quic_max_concurrent_uni_streams validate invalid "
+                    f"actual={self.quic_max_concurrent_uni_streams}"
+                ),
+                config_key="quic_max_concurrent_uni_streams",
+                config_value=self.quic_max_concurrent_uni_streams,
+            )
+
+        if self.quic_receive_window <= 0:
+            raise ConfigurationError(
+                message=f"cfg_quic_receive_window validate invalid actual={self.quic_receive_window}",
+                config_key="quic_receive_window",
+                config_value=self.quic_receive_window,
+            )
+
+        if self.quic_send_window <= 0:
+            raise ConfigurationError(
+                message=f"cfg_quic_send_window validate invalid actual={self.quic_send_window}",
+                config_key="quic_send_window",
+                config_value=self.quic_send_window,
+            )
+
+        if self.quic_stream_receive_window <= 0:
+            raise ConfigurationError(
+                message=f"cfg_quic_stream_receive_window validate invalid actual={self.quic_stream_receive_window}",
+                config_key="quic_stream_receive_window",
+                config_value=self.quic_stream_receive_window,
+            )
 
         try:
             _validate_timeout(timeout=self.read_timeout)

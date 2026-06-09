@@ -34,8 +34,16 @@ impl<'a> TryFrom<&Bound<'a, PyAny>> for RustBaseConfig {
         let max_stream_write_buffer_size: u64 =
             conf.getattr("max_stream_write_buffer_size")?.extract()?;
         let max_total_pending_events: u64 = conf.getattr("max_total_pending_events")?.extract()?;
-        let max_transport_streams: u64 = conf.getattr("max_transport_streams")?.extract()?;
         let pending_event_ttl: f64 = conf.getattr("pending_event_ttl")?.extract()?;
+        let quic_max_concurrent_bidi_streams: u64 = conf
+            .getattr("quic_max_concurrent_bidi_streams")?
+            .extract()?;
+        let quic_max_concurrent_uni_streams: u64 =
+            conf.getattr("quic_max_concurrent_uni_streams")?.extract()?;
+        let quic_receive_window: u64 = conf.getattr("quic_receive_window")?.extract()?;
+        let quic_send_window: u64 = conf.getattr("quic_send_window")?.extract()?;
+        let quic_stream_receive_window: u64 =
+            conf.getattr("quic_stream_receive_window")?.extract()?;
         let resource_cleanup_interval: f64 =
             conf.getattr("resource_cleanup_interval")?.extract()?;
 
@@ -57,8 +65,12 @@ impl<'a> TryFrom<&Bound<'a, PyAny>> for RustBaseConfig {
             max_stream_read_buffer_size,
             max_stream_write_buffer_size,
             max_total_pending_events,
-            max_transport_streams,
             pending_event_ttl: Duration::from_secs_f64(pending_event_ttl),
+            quic_max_concurrent_bidi_streams,
+            quic_max_concurrent_uni_streams,
+            quic_receive_window,
+            quic_send_window,
+            quic_stream_receive_window,
             resource_cleanup_interval: Duration::from_secs_f64(resource_cleanup_interval),
         })
     }

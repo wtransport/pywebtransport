@@ -7,9 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned for future release
+### Changed
 
-_(No planned changes for the next release yet.)_
+- **Protocol Constants**: Renamed `QUIC_MAX_STREAM_ID` to `QUIC_VARINT_LIMIT` to accurately reflect RFC 9000 variable-length integer encoding constraints.
+- **Transport Configuration**: Introduced fine-grained QUIC flow control window parameters to directly expose and manage underlying transport window sizing.
+
+### Fixed
+
+- **Cross-Layer Flow Control**: Resolved a stream allocation stall in specific edge cases by strictly decoupling L4 physical concurrency constraints from L7 session quotas.
+- **Session Protocol Compliance**: Enforced state machine boundaries to prohibit the generation and emission of flow control capsules when session-level flow control is disabled.
 
 ## [0.18.1] - 2026-05-31
 

@@ -10,7 +10,6 @@ use rustls::version::TLS13;
 use tracing::debug;
 
 use crate::common::config::{RustBaseConfig, RustClientConfig, RustServerConfig};
-use crate::common::constants;
 use crate::common::error::WebTransportError;
 use crate::tls::certificate::{NoCertificateVerification, load_certs, load_private_key};
 
@@ -195,26 +194,6 @@ fn build_transport_config(
         }
     }
 
-    let idle_timeout = quinn_proto::IdleTimeout::try_from(base_config.connection_idle_timeout)
-        .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
-    config.max_idle_timeout(Some(idle_timeout));
-
-    let bidi_limit = constants::WT_SESSION_CONTROL_BIDI_STREAM_COUNT
-        .saturating_add(base_config.initial_max_streams_bidi)
-        .min(base_config.max_transport_streams);
-    let bidi_varint = quinn_proto::VarInt::try_from(bidi_limit)
-        .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
-    config.max_concurrent_bidi_streams(bidi_varint);
-
-    let uni_limit = constants::H3_MIN_UNI_STREAM_COUNT
-        .saturating_add(base_config.initial_max_streams_uni)
-        .min(base_config.max_transport_streams);
-    let uni_varint = quinn_proto::VarInt::try_from(uni_limit)
-        .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
-    config.max_concurrent_uni_streams(uni_varint);
-
-    config.keep_alive_interval(base_config.keep_alive_interval);
-
     if base_config.max_datagram_size > 0 {
         let total_size = base_config
             .max_datagram_size
@@ -227,6 +206,31 @@ fn build_transport_config(
         config.datagram_receive_buffer_size(None);
         config.datagram_send_buffer_size(0);
     }
+
+    config.keep_alive_interval(base_config.keep_alive_interval);
+
+    let bidi_varint = quinn_proto::VarInt::try_from(base_config.quic_max_concurrent_bidi_streams)
+        .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
+    config.max_concurrent_bidi_streams(bidi_varint);
+
+    let uni_varint = quinn_proto::VarInt::try_from(base_config.quic_max_concurrent_uni_streams)
+        .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
+    config.max_concurrent_uni_streams(uni_varint);
+
+    let idle_timeout = quinn_proto::IdleTimeout::try_from(base_config.connection_idle_timeout)
+        .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
+    config.max_idle_timeout(Some(idle_timeout));
+
+    let receive_window = quinn_proto::VarInt::try_from(base_config.quic_receive_window)
+        .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
+    config.receive_window(receive_window);
+
+    config.send_window(base_config.quic_send_window);
+
+    let stream_receive_window =
+        quinn_proto::VarInt::try_from(base_config.quic_stream_receive_window)
+            .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
+    config.stream_receive_window(stream_receive_window);
 
     Ok(config)
 }

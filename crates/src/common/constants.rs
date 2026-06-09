@@ -54,10 +54,18 @@ pub(crate) const DEFAULT_MAX_STREAM_READ_BUFFER_SIZE: u64 = 2 * 1024 * 1024;
 pub(crate) const DEFAULT_MAX_STREAM_WRITE_BUFFER_SIZE: u64 = 2 * 1024 * 1024;
 // Default maximum total pending events.
 pub(crate) const DEFAULT_MAX_TOTAL_PENDING_EVENTS: u64 = 1000;
-// Default maximum transport streams.
-pub(crate) const DEFAULT_MAX_TRANSPORT_STREAMS: u64 = 65535;
 // Default pending event time-to-live (TTL).
 pub(crate) const DEFAULT_PENDING_EVENT_TTL: f64 = 5.0;
+// Default QUIC maximum concurrent bidirectional streams.
+pub(crate) const DEFAULT_QUIC_MAX_CONCURRENT_BIDI_STREAMS: u64 = 65535;
+// Default QUIC maximum concurrent unidirectional streams.
+pub(crate) const DEFAULT_QUIC_MAX_CONCURRENT_UNI_STREAMS: u64 = 65535;
+// Default QUIC connection receive window.
+pub(crate) const DEFAULT_QUIC_RECEIVE_WINDOW: u64 = 32 * 1024 * 1024;
+// Default QUIC connection send window.
+pub(crate) const DEFAULT_QUIC_SEND_WINDOW: u64 = 32 * 1024 * 1024;
+// Default QUIC stream receive window.
+pub(crate) const DEFAULT_QUIC_STREAM_RECEIVE_WINDOW: u64 = 2 * 1024 * 1024;
 // Default stream read operation timeout.
 pub(crate) const DEFAULT_READ_TIMEOUT: f64 = 60.0;
 // Default resource cleanup interval.
@@ -214,8 +222,8 @@ pub(crate) const H3_STREAM_TYPE_QPACK_DECODER: u64 = 0x03;
 pub(crate) const H3_STREAM_TYPE_QPACK_ENCODER: u64 = 0x02;
 // HTTP/3 stream type: `WEBTRANSPORT`.
 pub(crate) const H3_STREAM_TYPE_WEBTRANSPORT: u64 = 0x54;
-// QUIC maximum valid stream identifier.
-pub(crate) const QUIC_MAX_STREAM_ID: u64 = (1 << 62) - 1;
+// QUIC variable-length integer limit.
+pub(crate) const QUIC_VARINT_LIMIT: u64 = (1 << 62) - 1;
 // QUIC stream direction identifier mask.
 pub(crate) const QUIC_STREAM_DIRECTION_MASK: u64 = 0x02;
 // QUIC stream initiator identifier mask.

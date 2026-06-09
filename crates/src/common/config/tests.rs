@@ -18,7 +18,7 @@ fn test_config_structs_are_thread_safe() {
 fn test_config_memory_footprint() {
     let base_size = size_of::<RustBaseConfig>();
     assert!(
-        base_size <= 256,
+        base_size <= 384,
         "RustBaseConfig is too large ({base_size} bytes). Consider boxing large fields."
     );
 
@@ -55,8 +55,12 @@ fn test_config_structs_instantiation_and_derives() {
         max_stream_read_buffer_size: 1_048_576,
         max_stream_write_buffer_size: 1_048_576,
         max_total_pending_events: 1000,
-        max_transport_streams: 256,
         pending_event_ttl: Duration::from_secs(30),
+        quic_max_concurrent_bidi_streams: 65535,
+        quic_max_concurrent_uni_streams: 65535,
+        quic_receive_window: 15_728_640,
+        quic_send_window: 15_728_640,
+        quic_stream_receive_window: 2_097_152,
         resource_cleanup_interval: Duration::from_secs(5),
     };
 

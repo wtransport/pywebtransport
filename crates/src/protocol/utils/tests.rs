@@ -8,7 +8,7 @@ use rstest::rstest;
 
 use super::*;
 use crate::common::constants::{
-    ERR_H3_FRAME_ERROR, ERR_LIB_INTERNAL_ERROR, ERR_WT_APPLICATION_ERROR_FIRST, QUIC_MAX_STREAM_ID,
+    ERR_H3_FRAME_ERROR, ERR_LIB_INTERNAL_ERROR, ERR_WT_APPLICATION_ERROR_FIRST, QUIC_VARINT_LIMIT,
 };
 use crate::common::types::{ErrorCode, StreamDirection};
 
@@ -328,7 +328,7 @@ fn test_read_varint_valid_decoding(#[case] input: &[u8], #[case] expected: u64) 
 #[test]
 #[should_panic(expected = "quic_stream validate exceeded")]
 fn test_stream_dir_from_id_panic_on_invalid() {
-    let _ = stream_dir_from_id(QUIC_MAX_STREAM_ID + 1, true);
+    let _ = stream_dir_from_id(QUIC_VARINT_LIMIT + 1, true);
 }
 
 #[rstest]

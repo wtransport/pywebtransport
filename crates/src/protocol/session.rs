@@ -428,11 +428,12 @@ impl Session {
             return effects;
         }
 
-        let limit_exceeded = if is_unidirectional {
-            self.local_streams_uni_opened >= self.peer_max_streams_uni
-        } else {
-            self.local_streams_bidi_opened >= self.peer_max_streams_bidi
-        };
+        let limit_exceeded = self.flow_control_negotiated
+            && if is_unidirectional {
+                self.local_streams_uni_opened >= self.peer_max_streams_uni
+            } else {
+                self.local_streams_bidi_opened >= self.peer_max_streams_bidi
+            };
 
         if limit_exceeded {
             let mut buf = BytesMut::with_capacity(8);
@@ -610,6 +611,19 @@ impl Session {
         request_id: RequestId,
         max_data: u64,
     ) -> Vec<Effect> {
+        if !self.flow_control_negotiated {
+            debug!(
+                "wt_session validate failed request_id={request_id} session_id={}",
+                self.id
+            );
+            return vec![Effect::NotifyRequestFailed {
+                request_id,
+                source: ErrorSource::Session,
+                error_code: None,
+                reason: "wt_session validate failed".into(),
+            }];
+        }
+
         if self.state != SessionState::Connected {
             debug!(
                 "wt_session validate failed actual={:?} request_id={request_id} session_id={}",
@@ -667,6 +681,19 @@ impl Session {
         is_unidirectional: bool,
         max_streams: u64,
     ) -> Vec<Effect> {
+        if !self.flow_control_negotiated {
+            debug!(
+                "wt_session validate failed request_id={request_id} session_id={}",
+                self.id
+            );
+            return vec![Effect::NotifyRequestFailed {
+                request_id,
+                source: ErrorSource::Session,
+                error_code: None,
+                reason: "wt_session validate failed".into(),
+            }];
+        }
+
         if self.state != SessionState::Connected {
             debug!(
                 "wt_session validate failed actual={:?} request_id={request_id} session_id={}",
@@ -1188,7 +1215,9 @@ impl Session {
 
             match direction {
                 StreamDirection::Bidirectional => {
-                    if self.peer_streams_bidi_opened >= self.local_max_streams_bidi {
+                    if self.flow_control_negotiated
+                        && self.peer_streams_bidi_opened >= self.local_max_streams_bidi
+                    {
                         debug!(
                             "wt_session validate exceeded actual={} limit={} session_id={}",
                             self.peer_streams_bidi_opened, self.local_max_streams_bidi, self.id
@@ -1202,7 +1231,9 @@ impl Session {
                     self.peer_streams_bidi_opened += 1;
                 }
                 StreamDirection::ReceiveOnly => {
-                    if self.peer_streams_uni_opened >= self.local_max_streams_uni {
+                    if self.flow_control_negotiated
+                        && self.peer_streams_uni_opened >= self.local_max_streams_uni
+                    {
                         debug!(
                             "wt_session validate exceeded actual={} limit={} session_id={}",
                             self.peer_streams_uni_opened, self.local_max_streams_uni, self.id
@@ -1252,7 +1283,7 @@ impl Session {
         };
 
         self.local_data_received += data.len() as u64;
-        if self.local_data_received > self.local_max_data {
+        if self.flow_control_negotiated && self.local_data_received > self.local_max_data {
             debug!(
                 "wt_session validate exceeded actual={} limit={} session_id={}",
                 self.local_data_received, self.local_max_data, self.id
@@ -1509,7 +1540,11 @@ impl Session {
             return effects;
         };
 
-        let session_credit = self.peer_max_data.saturating_sub(self.local_data_sent);
+        let session_credit = if self.flow_control_negotiated {
+            self.peer_max_data.saturating_sub(self.local_data_sent)
+        } else {
+            u64::MAX
+        };
 
         let (stream_effects, sent, is_blocked, is_closed) = {
             let (fx, sent) = stream.write(request_id, data, end_stream, session_credit, now);
@@ -1751,6 +1786,10 @@ impl Session {
 
     // Data blocked capsule debounce emission.
     fn emit_data_blocked(&mut self) -> Option<Effect> {
+        if !self.flow_control_negotiated {
+            return None;
+        }
+
         if self.local_data_sent >= self.peer_max_data
             && !self.blocked_streams.is_empty()
             && self
@@ -1779,7 +1818,7 @@ impl Session {
     fn flush_blocked_writes(&mut self, now: f64) -> Vec<Effect> {
         let mut effects = Vec::new();
 
-        if self.local_data_sent >= self.peer_max_data {
+        if self.flow_control_negotiated && self.local_data_sent >= self.peer_max_data {
             return effects;
         }
 
@@ -1790,7 +1829,12 @@ impl Session {
             };
             self.blocked_streams.remove(&stream_id);
 
-            let session_credit = self.peer_max_data.saturating_sub(self.local_data_sent);
+            let session_credit = if self.flow_control_negotiated {
+                self.peer_max_data.saturating_sub(self.local_data_sent)
+            } else {
+                u64::MAX
+            };
+
             if session_credit == 0 {
                 self.blocked_streams_queue.push_front(stream_id);
                 self.blocked_streams.insert(stream_id);
@@ -1848,6 +1892,10 @@ impl Session {
 
     // Data credit replenishment.
     fn replenish_data_credit(&mut self, force_send: bool) -> Option<Effect> {
+        if !self.flow_control_negotiated {
+            return None;
+        }
+
         if !matches!(self.state, SessionState::Connected | SessionState::Draining) {
             return None;
         }
@@ -1878,6 +1926,10 @@ impl Session {
 
     // Streams credit replenishment.
     fn replenish_streams_credit(&mut self, is_uni: bool, force_send: bool) -> Option<Effect> {
+        if !self.flow_control_negotiated {
+            return None;
+        }
+
         if !matches!(self.state, SessionState::Connected | SessionState::Draining) {
             return None;
         }

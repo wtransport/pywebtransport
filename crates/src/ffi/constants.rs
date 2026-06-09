@@ -97,12 +97,28 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         constants::DEFAULT_MAX_TOTAL_PENDING_EVENTS,
     )?;
     m.add(
-        "DEFAULT_MAX_TRANSPORT_STREAMS",
-        constants::DEFAULT_MAX_TRANSPORT_STREAMS,
-    )?;
-    m.add(
         "DEFAULT_PENDING_EVENT_TTL",
         constants::DEFAULT_PENDING_EVENT_TTL,
+    )?;
+    m.add(
+        "DEFAULT_QUIC_MAX_CONCURRENT_BIDI_STREAMS",
+        constants::DEFAULT_QUIC_MAX_CONCURRENT_BIDI_STREAMS,
+    )?;
+    m.add(
+        "DEFAULT_QUIC_MAX_CONCURRENT_UNI_STREAMS",
+        constants::DEFAULT_QUIC_MAX_CONCURRENT_UNI_STREAMS,
+    )?;
+    m.add(
+        "DEFAULT_QUIC_RECEIVE_WINDOW",
+        constants::DEFAULT_QUIC_RECEIVE_WINDOW,
+    )?;
+    m.add(
+        "DEFAULT_QUIC_SEND_WINDOW",
+        constants::DEFAULT_QUIC_SEND_WINDOW,
+    )?;
+    m.add(
+        "DEFAULT_QUIC_STREAM_RECEIVE_WINDOW",
+        constants::DEFAULT_QUIC_STREAM_RECEIVE_WINDOW,
     )?;
     m.add("DEFAULT_READ_TIMEOUT", constants::DEFAULT_READ_TIMEOUT)?;
     m.add(
@@ -303,7 +319,16 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         "ERR_WT_STREAM_BUFFER_EXCEEDED",
         constants::ERR_WT_STREAM_BUFFER_EXCEEDED,
     )?;
+    m.add(
+        "H3_MIN_UNI_STREAM_COUNT",
+        constants::H3_MIN_UNI_STREAM_COUNT,
+    )?;
+    m.add("QUIC_VARINT_LIMIT", constants::QUIC_VARINT_LIMIT)?;
     m.add("UDP_MAX_DATAGRAM_SIZE", constants::UDP_MAX_DATAGRAM_SIZE)?;
+    m.add(
+        "WT_SESSION_CONTROL_BIDI_STREAM_COUNT",
+        constants::WT_SESSION_CONTROL_BIDI_STREAM_COUNT,
+    )?;
     m.add("WT_STREAMS_LIMIT", constants::WT_STREAMS_LIMIT)?;
 
     Ok(())

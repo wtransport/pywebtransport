@@ -27,8 +27,12 @@ fn mock_base_config() -> RustBaseConfig {
         max_stream_read_buffer_size: 1_048_576,
         max_stream_write_buffer_size: 1_048_576,
         max_total_pending_events: 1000,
-        max_transport_streams: 256,
         pending_event_ttl: Duration::from_secs(30),
+        quic_max_concurrent_bidi_streams: 65535,
+        quic_max_concurrent_uni_streams: 65535,
+        quic_receive_window: 33_554_432,
+        quic_send_window: 33_554_432,
+        quic_stream_receive_window: 2_097_152,
         resource_cleanup_interval: Duration::from_secs(5),
     }
 }
@@ -56,6 +60,31 @@ fn mock_server_config() -> RustServerConfig {
 }
 
 #[rstest]
+#[case(Some(PathBuf::from("/non/existent/ca.pem")), None, None)]
+#[case(
+    None,
+    Some(PathBuf::from("/non/existent/cert.pem")),
+    Some(PathBuf::from("/non/existent/key.pem"))
+)]
+fn test_build_client_config_fails_with_invalid_paths(
+    #[case] ca_certs: Option<PathBuf>,
+    #[case] certfile: Option<PathBuf>,
+    #[case] keyfile: Option<PathBuf>,
+) {
+    let mut config = mock_client_config();
+    config.ca_certs = ca_certs;
+    config.certfile = certfile;
+    config.keyfile = keyfile;
+
+    let result = build_client_config(&config);
+
+    let Err(_) = result else {
+        assert_eq!("err", "ok", "Expected err");
+        unreachable!()
+    };
+}
+
+#[rstest]
 fn test_build_client_config_with_verify_server_certificate_succeeds() {
     let mut config = mock_client_config();
     config.verify_server_certificate = true;
@@ -77,31 +106,6 @@ fn test_build_client_config_without_certs_succeeds() {
 
     let Ok(_) = result else {
         assert_eq!("ok", "err", "Expected ok");
-        unreachable!()
-    };
-}
-
-#[rstest]
-#[case(Some(PathBuf::from("/non/existent/ca.pem")), None, None)]
-#[case(
-    None,
-    Some(PathBuf::from("/non/existent/cert.pem")),
-    Some(PathBuf::from("/non/existent/key.pem"))
-)]
-fn test_build_client_config_fails_with_invalid_paths(
-    #[case] ca_certs: Option<PathBuf>,
-    #[case] certfile: Option<PathBuf>,
-    #[case] keyfile: Option<PathBuf>,
-) {
-    let mut config = mock_client_config();
-    config.ca_certs = ca_certs;
-    config.certfile = certfile;
-    config.keyfile = keyfile;
-
-    let result = build_client_config(&config);
-
-    let Err(_) = result else {
-        assert_eq!("err", "ok", "Expected err");
         unreachable!()
     };
 }
@@ -132,6 +136,71 @@ fn test_build_server_config_fails_with_invalid_cert_paths(
     config.require_client_auth = require_client_auth;
 
     let result = build_server_config(&config);
+
+    let Err(_) = result else {
+        assert_eq!("err", "ok", "Expected err");
+        unreachable!()
+    };
+}
+
+#[rstest]
+fn test_build_transport_config_fails_with_invalid_bidi_streams() {
+    let mut config = mock_base_config();
+    config.quic_max_concurrent_bidi_streams = u64::MAX;
+
+    let result = build_transport_config(&config);
+
+    let Err(_) = result else {
+        assert_eq!("err", "ok", "Expected err");
+        unreachable!()
+    };
+}
+
+#[rstest]
+fn test_build_transport_config_fails_with_invalid_idle_timeout() {
+    let mut config = mock_base_config();
+    config.connection_idle_timeout = Duration::MAX;
+
+    let result = build_transport_config(&config);
+
+    let Err(_) = result else {
+        assert_eq!("err", "ok", "Expected err");
+        unreachable!()
+    };
+}
+
+#[rstest]
+fn test_build_transport_config_fails_with_invalid_receive_window() {
+    let mut config = mock_base_config();
+    config.quic_receive_window = u64::MAX;
+
+    let result = build_transport_config(&config);
+
+    let Err(_) = result else {
+        assert_eq!("err", "ok", "Expected err");
+        unreachable!()
+    };
+}
+
+#[rstest]
+fn test_build_transport_config_fails_with_invalid_stream_receive_window() {
+    let mut config = mock_base_config();
+    config.quic_stream_receive_window = u64::MAX;
+
+    let result = build_transport_config(&config);
+
+    let Err(_) = result else {
+        assert_eq!("err", "ok", "Expected err");
+        unreachable!()
+    };
+}
+
+#[rstest]
+fn test_build_transport_config_fails_with_invalid_uni_streams() {
+    let mut config = mock_base_config();
+    config.quic_max_concurrent_uni_streams = u64::MAX;
+
+    let result = build_transport_config(&config);
 
     let Err(_) = result else {
         assert_eq!("err", "ok", "Expected err");

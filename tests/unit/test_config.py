@@ -19,8 +19,15 @@ from pywebtransport.constants import (
     DEFAULT_MAX_CONNECTIONS,
     DEFAULT_MAX_FIELD_SECTION_SIZE,
     DEFAULT_MAX_SESSIONS,
-    DEFAULT_MAX_TRANSPORT_STREAMS,
+    DEFAULT_QUIC_MAX_CONCURRENT_BIDI_STREAMS,
+    DEFAULT_QUIC_MAX_CONCURRENT_UNI_STREAMS,
+    DEFAULT_QUIC_RECEIVE_WINDOW,
+    DEFAULT_QUIC_SEND_WINDOW,
+    DEFAULT_QUIC_STREAM_RECEIVE_WINDOW,
+    H3_MIN_UNI_STREAM_COUNT,
+    QUIC_VARINT_LIMIT,
     UDP_MAX_DATAGRAM_SIZE,
+    WT_SESSION_CONTROL_BIDI_STREAM_COUNT,
     WT_STREAMS_LIMIT,
 )
 
@@ -54,7 +61,11 @@ class TestClientConfig:
         assert config.max_connections == DEFAULT_MAX_CONNECTIONS
         assert config.max_field_section_size == DEFAULT_MAX_FIELD_SECTION_SIZE
         assert config.max_sessions == DEFAULT_MAX_SESSIONS
-        assert config.max_transport_streams == DEFAULT_MAX_TRANSPORT_STREAMS
+        assert config.quic_max_concurrent_bidi_streams == DEFAULT_QUIC_MAX_CONCURRENT_BIDI_STREAMS
+        assert config.quic_max_concurrent_uni_streams == DEFAULT_QUIC_MAX_CONCURRENT_UNI_STREAMS
+        assert config.quic_receive_window == DEFAULT_QUIC_RECEIVE_WINDOW
+        assert config.quic_send_window == DEFAULT_QUIC_SEND_WINDOW
+        assert config.quic_stream_receive_window == DEFAULT_QUIC_STREAM_RECEIVE_WINDOW
         assert config.wt_available_protocols is None
         assert config.user_agent is None
         assert config.verify_mode == ssl.CERT_REQUIRED
@@ -155,6 +166,12 @@ class TestClientConfig:
             ({"event_history_capacity": -1}, "cfg_event_history_capacity validate invalid"),
             ({"event_queue_capacity": 0}, "cfg_event_queue_capacity validate invalid"),
             ({"flow_control_window": 0}, "cfg_flow_control_window validate invalid"),
+            ({"initial_max_data": -1}, "cfg_initial_max_data validate invalid"),
+            ({"initial_max_data": QUIC_VARINT_LIMIT + 1}, "cfg_initial_max_data validate invalid"),
+            ({"initial_max_streams_bidi": -1}, "cfg_initial_max_streams_bidi validate invalid"),
+            ({"initial_max_streams_bidi": WT_STREAMS_LIMIT + 1}, "cfg_initial_max_streams_bidi validate invalid"),
+            ({"initial_max_streams_uni": -1}, "cfg_initial_max_streams_uni validate invalid"),
+            ({"initial_max_streams_uni": WT_STREAMS_LIMIT + 1}, "cfg_initial_max_streams_uni validate invalid"),
             ({"keep_alive_interval": -1}, "cfg_keep_alive_interval validate invalid"),
             ({"keep_alive_interval": "invalid"}, "cfg_keep_alive_interval validate invalid"),
             ({"max_capsule_size": 0}, "cfg_max_capsule_size validate invalid"),
@@ -169,9 +186,26 @@ class TestClientConfig:
             ({"max_stream_read_buffer_size": 0}, "cfg_max_stream_read_buffer_size validate invalid"),
             ({"max_stream_write_buffer_size": 0}, "cfg_max_stream_write_buffer_size validate invalid"),
             ({"max_total_pending_events": 0}, "cfg_max_total_pending_events validate invalid"),
-            ({"max_transport_streams": 0}, "cfg_max_transport_streams validate invalid"),
-            ({"max_transport_streams": WT_STREAMS_LIMIT + 1}, "cfg_max_transport_streams validate invalid"),
             ({"pending_event_ttl": 0}, "cfg_pending_event_ttl validate invalid"),
+            (
+                {"quic_max_concurrent_bidi_streams": WT_SESSION_CONTROL_BIDI_STREAM_COUNT - 1},
+                "cfg_quic_max_concurrent_bidi_streams validate invalid",
+            ),
+            (
+                {"quic_max_concurrent_bidi_streams": WT_STREAMS_LIMIT + 1},
+                "cfg_quic_max_concurrent_bidi_streams validate invalid",
+            ),
+            (
+                {"quic_max_concurrent_uni_streams": H3_MIN_UNI_STREAM_COUNT - 1},
+                "cfg_quic_max_concurrent_uni_streams validate invalid",
+            ),
+            (
+                {"quic_max_concurrent_uni_streams": WT_STREAMS_LIMIT + 1},
+                "cfg_quic_max_concurrent_uni_streams validate invalid",
+            ),
+            ({"quic_receive_window": 0}, "cfg_quic_receive_window validate invalid"),
+            ({"quic_send_window": 0}, "cfg_quic_send_window validate invalid"),
+            ({"quic_stream_receive_window": 0}, "cfg_quic_stream_receive_window validate invalid"),
             ({"resource_cleanup_interval": -1}, "cfg_resource_cleanup_interval validate invalid"),
             ({"stream_creation_timeout": -1}, "cfg_stream_creation_timeout validate invalid"),
             ({"verify_mode": "INVALID"}, "cfg_verify_mode validate invalid"),
@@ -206,7 +240,6 @@ class TestServerConfig:
         assert config.max_capsule_size == DEFAULT_MAX_CAPSULE_SIZE
         assert config.max_connections == DEFAULT_MAX_CONNECTIONS
         assert config.max_field_section_size == DEFAULT_MAX_FIELD_SECTION_SIZE
-        assert config.max_transport_streams == DEFAULT_MAX_TRANSPORT_STREAMS
 
     def test_from_dict_coercion(self) -> None:
         config_dict = {"bind_port": "8080", "certfile": "dummy.crt", "keyfile": "dummy.key"}
@@ -323,6 +356,12 @@ class TestServerConfig:
             ({"event_history_capacity": -1}, "cfg_event_history_capacity validate invalid"),
             ({"event_queue_capacity": 0}, "cfg_event_queue_capacity validate invalid"),
             ({"flow_control_window": 0}, "cfg_flow_control_window validate invalid"),
+            ({"initial_max_data": -1}, "cfg_initial_max_data validate invalid"),
+            ({"initial_max_data": QUIC_VARINT_LIMIT + 1}, "cfg_initial_max_data validate invalid"),
+            ({"initial_max_streams_bidi": -1}, "cfg_initial_max_streams_bidi validate invalid"),
+            ({"initial_max_streams_bidi": WT_STREAMS_LIMIT + 1}, "cfg_initial_max_streams_bidi validate invalid"),
+            ({"initial_max_streams_uni": -1}, "cfg_initial_max_streams_uni validate invalid"),
+            ({"initial_max_streams_uni": WT_STREAMS_LIMIT + 1}, "cfg_initial_max_streams_uni validate invalid"),
             ({"keep_alive_interval": -1}, "cfg_keep_alive_interval validate invalid"),
             ({"max_capsule_size": 0}, "cfg_max_capsule_size validate invalid"),
             ({"max_connections": 0}, "cfg_max_connections validate invalid"),
@@ -336,9 +375,26 @@ class TestServerConfig:
             ({"max_stream_read_buffer_size": 0}, "cfg_max_stream_read_buffer_size validate invalid"),
             ({"max_stream_write_buffer_size": 0}, "cfg_max_stream_write_buffer_size validate invalid"),
             ({"max_total_pending_events": 0}, "cfg_max_total_pending_events validate invalid"),
-            ({"max_transport_streams": 0}, "cfg_max_transport_streams validate invalid"),
-            ({"max_transport_streams": WT_STREAMS_LIMIT + 1}, "cfg_max_transport_streams validate invalid"),
             ({"pending_event_ttl": -1.0}, "cfg_pending_event_ttl validate invalid"),
+            (
+                {"quic_max_concurrent_bidi_streams": WT_SESSION_CONTROL_BIDI_STREAM_COUNT - 1},
+                "cfg_quic_max_concurrent_bidi_streams validate invalid",
+            ),
+            (
+                {"quic_max_concurrent_bidi_streams": WT_STREAMS_LIMIT + 1},
+                "cfg_quic_max_concurrent_bidi_streams validate invalid",
+            ),
+            (
+                {"quic_max_concurrent_uni_streams": H3_MIN_UNI_STREAM_COUNT - 1},
+                "cfg_quic_max_concurrent_uni_streams validate invalid",
+            ),
+            (
+                {"quic_max_concurrent_uni_streams": WT_STREAMS_LIMIT + 1},
+                "cfg_quic_max_concurrent_uni_streams validate invalid",
+            ),
+            ({"quic_receive_window": 0}, "cfg_quic_receive_window validate invalid"),
+            ({"quic_send_window": 0}, "cfg_quic_send_window validate invalid"),
+            ({"quic_stream_receive_window": 0}, "cfg_quic_stream_receive_window validate invalid"),
             ({"read_timeout": "invalid"}, "cfg_read_timeout validate invalid"),
             ({"verify_mode": "INVALID"}, "cfg_verify_mode validate invalid"),
         ],

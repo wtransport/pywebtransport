@@ -23,8 +23,12 @@ pub(crate) struct RustBaseConfig {
     pub(crate) max_stream_read_buffer_size: u64,
     pub(crate) max_stream_write_buffer_size: u64,
     pub(crate) max_total_pending_events: u64,
-    pub(crate) max_transport_streams: u64,
     pub(crate) pending_event_ttl: Duration,
+    pub(crate) quic_max_concurrent_bidi_streams: u64,
+    pub(crate) quic_max_concurrent_uni_streams: u64,
+    pub(crate) quic_receive_window: u64,
+    pub(crate) quic_send_window: u64,
+    pub(crate) quic_stream_receive_window: u64,
     pub(crate) resource_cleanup_interval: Duration,
 }
 

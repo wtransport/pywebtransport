@@ -34,7 +34,8 @@ fn test_app_error_codes_match_spec(#[case] error_code: u64, #[case] expected: u6
 #[case(DEFAULT_MAX_CONNECTIONS)]
 #[case(DEFAULT_MAX_EVENT_LISTENERS)]
 #[case(DEFAULT_MAX_SESSIONS)]
-#[case(DEFAULT_MAX_TRANSPORT_STREAMS)]
+#[case(DEFAULT_QUIC_MAX_CONCURRENT_BIDI_STREAMS)]
+#[case(DEFAULT_QUIC_MAX_CONCURRENT_UNI_STREAMS)]
 fn test_concurrency_limits_are_sane(#[case] limit: u64) {
     assert!(limit >= 1);
 }
@@ -125,9 +126,9 @@ fn test_max_protocol_streams_limit() {
 }
 
 #[test]
-fn test_max_stream_id_limit() {
+fn test_quic_varint_limit() {
     let calculation = (1u64 << 62) - 1;
-    assert_eq!(QUIC_MAX_STREAM_ID, calculation);
+    assert_eq!(QUIC_VARINT_LIMIT, calculation);
 }
 
 #[test]
@@ -165,6 +166,9 @@ fn test_quic_transport_error_codes(#[case] error_code: u64, #[case] expected: u6
 #[case(DEFAULT_MAX_FIELD_SECTION_SIZE)]
 #[case(DEFAULT_MAX_STREAM_READ_BUFFER_SIZE)]
 #[case(DEFAULT_MAX_STREAM_WRITE_BUFFER_SIZE)]
+#[case(DEFAULT_QUIC_RECEIVE_WINDOW)]
+#[case(DEFAULT_QUIC_SEND_WINDOW)]
+#[case(DEFAULT_QUIC_STREAM_RECEIVE_WINDOW)]
 fn test_size_configuration_defaults_are_nonzero(#[case] size_value: u64) {
     assert!(size_value > 0);
 }

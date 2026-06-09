@@ -8,8 +8,8 @@ use tracing::debug;
 
 use crate::common::constants::{
     ERR_H3_FRAME_ERROR, ERR_LIB_INTERNAL_ERROR, ERR_WT_APPLICATION_ERROR_FIRST,
-    ERR_WT_APPLICATION_ERROR_LAST, QUIC_MAX_STREAM_ID, QUIC_STREAM_DIRECTION_MASK,
-    QUIC_STREAM_INITIATOR_MASK,
+    ERR_WT_APPLICATION_ERROR_LAST, QUIC_STREAM_DIRECTION_MASK, QUIC_STREAM_INITIATOR_MASK,
+    QUIC_VARINT_LIMIT,
 };
 use crate::common::types::{ErrorCode, Headers, StreamDirection, StreamId};
 
@@ -264,8 +264,8 @@ pub(crate) fn varint_size(value: u64) -> usize {
 pub(super) fn stream_dir_from_id(stream_id: StreamId, is_client: bool) -> StreamDirection {
     if cfg!(debug_assertions) {
         debug_assert!(
-            stream_id <= QUIC_MAX_STREAM_ID,
-            "quic_stream validate exceeded actual={stream_id} expected=quic_max_stream_id"
+            stream_id <= QUIC_VARINT_LIMIT,
+            "quic_stream validate exceeded actual={stream_id} expected=quic_varint_limit"
         );
     }
 
