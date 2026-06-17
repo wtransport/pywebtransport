@@ -28,7 +28,7 @@ const UDP_SLAB_THRESHOLD: usize = 2048;
 // Core event loop engine managing asynchronous I/O and multiplexing.
 pub(crate) struct Reactor {
     command_rx: RuntimeCommandRx,
-    datagram_rx: mpsc::Receiver<(BytesMut, SocketAddr, Option<SocketAddr>)>,
+    datagram_rx: mpsc::Receiver<(SocketAddr, Option<SocketAddr>, BytesMut)>,
     endpoint: TransportEndpoint,
     event_tx: RuntimeEventTx,
     events_emitted: bool,
@@ -68,7 +68,7 @@ impl Reactor {
                         let data = buf.split_to(len);
                         let local_addr = sock_clone.local_addr().ok();
 
-                        if tx.send((data, remote_addr, local_addr)).await.is_err() {
+                        if tx.send((remote_addr, local_addr, data)).await.is_err() {
                             break;
                         }
                     }
@@ -109,12 +109,12 @@ impl Reactor {
                     }
                 }
                 datagram_opt = self.datagram_rx.recv() => {
-                    let Some((data, remote, local)) = datagram_opt else { break; };
+                    let Some((remote, local, data)) = datagram_opt else { break; };
 
                     self.handle_datagram(remote, local, data).await;
 
                     for _ in 1..UDP_POLL_DATAGRAMS {
-                        if let Ok((data, remote, local)) = self.datagram_rx.try_recv() {
+                        if let Ok((remote, local, data)) = self.datagram_rx.try_recv() {
                             self.handle_datagram(remote, local, data).await;
                         } else {
                             break;
@@ -132,6 +132,12 @@ impl Reactor {
                 (self.waker)();
                 self.events_emitted = false;
             }
+        }
+
+        self.flush_transmits().await;
+
+        if self.events_emitted {
+            (self.waker)();
         }
 
         self.notify_shutdown();
@@ -326,7 +332,7 @@ impl Reactor {
                     };
 
                     if let Err(e) = socket.send_to(chunk, addr).await {
-                        debug!("udp_datagram send failed err={e:?}");
+                        debug!("sys_socket send failed err={e:?}");
                     }
 
                     offset += chunk_len;

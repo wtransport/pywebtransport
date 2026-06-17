@@ -102,26 +102,20 @@ fn create_test_connection() -> TransportConnection {
 fn create_test_engine(is_client: bool) -> WebTransportEngine {
     let params = EngineParams {
         early_event_ttl: 5.0,
-        flow_control_window: 1024 * 1024,
-        flow_control_window_auto_scale_enabled: true,
-        initial_max_data: 10000,
+        flow_control_window: 4 * 1024 * 1024,
+        initial_max_data: 4 * 1024 * 1024,
         initial_max_streams_bidi: 10,
         initial_max_streams_uni: 10,
-        max_capsule_size: 1024,
+        max_capsule_size: 65536,
         max_field_section_size: 65536,
-        max_session_pending_events: 10,
+        max_session_pending_events: 100,
         max_sessions: 10,
-        max_stream_read_buffer_size: 1024,
-        max_stream_write_buffer_size: 1024,
-        max_total_pending_events: 100,
+        max_stream_read_buffer_size: 1024 * 1024,
+        max_stream_write_buffer_size: 1024 * 1024,
+        max_total_pending_events: 1000,
     };
 
-    let Ok(engine) = WebTransportEngine::new(42, is_client, params) else {
-        assert_eq!("ok", "err", "Engine initialization failed");
-        unreachable!()
-    };
-
-    engine
+    WebTransportEngine::new(42, is_client, params)
 }
 
 #[test]

@@ -19,12 +19,12 @@ fn create_dummy_headers(count: usize) -> Headers {
 
 #[test]
 fn test_abandon_header_block_active_stream() {
-    let mut encoder = Encoder::new();
-    let mut decoder = Decoder::new(4096, 4096);
+    let mut encoder = Encoder::new(4096, 100);
+    let mut decoder = Decoder::new(4096, 100);
     let stream_id = 42;
     let headers: Headers = vec![(Bytes::from("x-dynamic-abandon"), Bytes::from("value"))];
 
-    let Ok(settings) = encoder.apply_settings(4096, 16) else {
+    let Ok(settings) = encoder.apply_settings(4096, 100) else {
         unreachable!("Apply settings failed");
     };
     let Ok(_) = decoder.feed_encoder(&settings) else {
@@ -52,7 +52,7 @@ fn test_abandon_header_block_active_stream() {
 
 #[test]
 fn test_abandon_header_block_non_existent() {
-    let mut decoder = Decoder::new(4096, 4096);
+    let mut decoder = Decoder::new(4096, 100);
 
     let instructions = decoder.abandon_header_block(999);
 
@@ -61,12 +61,12 @@ fn test_abandon_header_block_non_existent() {
 
 #[test]
 fn test_decoder_blocking_and_resumption_logic() {
-    let mut encoder = Encoder::new();
-    let mut decoder = Decoder::new(4096, 4096);
-    let stream_id = 8;
+    let mut encoder = Encoder::new(4096, 100);
+    let mut decoder = Decoder::new(4096, 100);
+    let stream_id = 10;
     let headers: Headers = vec![(Bytes::from("x-dynamic"), Bytes::from("value-1"))];
 
-    let Ok(settings) = encoder.apply_settings(4096, 16) else {
+    let Ok(settings) = encoder.apply_settings(4096, 100) else {
         unreachable!("Apply settings failed");
     };
     let Ok(_) = decoder.feed_encoder(&settings) else {
@@ -106,7 +106,7 @@ fn test_decoder_blocking_and_resumption_logic() {
 
 #[test]
 fn test_decoder_feed_malformed_encoder_instructions() {
-    let mut decoder = Decoder::new(4096, 4096);
+    let mut decoder = Decoder::new(4096, 100);
     let malformed_data = vec![0x80, 0xFF, 0xFF, 0xFF, 0xFF];
 
     let result = decoder.feed_encoder(&malformed_data);
@@ -116,8 +116,8 @@ fn test_decoder_feed_malformed_encoder_instructions() {
 
 #[test]
 fn test_decode_header_malformed_data() {
-    let mut decoder = Decoder::new(4096, 4096);
-    let stream_id = 1;
+    let mut decoder = Decoder::new(4096, 100);
+    let stream_id = 10;
     let malformed_data = Bytes::from(vec![0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
 
     let result = decoder.decode_header(stream_id, malformed_data);
@@ -127,11 +127,15 @@ fn test_decode_header_malformed_data() {
 
 #[test]
 fn test_decoder_pending_block_capacity_limit_dos_protection() {
-    let mut encoder = Encoder::new();
-    let mut decoder = Decoder::new(4096, 4096);
+    let Ok(capacity) = u32::try_from(DECODER_PENDING_BLOCK_CAPACITY) else {
+        unreachable!("capacity overflow");
+    };
+    let blocked_streams = capacity + 100;
+    let mut encoder = Encoder::new(4096, blocked_streams);
+    let mut decoder = Decoder::new(4096, blocked_streams);
     let headers: Headers = vec![(Bytes::from("x-dynamic-dos"), Bytes::from("value"))];
 
-    let Ok(settings) = encoder.apply_settings(4096, 16) else {
+    let Ok(settings) = encoder.apply_settings(4096, u64::from(blocked_streams)) else {
         unreachable!("Apply settings failed");
     };
     let Ok(_) = decoder.feed_encoder(&settings) else {
@@ -161,9 +165,9 @@ fn test_decoder_pending_block_capacity_limit_dos_protection() {
 
 #[test]
 fn test_encode_large_batch_triggers_buffer_resize() {
-    let mut encoder = Encoder::new();
+    let mut encoder = Encoder::new(65536, 100);
     let headers = create_dummy_headers(5000);
-    let stream_id = 2;
+    let stream_id = 10;
 
     let result = encoder.encode(stream_id, &headers);
 
@@ -176,9 +180,9 @@ fn test_encode_large_batch_triggers_buffer_resize() {
 
 #[test]
 fn test_encoder_apply_settings_high_limits() {
-    let mut encoder = Encoder::new();
+    let mut encoder = Encoder::new(65536, 100);
     let max_table = 100_000;
-    let blocked_streams = u64::from(ENCODER_BLOCKED_STREAM_CAPACITY) + 100;
+    let blocked_streams = 200;
 
     let result = encoder.apply_settings(max_table, blocked_streams);
 
@@ -191,7 +195,7 @@ fn test_encoder_apply_settings_high_limits() {
 
 #[test]
 fn test_encoder_feed_decoder_noop_safely() {
-    let mut encoder = Encoder::new();
+    let mut encoder = Encoder::new(4096, 100);
     let dummy_data = vec![0x00, 0x01];
 
     encoder.feed_decoder(&dummy_data);
@@ -199,9 +203,9 @@ fn test_encoder_feed_decoder_noop_safely() {
 
 #[test]
 fn test_encoder_initialization_and_settings() {
-    let mut encoder = Encoder::new();
+    let mut encoder = Encoder::new(4096, 100);
     let max_table = 4096;
-    let blocked_streams = 16;
+    let blocked_streams = 100;
 
     let result = encoder.apply_settings(max_table, blocked_streams);
 
@@ -268,7 +272,7 @@ fn test_header_lsxpack_conversion_integrity() {
 
 #[test]
 fn test_resume_header_non_existent_stream() {
-    let mut decoder = Decoder::new(4096, 4096);
+    let mut decoder = Decoder::new(4096, 100);
     let stream_id = 999;
 
     let result = decoder.resume_header(stream_id);
@@ -282,9 +286,9 @@ fn test_resume_header_non_existent_stream() {
 
 #[test]
 fn test_round_trip_simple_flow() {
-    let mut encoder = Encoder::new();
-    let mut decoder = Decoder::new(4096, 4096);
-    let stream_id = 1;
+    let mut encoder = Encoder::new(4096, 100);
+    let mut decoder = Decoder::new(4096, 100);
+    let stream_id = 10;
     let headers: Headers = vec![
         (Bytes::from(":method"), Bytes::from("GET")),
         (Bytes::from(":path"), Bytes::from("/index.html")),

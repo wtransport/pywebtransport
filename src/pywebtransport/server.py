@@ -8,7 +8,7 @@ import time
 from collections import Counter
 from dataclasses import asdict, dataclass
 from types import TracebackType
-from typing import Any, Self
+from typing import Any, Final, Self
 
 from pywebtransport._controller.controller import EndpointController
 from pywebtransport.config import ServerConfig
@@ -20,6 +20,10 @@ from pywebtransport.manager.session import SessionManager
 from pywebtransport.types import Address, ConnectionState, EventType, SessionState
 
 __all__: list[str] = ["ServerDiagnostics", "ServerStats", "WebTransportServer"]
+
+_HEALTH_CONNECTION_USAGE_THRESHOLD: Final[float] = 0.9
+_HEALTH_EVALUATION_SAMPLES: Final[int] = 20
+_HEALTH_SUCCESS_RATE_THRESHOLD: Final[float] = 0.9
 
 _logger = logging.getLogger(name=__name__)
 
@@ -46,13 +50,13 @@ class ServerDiagnostics:
         total_attempts = stats_dict.get("total_connections_attempted", 0)
         success_rate = stats_dict.get("success_rate", 1.0)
 
-        if total_attempts > 20 and success_rate < 0.9:
+        if total_attempts > _HEALTH_EVALUATION_SAMPLES and success_rate < _HEALTH_SUCCESS_RATE_THRESHOLD:
             issues.append(f"app_server validate exceeded actual={success_rate} expected=health_success_rate_threshold")
 
         active_connections = self.connection_states.get(ConnectionState.CONNECTED, 0)
         if self.max_connections > 0:
             usage = active_connections / self.max_connections
-            if usage > 0.9:
+            if usage > _HEALTH_CONNECTION_USAGE_THRESHOLD:
                 issues.append(f"app_server validate exceeded actual={usage} expected=health_connection_usage_threshold")
 
         return issues
@@ -249,7 +253,7 @@ class WebTransportServer(EventEmitter):
             _logger.warning("app_manager close failed err=%s", eg.exceptions, exc_info=eg)
 
         if self._controller is not None:
-            self._controller.close()
+            await self._controller.close()
 
         self._shutdown_event.set()
 

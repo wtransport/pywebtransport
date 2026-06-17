@@ -19,17 +19,15 @@ pub(crate) const DEFAULT_DEV_PORT: u16 = 4433;
 // Default event history buffer capacity (0 disables).
 pub(crate) const DEFAULT_EVENT_HISTORY_CAPACITY: u64 = 0;
 // Default event queue capacity.
-pub(crate) const DEFAULT_EVENT_QUEUE_CAPACITY: u64 = 1000;
+pub(crate) const DEFAULT_EVENT_QUEUE_CAPACITY: u64 = 100;
 // Default flow control window.
-pub(crate) const DEFAULT_FLOW_CONTROL_WINDOW: u64 = 1024 * 1024;
-// Default flow control window auto-scaling enablement flag.
-pub(crate) const DEFAULT_FLOW_CONTROL_WINDOW_AUTO_SCALE_ENABLED: bool = true;
+pub(crate) const DEFAULT_FLOW_CONTROL_WINDOW: u64 = 4 * 1024 * 1024;
 // Default initial maximum data limit.
-pub(crate) const DEFAULT_INITIAL_MAX_DATA: u64 = 10 * 1024 * 1024;
+pub(crate) const DEFAULT_INITIAL_MAX_DATA: u64 = 4 * 1024 * 1024;
 // Default initial maximum bidirectional streams.
-pub(crate) const DEFAULT_INITIAL_MAX_STREAMS_BIDI: u64 = 100;
+pub(crate) const DEFAULT_INITIAL_MAX_STREAMS_BIDI: u64 = 10;
 // Default initial maximum unidirectional streams.
-pub(crate) const DEFAULT_INITIAL_MAX_STREAMS_UNI: u64 = 100;
+pub(crate) const DEFAULT_INITIAL_MAX_STREAMS_UNI: u64 = 10;
 // Default keep-alive interval.
 pub(crate) const DEFAULT_KEEP_ALIVE_INTERVAL: f64 = 30.0;
 // Default logging level.
@@ -41,31 +39,31 @@ pub(crate) const DEFAULT_MAX_CONNECTIONS: u64 = 100;
 // Default maximum UDP datagram size.
 pub(crate) const DEFAULT_MAX_DATAGRAM_SIZE: u64 = 1350;
 // Default maximum event listeners.
-pub(crate) const DEFAULT_MAX_EVENT_LISTENERS: u64 = 100;
+pub(crate) const DEFAULT_MAX_EVENT_LISTENERS: u64 = 10;
 // Default maximum HTTP/3 field section size.
 pub(crate) const DEFAULT_MAX_FIELD_SECTION_SIZE: u64 = 65536;
 // Default maximum session pending events.
 pub(crate) const DEFAULT_MAX_SESSION_PENDING_EVENTS: u64 = 100;
 // Default maximum sessions.
-pub(crate) const DEFAULT_MAX_SESSIONS: u64 = 100;
+pub(crate) const DEFAULT_MAX_SESSIONS: u64 = 10;
 // Default maximum stream read buffer size.
-pub(crate) const DEFAULT_MAX_STREAM_READ_BUFFER_SIZE: u64 = 2 * 1024 * 1024;
+pub(crate) const DEFAULT_MAX_STREAM_READ_BUFFER_SIZE: u64 = 1024 * 1024;
 // Default maximum stream write buffer size.
-pub(crate) const DEFAULT_MAX_STREAM_WRITE_BUFFER_SIZE: u64 = 2 * 1024 * 1024;
+pub(crate) const DEFAULT_MAX_STREAM_WRITE_BUFFER_SIZE: u64 = 1024 * 1024;
 // Default maximum total pending events.
 pub(crate) const DEFAULT_MAX_TOTAL_PENDING_EVENTS: u64 = 1000;
 // Default pending event time-to-live (TTL).
 pub(crate) const DEFAULT_PENDING_EVENT_TTL: f64 = 5.0;
 // Default QUIC maximum concurrent bidirectional streams.
-pub(crate) const DEFAULT_QUIC_MAX_CONCURRENT_BIDI_STREAMS: u64 = 65535;
+pub(crate) const DEFAULT_QUIC_MAX_CONCURRENT_BIDI_STREAMS: u64 = 100;
 // Default QUIC maximum concurrent unidirectional streams.
-pub(crate) const DEFAULT_QUIC_MAX_CONCURRENT_UNI_STREAMS: u64 = 65535;
+pub(crate) const DEFAULT_QUIC_MAX_CONCURRENT_UNI_STREAMS: u64 = 100;
 // Default QUIC connection receive window.
-pub(crate) const DEFAULT_QUIC_RECEIVE_WINDOW: u64 = 32 * 1024 * 1024;
+pub(crate) const DEFAULT_QUIC_RECEIVE_WINDOW: u64 = 16 * 1024 * 1024;
 // Default QUIC connection send window.
-pub(crate) const DEFAULT_QUIC_SEND_WINDOW: u64 = 32 * 1024 * 1024;
+pub(crate) const DEFAULT_QUIC_SEND_WINDOW: u64 = 16 * 1024 * 1024;
 // Default QUIC stream receive window.
-pub(crate) const DEFAULT_QUIC_STREAM_RECEIVE_WINDOW: u64 = 2 * 1024 * 1024;
+pub(crate) const DEFAULT_QUIC_STREAM_RECEIVE_WINDOW: u64 = 1024 * 1024;
 // Default stream read operation timeout.
 pub(crate) const DEFAULT_READ_TIMEOUT: f64 = 60.0;
 // Default resource cleanup interval.

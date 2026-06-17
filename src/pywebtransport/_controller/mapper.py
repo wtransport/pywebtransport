@@ -45,15 +45,6 @@ def pack_user_event(*, event: events.ProtocolEvent) -> tuple[int, tuple[Any, ...
             return abi.USER_GET_SESSION_DIAGNOSTICS, (event.request_id, event.session_id)
         case events.UserGetStreamDiagnostics():
             return abi.USER_GET_STREAM_DIAGNOSTICS, (event.request_id, event.stream_id)
-        case events.UserGrantDataCredit():
-            return abi.USER_GRANT_DATA_CREDIT, (event.request_id, event.session_id, event.max_data)
-        case events.UserGrantStreamsCredit():
-            return abi.USER_GRANT_STREAMS_CREDIT, (
-                event.request_id,
-                event.session_id,
-                event.is_unidirectional,
-                event.max_streams,
-            )
         case events.UserReadStream():
             return abi.USER_READ_STREAM, (event.request_id, event.stream_id, event.max_bytes)
         case events.UserRejectSession():

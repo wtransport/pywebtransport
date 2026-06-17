@@ -22,7 +22,6 @@ use crate::protocol::utils::write_varint;
 pub(crate) struct EngineParams {
     pub(crate) early_event_ttl: f64,
     pub(crate) flow_control_window: u64,
-    pub(crate) flow_control_window_auto_scale_enabled: bool,
     pub(crate) initial_max_data: u64,
     pub(crate) initial_max_streams_bidi: u64,
     pub(crate) initial_max_streams_uni: u64,
@@ -44,19 +43,13 @@ pub(crate) struct WebTransportEngine {
 
 impl WebTransportEngine {
     // Engine initialization with comprehensive configuration.
-    pub(crate) fn new(
-        handle: ConnectionHandle,
-        is_client: bool,
-        params: EngineParams,
-    ) -> Result<Self, WebTransportError> {
+    pub(crate) fn new(handle: ConnectionHandle, is_client: bool, params: EngineParams) -> Self {
         let connection = Connection::new(
             handle,
             is_client,
             ConnectionParams {
                 early_event_ttl: params.early_event_ttl,
                 flow_control_window: params.flow_control_window,
-                flow_control_window_auto_scale_enabled: params
-                    .flow_control_window_auto_scale_enabled,
                 initial_max_data: params.initial_max_data,
                 initial_max_streams_bidi: params.initial_max_streams_bidi,
                 initial_max_streams_uni: params.initial_max_streams_uni,
@@ -77,13 +70,13 @@ impl WebTransportEngine {
                 max_capsule_size: params.max_capsule_size,
                 max_field_section_size: params.max_field_section_size,
             },
-        )?;
+        );
 
-        Ok(Self {
+        Self {
             connection,
             h3,
             pending_user_actions: VecDeque::new(),
-        })
+        }
     }
 
     // H3 stream state cleanup.
@@ -438,29 +431,6 @@ impl WebTransportEngine {
                     stream_id,
                 } => {
                     new_effects.extend(self.connection.stream_diagnostics(stream_id, request_id));
-                }
-                ProtocolEvent::UserGrantDataCredit {
-                    request_id,
-                    session_id,
-                    max_data,
-                } => {
-                    new_effects.extend(
-                        self.connection
-                            .grant_data_credit(session_id, request_id, max_data),
-                    );
-                }
-                ProtocolEvent::UserGrantStreamsCredit {
-                    request_id,
-                    session_id,
-                    is_unidirectional,
-                    max_streams,
-                } => {
-                    new_effects.extend(self.connection.grant_streams_credit(
-                        session_id,
-                        request_id,
-                        is_unidirectional,
-                        max_streams,
-                    ));
                 }
                 ProtocolEvent::UserReadStream {
                     request_id,

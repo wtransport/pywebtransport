@@ -20,16 +20,15 @@ fn fixture_client_connection() -> Connection {
         true,
         ConnectionParams {
             early_event_ttl: 5.0,
-            flow_control_window: 1024 * 1024,
-            flow_control_window_auto_scale_enabled: true,
-            initial_max_data: 10000,
+            flow_control_window: 4 * 1024 * 1024,
+            initial_max_data: 4 * 1024 * 1024,
             initial_max_streams_bidi: 10,
             initial_max_streams_uni: 10,
-            max_session_pending_events: 10,
+            max_session_pending_events: 100,
             max_sessions: 10,
-            max_stream_read_buffer_size: 1024,
-            max_stream_write_buffer_size: 1024,
-            max_total_pending_events: 100,
+            max_stream_read_buffer_size: 1024 * 1024,
+            max_stream_write_buffer_size: 1024 * 1024,
+            max_total_pending_events: 1000,
         },
     )
 }
@@ -61,16 +60,15 @@ fn fixture_server_connection() -> Connection {
         false,
         ConnectionParams {
             early_event_ttl: 5.0,
-            flow_control_window: 1024 * 1024,
-            flow_control_window_auto_scale_enabled: true,
-            initial_max_data: 10000,
+            flow_control_window: 4 * 1024 * 1024,
+            initial_max_data: 4 * 1024 * 1024,
             initial_max_streams_bidi: 10,
             initial_max_streams_uni: 10,
-            max_session_pending_events: 10,
+            max_session_pending_events: 100,
             max_sessions: 10,
-            max_stream_read_buffer_size: 1024,
-            max_stream_write_buffer_size: 1024,
-            max_total_pending_events: 100,
+            max_stream_read_buffer_size: 1024 * 1024,
+            max_stream_write_buffer_size: 1024 * 1024,
+            max_total_pending_events: 1000,
         },
     )
 }
@@ -682,16 +680,16 @@ fn test_diagnose(fixture_server_connection: Connection) {
 fn test_early_buffer_global_limit(mut fixture_server_connection: Connection) {
     fixture_server_connection.state = ConnectionState::Connected;
     for sid in 0..10 {
-        for _ in 0..10 {
+        for _ in 0..100 {
             fixture_server_connection.recv_datagram(sid, Bytes::from_static(b"d"), 1.0);
         }
     }
-    assert_eq!(fixture_server_connection.early_event_count, 100);
+    assert_eq!(fixture_server_connection.early_event_count, 1000);
 
     let effects =
         fixture_server_connection.recv_stream_data(100, 4, Bytes::from_static(b"d"), false, 2.0);
 
-    assert_eq!(fixture_server_connection.early_event_count, 100);
+    assert_eq!(fixture_server_connection.early_event_count, 1000);
     assert!(!effects.is_empty());
 }
 
@@ -771,43 +769,6 @@ fn test_graceful_close(mut fixture_server_connection: Connection) {
     assert!(matches!(
         effects.as_slice(),
         [Effect::SendH3Goaway, Effect::NotifyRequestDone { .. }]
-    ));
-}
-
-#[rstest]
-fn test_grant_credits_delegate(
-    mut fixture_server_connection: Connection,
-    fixture_headers: Headers,
-) {
-    fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, false, 1.0);
-    fixture_server_connection.accept_session(0, 100, None, 1.5);
-
-    let effects_data = fixture_server_connection.grant_data_credit(0, 101, 99999);
-    let effects_streams = fixture_server_connection.grant_streams_credit(0, 102, false, 100);
-
-    assert!(!effects_data.is_empty());
-    assert!(!effects_streams.is_empty());
-}
-
-#[rstest]
-fn test_grant_credits_not_found(mut fixture_server_connection: Connection) {
-    let e1 = fixture_server_connection.grant_data_credit(999, 100, 100);
-    let e2 = fixture_server_connection.grant_streams_credit(999, 100, false, 10);
-
-    assert!(matches!(
-        e1.as_slice(),
-        [Effect::NotifyRequestFailed {
-            source: ErrorSource::Session,
-            ..
-        }]
-    ));
-    assert!(matches!(
-        e2.as_slice(),
-        [Effect::NotifyRequestFailed {
-            source: ErrorSource::Session,
-            ..
-        }]
     ));
 }
 
@@ -1023,14 +984,14 @@ fn test_recv_connect_close_not_found(mut fixture_server_connection: Connection) 
 #[rstest]
 fn test_recv_datagram_early_buffer_full(mut fixture_server_connection: Connection) {
     fixture_server_connection.state = ConnectionState::Connected;
-    for _ in 0..10 {
+    for _ in 0..100 {
         fixture_server_connection.recv_datagram(0, Bytes::from_static(b"d"), 1.0);
     }
 
     let effects = fixture_server_connection.recv_datagram(0, Bytes::from_static(b"drop"), 2.0);
 
     assert!(effects.is_empty());
-    assert_eq!(fixture_server_connection.early_event_count, 10);
+    assert_eq!(fixture_server_connection.early_event_count, 100);
 }
 
 #[rstest]
@@ -1123,14 +1084,14 @@ fn test_recv_stop_sending_not_found(mut fixture_server_connection: Connection) {
 #[rstest]
 fn test_recv_stream_data_early_buffer_full_bidi(mut fixture_server_connection: Connection) {
     fixture_server_connection.state = ConnectionState::Connected;
-    for _ in 0..10 {
+    for _ in 0..100 {
         fixture_server_connection.recv_stream_data(0, 4, Bytes::from_static(b"data"), false, 1.0);
     }
 
     let effects =
         fixture_server_connection.recv_stream_data(0, 4, Bytes::from_static(b"drop"), false, 2.0);
 
-    assert_eq!(fixture_server_connection.early_event_count, 10);
+    assert_eq!(fixture_server_connection.early_event_count, 100);
     assert!(
         effects
             .iter()
@@ -1146,14 +1107,14 @@ fn test_recv_stream_data_early_buffer_full_bidi(mut fixture_server_connection: C
 #[rstest]
 fn test_recv_stream_data_early_buffer_full_uni(mut fixture_server_connection: Connection) {
     fixture_server_connection.state = ConnectionState::Connected;
-    for _ in 0..10 {
+    for _ in 0..100 {
         fixture_server_connection.recv_stream_data(0, 2, Bytes::from_static(b"data"), false, 1.0);
     }
 
     let effects =
         fixture_server_connection.recv_stream_data(0, 2, Bytes::from_static(b"drop"), false, 2.0);
 
-    assert_eq!(fixture_server_connection.early_event_count, 10);
+    assert_eq!(fixture_server_connection.early_event_count, 100);
     assert!(
         !effects
             .iter()

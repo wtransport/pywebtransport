@@ -30,7 +30,10 @@ for test_file in "${TEST_SUITES[@]}"; do
     $PYTHON_EXEC -O "${SERVER_SCRIPT}" >/dev/null 2>&1 &
     SERVER_PID=$!
     
-    sleep 2
+    for _ in {1..50}; do
+        if ss -uln | grep -q ":4433 "; then break; fi
+        sleep 0.1
+    done
 
     echo ""
     echo "[BENCHMARK] ${test_name}"
@@ -39,9 +42,9 @@ for test_file in "${TEST_SUITES[@]}"; do
         --benchmark-only \
         --benchmark-json="${json_output}" \
         --benchmark-columns=min,max,mean,median,stddev,ops \
-        --benchmark-sort=name
+        --benchmark-sort=name || true
 
-    kill -9 "${SERVER_PID}"
+    kill -9 "${SERVER_PID}" >/dev/null 2>&1 || true
     wait "${SERVER_PID}" >/dev/null 2>&1 || true
     SERVER_PID=""
     

@@ -39,10 +39,6 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         constants::DEFAULT_FLOW_CONTROL_WINDOW,
     )?;
     m.add(
-        "DEFAULT_FLOW_CONTROL_WINDOW_AUTO_SCALE_ENABLED",
-        constants::DEFAULT_FLOW_CONTROL_WINDOW_AUTO_SCALE_ENABLED,
-    )?;
-    m.add(
         "DEFAULT_INITIAL_MAX_DATA",
         constants::DEFAULT_INITIAL_MAX_DATA,
     )?;

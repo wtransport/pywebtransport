@@ -10,7 +10,7 @@ class TestAbi:
     @pytest.mark.parametrize(
         argnames="constant_name, expected_value",
         argvalues=[
-            ("ABI_VERSION", 5),
+            ("ABI_VERSION", 6),
             ("COMMAND_COMPLETED", 0x00),
             ("COMMAND_FAILED", 0x01),
             ("CONNECTION_EFFECTS", 0x02),
@@ -33,17 +33,15 @@ class TestAbi:
             ("USER_GET_CONNECTION_DIAGNOSTICS", 0x87),
             ("USER_GET_SESSION_DIAGNOSTICS", 0x88),
             ("USER_GET_STREAM_DIAGNOSTICS", 0x89),
-            ("USER_GRANT_DATA_CREDIT", 0x8A),
-            ("USER_GRANT_STREAMS_CREDIT", 0x8B),
-            ("USER_READ_STREAM", 0x8C),
-            ("USER_REJECT_SESSION", 0x8D),
-            ("USER_RESET_STREAM", 0x8E),
-            ("USER_SEND_DATAGRAM", 0x8F),
-            ("USER_SEND_STREAM_DATA", 0x90),
-            ("USER_STOP_SENDING", 0x91),
+            ("USER_READ_STREAM", 0x8A),
+            ("USER_REJECT_SESSION", 0x8B),
+            ("USER_RESET_STREAM", 0x8C),
+            ("USER_SEND_DATAGRAM", 0x8D),
+            ("USER_SEND_STREAM_DATA", 0x8E),
+            ("USER_STOP_SENDING", 0x8F),
         ],
     )
-    def test_abi_constants(self, constant_name: str, expected_value: int) -> None:
+    def test_abi_constants(self, *, constant_name: str, expected_value: int) -> None:
         actual_value = getattr(abi, constant_name)
 
         assert isinstance(actual_value, int)

@@ -221,38 +221,34 @@ fn test_is_unidirectional_stream_logic(#[case] stream_id: u64, #[case] expected:
 }
 
 #[rstest]
-#[case(100, 10, 100, true, true, Some(110))]
-#[case(100, 50, 100, false, false, None)]
-#[case(100, 50, 100, true, false, None)]
-#[case(100, 60, 100, true, false, Some(160))]
-#[case(u64::MAX - 10, 20, 10, true, true, None)]
+#[case(100, 10, 100, true, Some(110))]
+#[case(100, 50, 100, false, None)]
+#[case(100, 60, 100, false, Some(160))]
+#[case(u64::MAX - 10, 20, 10, true, None)]
 fn test_next_data_limit_calculation(
     #[case] current: u64,
     #[case] consumed: u64,
     #[case] window: u64,
-    #[case] auto_scale: bool,
     #[case] force: bool,
     #[case] expected: Option<u64>,
 ) {
-    let result = next_data_limit(current, consumed, window, auto_scale, force);
+    let result = next_data_limit(current, consumed, window, force);
 
     assert_eq!(result, expected);
 }
 
 #[rstest]
-#[case(10, 2, 10, true, true, Some(12))]
-#[case(10, 5, 10, false, false, None)]
-#[case(10, 6, 10, true, false, Some(16))]
-#[case(20, 5, 10, true, true, None)]
+#[case(10, 2, 10, true, Some(12))]
+#[case(10, 6, 10, false, Some(16))]
+#[case(20, 5, 10, true, None)]
 fn test_next_stream_limit_calculation(
     #[case] current: u64,
     #[case] closed: u64,
     #[case] window: u64,
-    #[case] auto_scale: bool,
     #[case] force: bool,
     #[case] expected: Option<u64>,
 ) {
-    let result = next_stream_limit(current, closed, window, auto_scale, force);
+    let result = next_stream_limit(current, closed, window, force);
 
     assert_eq!(result, expected);
 }

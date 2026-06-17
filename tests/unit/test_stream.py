@@ -39,7 +39,7 @@ class TestBaseStream:
         conn.config = mocker.Mock(spec=ClientConfig)
         conn.config.read_timeout = 0.1
         conn.config.write_timeout = 0.1
-        conn.config.max_stream_read_buffer_size = 1024
+        conn.config.max_stream_read_buffer_size = 1024 * 1024
         conn.handle = 42
         conn.execute_request = mocker.AsyncMock()
 

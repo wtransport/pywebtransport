@@ -21,7 +21,7 @@ from .framework import ServerApp
 from .server import WebTransportServer
 from .session import WebTransportSession
 from .stream import WebTransportReceiveStream, WebTransportSendStream, WebTransportStream
-from .types import URL, Address, Headers
+from .types import Address, Headers
 from .version import __version__
 
 __all__: list[str] = [
@@ -42,7 +42,6 @@ __all__: list[str] = [
     "SessionError",
     "StreamError",
     "TimeoutError",
-    "URL",
     "WebTransportClient",
     "WebTransportError",
     "WebTransportReceiveStream",

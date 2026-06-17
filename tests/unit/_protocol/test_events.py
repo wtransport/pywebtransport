@@ -16,8 +16,6 @@ from pywebtransport._protocol.events import (
     UserGetConnectionDiagnostics,
     UserGetSessionDiagnostics,
     UserGetStreamDiagnostics,
-    UserGrantDataCredit,
-    UserGrantStreamsCredit,
     UserReadStream,
     UserRejectSession,
     UserResetStream,
@@ -94,16 +92,6 @@ class TestUserEvents:
             (UserGetConnectionDiagnostics, {"request_id": 1}, {"request_id": 1}),
             (UserGetSessionDiagnostics, {"request_id": 1, "session_id": 1}, {"request_id": 1, "session_id": 1}),
             (UserGetStreamDiagnostics, {"request_id": 1, "stream_id": 4}, {"request_id": 1, "stream_id": 4}),
-            (
-                UserGrantDataCredit,
-                {"request_id": 1, "session_id": 1, "max_data": 1024},
-                {"request_id": 1, "session_id": 1, "max_data": 1024},
-            ),
-            (
-                UserGrantStreamsCredit,
-                {"request_id": 1, "session_id": 1, "is_unidirectional": False, "max_streams": 10},
-                {"request_id": 1, "session_id": 1, "is_unidirectional": False, "max_streams": 10},
-            ),
             (
                 UserReadStream,
                 {"request_id": 1, "stream_id": 4, "max_bytes": 1024},

@@ -11,10 +11,10 @@ use tracing::debug;
 
 use crate::common::constants::{
     ERR_H3_DATAGRAM_ERROR, ERR_H3_FRAME_UNEXPECTED, ERR_H3_GENERAL_PROTOCOL_ERROR,
-    ERR_H3_MESSAGE_ERROR, ERR_LIB_INTERNAL_ERROR, ERR_LIB_SESSION_STATE_ERROR,
-    ERR_LIB_STREAM_STATE_ERROR, ERR_WT_FLOW_CONTROL_ERROR, ERR_WT_SESSION_GONE,
-    WT_CAPSULE_TYPE_CLOSE_SESSION, WT_CAPSULE_TYPE_DATA_BLOCKED, WT_CAPSULE_TYPE_DRAIN_SESSION,
-    WT_CAPSULE_TYPE_MAX_DATA, WT_CAPSULE_TYPE_MAX_STREAM_DATA, WT_CAPSULE_TYPE_MAX_STREAMS_BIDI,
+    ERR_H3_MESSAGE_ERROR, ERR_LIB_SESSION_STATE_ERROR, ERR_LIB_STREAM_STATE_ERROR,
+    ERR_WT_FLOW_CONTROL_ERROR, ERR_WT_SESSION_GONE, WT_CAPSULE_TYPE_CLOSE_SESSION,
+    WT_CAPSULE_TYPE_DATA_BLOCKED, WT_CAPSULE_TYPE_DRAIN_SESSION, WT_CAPSULE_TYPE_MAX_DATA,
+    WT_CAPSULE_TYPE_MAX_STREAM_DATA, WT_CAPSULE_TYPE_MAX_STREAMS_BIDI,
     WT_CAPSULE_TYPE_MAX_STREAMS_UNI, WT_CAPSULE_TYPE_STREAM_DATA_BLOCKED,
     WT_CAPSULE_TYPE_STREAMS_BLOCKED_BIDI, WT_CAPSULE_TYPE_STREAMS_BLOCKED_UNI, WT_EXPORTER_LABEL,
     WT_MAX_CLOSE_REASON_SIZE, WT_PROTOCOL, WT_STREAMS_LIMIT,
@@ -85,7 +85,6 @@ pub(super) struct Session {
     datagrams_sent: u64,
     flow_control_negotiated: bool,
     flow_control_window: u64,
-    flow_control_window_auto_scale_enabled: bool,
     headers: Headers,
     id: SessionId,
     initial_max_streams_bidi: u64,
@@ -150,7 +149,6 @@ impl Session {
             datagrams_sent: 0,
             flow_control_negotiated: params.flow_control_negotiated,
             flow_control_window: params.flow_control_window,
-            flow_control_window_auto_scale_enabled: params.flow_control_window_auto_scale_enabled,
             headers,
             id,
             initial_max_streams_bidi: params.initial_max_streams_bidi,
@@ -603,161 +601,6 @@ impl Session {
             context: exporter_context.freeze(),
             length,
         }]
-    }
-
-    // Manual data credit grant handling.
-    pub(super) fn grant_data_credit(
-        &mut self,
-        request_id: RequestId,
-        max_data: u64,
-    ) -> Vec<Effect> {
-        if !self.flow_control_negotiated {
-            debug!(
-                "wt_session validate failed request_id={request_id} session_id={}",
-                self.id
-            );
-            return vec![Effect::NotifyRequestFailed {
-                request_id,
-                source: ErrorSource::Session,
-                error_code: None,
-                reason: "wt_session validate failed".into(),
-            }];
-        }
-
-        if self.state != SessionState::Connected {
-            debug!(
-                "wt_session validate failed actual={:?} request_id={request_id} session_id={}",
-                self.state, self.id
-            );
-            return vec![Effect::NotifyRequestFailed {
-                request_id,
-                source: ErrorSource::Session,
-                error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
-                reason: "wt_session validate failed".into(),
-            }];
-        }
-
-        if max_data <= self.local_max_data {
-            return vec![Effect::NotifyRequestDone {
-                request_id,
-                result: RequestResult::None,
-            }];
-        }
-
-        let mut buf = BytesMut::with_capacity(8);
-        if let Err(e) = write_varint(&mut buf, max_data) {
-            debug!(
-                "varint encode failed request_id={request_id} session_id={} err={e:?}",
-                self.id
-            );
-            return vec![Effect::NotifyRequestFailed {
-                request_id,
-                source: ErrorSource::Session,
-                error_code: Some(ERR_LIB_INTERNAL_ERROR),
-                reason: "varint encode failed".into(),
-            }];
-        }
-
-        self.local_max_data = max_data;
-
-        vec![
-            Effect::SendH3Capsule {
-                stream_id: self.id,
-                capsule_type: WT_CAPSULE_TYPE_MAX_DATA,
-                capsule_data: buf.freeze(),
-                end_stream: false,
-            },
-            Effect::NotifyRequestDone {
-                request_id,
-                result: RequestResult::None,
-            },
-        ]
-    }
-
-    // Manual stream credit grant handling.
-    pub(super) fn grant_streams_credit(
-        &mut self,
-        request_id: RequestId,
-        is_unidirectional: bool,
-        max_streams: u64,
-    ) -> Vec<Effect> {
-        if !self.flow_control_negotiated {
-            debug!(
-                "wt_session validate failed request_id={request_id} session_id={}",
-                self.id
-            );
-            return vec![Effect::NotifyRequestFailed {
-                request_id,
-                source: ErrorSource::Session,
-                error_code: None,
-                reason: "wt_session validate failed".into(),
-            }];
-        }
-
-        if self.state != SessionState::Connected {
-            debug!(
-                "wt_session validate failed actual={:?} request_id={request_id} session_id={}",
-                self.state, self.id
-            );
-            return vec![Effect::NotifyRequestFailed {
-                request_id,
-                source: ErrorSource::Session,
-                error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
-                reason: "wt_session validate failed".into(),
-            }];
-        }
-
-        let current = if is_unidirectional {
-            self.local_max_streams_uni
-        } else {
-            self.local_max_streams_bidi
-        };
-
-        if max_streams <= current {
-            return vec![Effect::NotifyRequestDone {
-                request_id,
-                result: RequestResult::None,
-            }];
-        }
-
-        let cap_type = if is_unidirectional {
-            WT_CAPSULE_TYPE_MAX_STREAMS_UNI
-        } else {
-            WT_CAPSULE_TYPE_MAX_STREAMS_BIDI
-        };
-
-        let mut buf = BytesMut::with_capacity(8);
-        if let Err(e) = write_varint(&mut buf, max_streams) {
-            debug!(
-                "varint encode failed request_id={request_id} session_id={} err={e:?}",
-                self.id
-            );
-            return vec![Effect::NotifyRequestFailed {
-                request_id,
-                source: ErrorSource::Session,
-                error_code: Some(ERR_LIB_INTERNAL_ERROR),
-                reason: "varint encode failed".into(),
-            }];
-        }
-
-        if is_unidirectional {
-            self.local_max_streams_uni = max_streams;
-        } else {
-            self.local_max_streams_bidi = max_streams;
-        }
-
-        vec![
-            Effect::SendH3Capsule {
-                stream_id: self.id,
-                capsule_type: cap_type,
-                capsule_data: buf.freeze(),
-                end_stream: false,
-            },
-            Effect::NotifyRequestDone {
-                request_id,
-                result: RequestResult::None,
-            },
-        ]
     }
 
     // Session closed state predicate.
@@ -1904,7 +1747,6 @@ impl Session {
             self.local_max_data,
             self.local_data_consumed,
             self.flow_control_window,
-            self.flow_control_window_auto_scale_enabled,
             force_send,
         )?;
 
@@ -1950,13 +1792,7 @@ impl Session {
             )
         };
 
-        let new_limit = next_stream_limit(
-            current,
-            closed,
-            initial,
-            self.flow_control_window_auto_scale_enabled,
-            force_send,
-        )?;
+        let new_limit = next_stream_limit(current, closed, initial, force_send)?;
 
         let mut buf = BytesMut::with_capacity(8);
         if let Err(e) = write_varint(&mut buf, new_limit) {
@@ -1984,7 +1820,6 @@ impl Session {
 pub(super) struct SessionParams {
     pub(super) flow_control_negotiated: bool,
     pub(super) flow_control_window: u64,
-    pub(super) flow_control_window_auto_scale_enabled: bool,
     pub(super) initial_max_data: u64,
     pub(super) initial_max_streams_bidi: u64,
     pub(super) initial_max_streams_uni: u64,

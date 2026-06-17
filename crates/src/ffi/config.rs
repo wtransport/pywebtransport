@@ -16,9 +16,6 @@ impl<'a> TryFrom<&Bound<'a, PyAny>> for RustBaseConfig {
             conf.getattr("congestion_control_algorithm")?.extract()?;
         let connection_idle_timeout: f64 = conf.getattr("connection_idle_timeout")?.extract()?;
         let flow_control_window: u64 = conf.getattr("flow_control_window")?.extract()?;
-        let flow_control_window_auto_scale_enabled: bool = conf
-            .getattr("flow_control_window_auto_scale_enabled")?
-            .extract()?;
         let initial_max_data: u64 = conf.getattr("initial_max_data")?.extract()?;
         let initial_max_streams_bidi: u64 = conf.getattr("initial_max_streams_bidi")?.extract()?;
         let initial_max_streams_uni: u64 = conf.getattr("initial_max_streams_uni")?.extract()?;
@@ -52,7 +49,6 @@ impl<'a> TryFrom<&Bound<'a, PyAny>> for RustBaseConfig {
             congestion_control_algorithm,
             connection_idle_timeout: Duration::from_secs_f64(connection_idle_timeout),
             flow_control_window,
-            flow_control_window_auto_scale_enabled,
             initial_max_data,
             initial_max_streams_bidi,
             initial_max_streams_uni,

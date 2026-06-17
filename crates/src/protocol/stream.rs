@@ -14,8 +14,8 @@ use crate::common::types::{
 use crate::protocol::events::{Effect, RequestResult};
 use crate::protocol::utils::{http_to_wt_error, wt_to_http_error};
 
-// Threshold for zero-copy slicing optimization (32KB).
-const OPTIMIZED_READ_SLICE_SIZE: u64 = 32 * 1024;
+// Threshold for zero-copy slicing optimization.
+const OPTIMIZED_READ_SLICE_SIZE: u64 = 32768;
 
 // Diagnostic information snapshot for a stream.
 #[derive(Clone, Debug)]

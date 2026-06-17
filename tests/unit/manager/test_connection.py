@@ -17,7 +17,7 @@ class TestConnectionManager:
 
     @pytest.fixture
     def manager(self) -> ConnectionManager:
-        return ConnectionManager(max_connections=10)
+        return ConnectionManager(max_connections=100)
 
     @pytest.fixture
     def mock_connection(self, mocker: MockerFixture) -> MagicMock:

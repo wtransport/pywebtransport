@@ -23,6 +23,7 @@ pub(crate) struct TransportEndpoint {
     client_config: Option<ClientConfig>,
     connections: FxHashMap<ConnectionHandle, TransportConnection>,
     endpoint: QuinnEndpoint,
+    handles_workspace: Vec<ConnectionHandle>,
     server_config: Option<RustServerConfig>,
     transmit_workspace: Vec<u8>,
 }
@@ -49,6 +50,7 @@ impl TransportEndpoint {
             client_config: Some(client_config),
             connections: FxHashMap::default(),
             endpoint,
+            handles_workspace: Vec::new(),
             server_config: None,
             transmit_workspace: Vec::with_capacity(workspace_capacity),
         })
@@ -75,6 +77,7 @@ impl TransportEndpoint {
             client_config: None,
             connections: FxHashMap::default(),
             endpoint,
+            handles_workspace: Vec::new(),
             server_config: Some(server_config),
             transmit_workspace: Vec::with_capacity(workspace_capacity),
         })
@@ -108,26 +111,7 @@ impl TransportEndpoint {
         let remote_address = quic_conn.remote_address();
         let t_cfg = &self.base_config;
 
-        let engine = WebTransportEngine::new(
-            handle.0 as u64,
-            true,
-            EngineParams {
-                early_event_ttl: t_cfg.pending_event_ttl.as_secs_f64(),
-                flow_control_window: t_cfg.flow_control_window,
-                flow_control_window_auto_scale_enabled: t_cfg
-                    .flow_control_window_auto_scale_enabled,
-                initial_max_data: t_cfg.initial_max_data,
-                initial_max_streams_bidi: t_cfg.initial_max_streams_bidi,
-                initial_max_streams_uni: t_cfg.initial_max_streams_uni,
-                max_capsule_size: t_cfg.max_capsule_size,
-                max_field_section_size: t_cfg.max_field_section_size,
-                max_session_pending_events: t_cfg.max_session_pending_events,
-                max_sessions: t_cfg.max_sessions,
-                max_stream_read_buffer_size: t_cfg.max_stream_read_buffer_size,
-                max_stream_write_buffer_size: t_cfg.max_stream_write_buffer_size,
-                max_total_pending_events: t_cfg.max_total_pending_events,
-            },
-        )?;
+        let engine = WebTransportEngine::new(handle.0 as u64, true, Self::engine_params(t_cfg));
 
         let gc_interval = if t_cfg.resource_cleanup_interval.is_zero() {
             None
@@ -212,28 +196,11 @@ impl TransportEndpoint {
                         let remote_address = quic_conn.remote_address();
                         let t_cfg = &self.base_config;
 
-                        let Ok(engine) = WebTransportEngine::new(
+                        let engine = WebTransportEngine::new(
                             handle.0 as u64,
                             false,
-                            EngineParams {
-                                early_event_ttl: t_cfg.pending_event_ttl.as_secs_f64(),
-                                flow_control_window: t_cfg.flow_control_window,
-                                flow_control_window_auto_scale_enabled: t_cfg
-                                    .flow_control_window_auto_scale_enabled,
-                                initial_max_data: t_cfg.initial_max_data,
-                                initial_max_streams_bidi: t_cfg.initial_max_streams_bidi,
-                                initial_max_streams_uni: t_cfg.initial_max_streams_uni,
-                                max_capsule_size: t_cfg.max_capsule_size,
-                                max_field_section_size: t_cfg.max_field_section_size,
-                                max_session_pending_events: t_cfg.max_session_pending_events,
-                                max_sessions: t_cfg.max_sessions,
-                                max_stream_read_buffer_size: t_cfg.max_stream_read_buffer_size,
-                                max_stream_write_buffer_size: t_cfg.max_stream_write_buffer_size,
-                                max_total_pending_events: t_cfg.max_total_pending_events,
-                            },
-                        ) else {
-                            return TransportEvent::Consumed;
-                        };
+                            Self::engine_params(t_cfg),
+                        );
 
                         let gc_interval = if t_cfg.resource_cleanup_interval.is_zero() {
                             None
@@ -285,28 +252,30 @@ impl TransportEndpoint {
     ) -> Vec<(ConnectionHandle, Vec<Effect>)> {
         let mut results = Vec::new();
         let mut drained_handles = Vec::new();
-        let mut handles: Vec<ConnectionHandle> = self.connections.keys().copied().collect();
 
-        handles.sort_unstable();
+        self.handles_workspace.clear();
+        self.handles_workspace
+            .extend(self.connections.keys().copied());
+        self.handles_workspace.sort_unstable();
 
-        for handle in handles {
-            if let Some(conn) = self.connections.get_mut(&handle) {
+        for handle in &self.handles_workspace {
+            if let Some(conn) = self.connections.get_mut(handle) {
                 if conn.timeout().is_some_and(|t| now_instant >= t) {
                     conn.handle_timeout(now, now_instant);
 
                     let effects = Self::collect_effects(conn);
 
                     if !effects.is_empty() {
-                        results.push((handle, effects));
+                        results.push((*handle, effects));
                     }
                 }
 
                 while let Some(endpoint_event) = conn.poll_endpoint_events() {
                     if endpoint_event.is_drained() {
-                        drained_handles.push(handle);
+                        drained_handles.push(*handle);
                     }
 
-                    self.endpoint.handle_event(handle, endpoint_event);
+                    self.endpoint.handle_event(*handle, endpoint_event);
                 }
             }
         }
@@ -359,12 +328,13 @@ impl TransportEndpoint {
     pub(crate) fn poll_transmit(&mut self, now_instant: Instant) -> Option<Transmit> {
         self.transmit_workspace.clear();
 
-        let mut handles: Vec<ConnectionHandle> = self.connections.keys().copied().collect();
+        self.handles_workspace.clear();
+        self.handles_workspace
+            .extend(self.connections.keys().copied());
+        self.handles_workspace.sort_unstable();
 
-        handles.sort_unstable();
-
-        for handle in handles {
-            if let Some(conn) = self.connections.get_mut(&handle)
+        for handle in &self.handles_workspace {
+            if let Some(conn) = self.connections.get_mut(handle)
                 && let Some(transmit) =
                     conn.poll_transmit(&mut self.transmit_workspace, now_instant)
             {
@@ -379,14 +349,15 @@ impl TransportEndpoint {
     pub(crate) fn timeout(&mut self) -> Option<Instant> {
         let mut earliest: Option<Instant> = None;
 
-        let mut handles: Vec<ConnectionHandle> = self.connections.keys().copied().collect();
+        self.handles_workspace.clear();
+        self.handles_workspace
+            .extend(self.connections.keys().copied());
+        self.handles_workspace.sort_unstable();
 
-        handles.sort_unstable();
-
-        for handle in handles {
+        for handle in &self.handles_workspace {
             if let Some(t) = self
                 .connections
-                .get_mut(&handle)
+                .get_mut(handle)
                 .and_then(TransportConnection::timeout)
             {
                 earliest = Some(earliest.map_or(t, |e| e.min(t)));
@@ -410,6 +381,24 @@ impl TransportEndpoint {
         }
 
         effects
+    }
+
+    // Extracts and constructs the engine parameter block from the base configuration.
+    fn engine_params(t_cfg: &RustBaseConfig) -> EngineParams {
+        EngineParams {
+            early_event_ttl: t_cfg.pending_event_ttl.as_secs_f64(),
+            flow_control_window: t_cfg.flow_control_window,
+            initial_max_data: t_cfg.initial_max_data,
+            initial_max_streams_bidi: t_cfg.initial_max_streams_bidi,
+            initial_max_streams_uni: t_cfg.initial_max_streams_uni,
+            max_capsule_size: t_cfg.max_capsule_size,
+            max_field_section_size: t_cfg.max_field_section_size,
+            max_session_pending_events: t_cfg.max_session_pending_events,
+            max_sessions: t_cfg.max_sessions,
+            max_stream_read_buffer_size: t_cfg.max_stream_read_buffer_size,
+            max_stream_write_buffer_size: t_cfg.max_stream_write_buffer_size,
+            max_total_pending_events: t_cfg.max_total_pending_events,
+        }
     }
 }
 

@@ -20,7 +20,7 @@ from pywebtransport.events import EventEmitter
 from pywebtransport.exceptions import ClientError, ConnectionError, TimeoutError
 from pywebtransport.manager.connection import ConnectionManager
 from pywebtransport.session import WebTransportSession
-from pywebtransport.types import URL, ConnectionState, EventType, Headers, URLParts
+from pywebtransport.types import ConnectionState, EventType, Headers
 from pywebtransport.version import __version__
 
 __all__: list[str] = ["ClientDiagnostics", "ClientStats", "WebTransportClient"]
@@ -161,7 +161,7 @@ class WebTransportClient(EventEmitter):
     async def connect(
         self,
         *,
-        url: URL,
+        url: str,
         headers: Headers | None = None,
         wt_available_protocols: list[str] | None = None,
         timeout: float | None = None,
@@ -170,7 +170,7 @@ class WebTransportClient(EventEmitter):
         if self._closed:
             raise ClientError(message="app_client validate failed")
 
-        authority, host, port, path = _parse_webtransport_url(url=url)
+        target = _parse_webtransport_url(url=url)
         connect_timeout = timeout if timeout is not None else self._config.connect_timeout
         self._stats.connections_attempted += 1
 
@@ -213,17 +213,17 @@ class WebTransportClient(EventEmitter):
                 if self._controller is None:
                     raise ClientError(message="rt create failed")
 
-                resolved_ips = await _resolve_host(host=host, port=port)
+                resolved_ips = await _resolve_host(host=target.host, port=target.port)
 
                 connection = await self._race_addresses(
-                    addresses=resolved_ips, port=port, host=host, conn_config=self._config
+                    addresses=resolved_ips, port=target.port, host=target.host, conn_config=self._config
                 )
 
                 await self._connection_manager.add_connection(connection=connection)
 
                 session = await connection.create_session(
-                    authority=authority,
-                    path=path,
+                    authority=target.authority,
+                    path=target.path,
                     headers=normalized_headers,
                     wt_available_protocols=effective_wt_available_protocols,
                 )
@@ -236,16 +236,18 @@ class WebTransportClient(EventEmitter):
         except asyncio.TimeoutError:
             self._stats.connections_failed += 1
             if connection is not None and connection.is_connected:
-                raise TimeoutError(message=f"wt_session open failed actual={host}") from None
-            raise TimeoutError(message=f"wt_connection open failed actual={host}") from None
+                raise TimeoutError(message=f"wt_session open failed actual={target.host}") from None
+            raise TimeoutError(message=f"wt_connection open failed actual={target.host}") from None
         except ConnectionRefusedError as e:
             self._stats.connections_failed += 1
-            raise ConnectionError.from_cause(message=f"wt_connection open failed actual={host}", cause=e) from e
+            raise ConnectionError.from_cause(message=f"wt_connection open failed actual={target.host}", cause=e) from e
         except Exception as e:
             self._stats.connections_failed += 1
             if "certificate verify failed" in str(e):
-                raise ConnectionError.from_cause(message=f"wt_connection validate failed actual={host}", cause=e) from e
-            raise ClientError.from_cause(message=f"wt_connection open failed actual={host}", cause=e) from e
+                raise ConnectionError.from_cause(
+                    message=f"wt_connection validate failed actual={target.host}", cause=e
+                ) from e
+            raise ClientError.from_cause(message=f"wt_connection open failed actual={target.host}", cause=e) from e
         finally:
             if not success and connection is not None and not connection.is_closed:
                 await connection.close()
@@ -268,7 +270,7 @@ class WebTransportClient(EventEmitter):
         await self._connection_manager.shutdown()
 
         if self._controller is not None:
-            self._controller.close()
+            await self._controller.close()
 
         _logger.info("app_client close")
 
@@ -371,6 +373,16 @@ class WebTransportClient(EventEmitter):
         return f"WebTransportClient(status={status}, connections={conn_count})"
 
 
+@dataclass(frozen=True, kw_only=True, slots=True)
+class _ConnectionTarget:
+    """Standardized target definition for WebTransport connection establishment."""
+
+    authority: str
+    host: str
+    path: str
+    port: int
+
+
 def _merge_headers(*, base: Headers, update: Headers | None) -> Headers:
     """Combine two header collections."""
     if update is None:
@@ -395,7 +407,7 @@ def _normalize_headers(*, headers: Headers) -> Headers:
     return [(key.lower(), value) for key, value in headers]
 
 
-def _parse_webtransport_url(*, url: URL) -> URLParts:
+def _parse_webtransport_url(*, url: str) -> _ConnectionTarget:
     """Parse the WebTransport URL into authority, host, port, and path components."""
     parsed = urllib.parse.urlparse(url=url)
     if parsed.scheme != "https":
@@ -410,7 +422,12 @@ def _parse_webtransport_url(*, url: URL) -> URLParts:
     if parsed.query:
         path += f"?{parsed.query}"
 
-    return (parsed.netloc.split("@")[-1], parsed.hostname, port, path)
+    return _ConnectionTarget(
+        authority=parsed.netloc.split("@")[-1],
+        host=parsed.hostname,
+        path=path,
+        port=port,
+    )
 
 
 async def _resolve_host(*, host: str, port: int = 0) -> list[str]:

@@ -11,21 +11,14 @@ use crate::protocol::events::{Effect, ProtocolEvent};
 
 fn create_h3(is_client: bool) -> H3 {
     let params = H3Params {
-        initial_max_data: 10000,
+        initial_max_data: 4 * 1024 * 1024,
         initial_max_streams_bidi: 10,
         initial_max_streams_uni: 10,
-        max_capsule_size: 2048,
-        max_field_section_size: 1_048_576,
+        max_capsule_size: 65536,
+        max_field_section_size: 65536,
     };
 
-    match H3::new(is_client, params) {
-        Ok(h3) => h3,
-        Err(e) => {
-            let msg = format!("{e:?}");
-            assert_eq!(msg, "", "H3 initialization failed");
-            unreachable!()
-        }
-    }
+    H3::new(is_client, params)
 }
 
 #[repr(C, align(8))]
@@ -51,7 +44,7 @@ fn valid_req_headers() -> Headers {
 fn valid_settings_frame() -> Bytes {
     let settings = H3Settings {
         wt_enabled: Some(1),
-        max_field_section_size: Some(1_048_576),
+        max_field_section_size: Some(65536),
         ..Default::default()
     };
 
@@ -80,108 +73,33 @@ fn valid_settings_frame() -> Bytes {
 }
 
 #[test]
-fn test_cleanup_stream_emits_cancel_effect() {
-    let mut client = create_h3(true);
-    assert!(matches!(client.set_local_stream_ids(2, 6, 10), Ok(())));
-
-    let mut server = create_h3(false);
-    assert!(matches!(server.set_local_stream_ids(3, 7, 11), Ok(())));
-    server.settings_received = true;
-
+fn test_recv_headers_dynamic_table_fails_with_zero_capacity() {
+    let mut h3 = create_h3(false);
     let mock = MockConnectionLayout {
         _padding: [0; 1024],
     };
+    let stream_id = 0;
+    h3.settings_received = true;
 
-    let settings = H3Settings {
-        qpack_max_table_capacity: Some(4096),
-        qpack_blocked_streams: Some(16),
-        wt_enabled: Some(1),
-        max_field_section_size: Some(1_048_576),
-        ..Default::default()
-    };
+    let mut data = BytesMut::new();
+    data.put_u8(0x01);
+    assert!(matches!(write_varint(&mut data, 3), Ok(())));
+    data.extend_from_slice(&[0x02, 0x00, 0x80]);
 
-    let Ok(settings_payload) = encode_settings(&settings) else {
-        unreachable!();
-    };
-    let Ok(settings_header) = encode_frame_header(H3_FRAME_TYPE_SETTINGS, settings_payload.len())
-    else {
-        unreachable!();
-    };
-
-    let mut ctrl_data = BytesMut::new();
-    assert!(matches!(
-        write_varint(&mut ctrl_data, H3_STREAM_TYPE_CONTROL),
-        Ok(())
-    ));
-    ctrl_data.extend_from_slice(&settings_header);
-    ctrl_data.extend_from_slice(&settings_payload);
-
-    client.handle_transport_event(
+    let (_, effects) = h3.handle_transport_event(
         &ProtocolEvent::TransportStreamDataReceived {
-            stream_id: 3,
-            data: ctrl_data.freeze(),
+            stream_id,
+            data: data.freeze(),
             end_stream: false,
         },
         mock.as_connection(),
     );
 
-    let headers = vec![
-        (Bytes::from(":method"), Bytes::from("GET")),
-        (
-            Bytes::from(":path"),
-            Bytes::from("/dynamic/path/to/force/indexing"),
-        ),
-        (
-            Bytes::from("custom-header"),
-            Bytes::from("custom-value-that-should-be-indexed"),
-        ),
-    ];
-
-    let mut forced_block = false;
-
-    for sid in [4, 8, 12, 16] {
-        let Ok(effects) = client.encode_headers(sid, &headers, false) else {
-            continue;
-        };
-
-        let mut frame_data = BytesMut::new();
-
-        for eff in effects {
-            match eff {
-                Effect::SendQuicData {
-                    stream_id, data, ..
-                } if stream_id == sid => {
-                    frame_data.extend_from_slice(&data);
-                }
-                _ => {}
-            }
-        }
-
-        server.handle_transport_event(
-            &ProtocolEvent::TransportStreamDataReceived {
-                stream_id: sid,
-                data: frame_data.freeze(),
-                end_stream: false,
-            },
-            mock.as_connection(),
-        );
-
-        if server.partial_frames.get(&sid).is_some_and(|p| p.blocked) {
-            let cleanup_effects = server.cleanup_stream(sid);
-            assert!(
-                cleanup_effects
-                    .iter()
-                    .any(|e| matches!(e, Effect::SendQuicData { stream_id: 11, .. }))
-            );
-            forced_block = true;
-            break;
-        }
+    if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
+        assert_eq!(*error_code, ERR_QPACK_DECOMPRESSION_FAILED);
+    } else {
+        unreachable!("Expected CloseQuicConnection effect for QPACK decompression failure");
     }
-
-    assert!(
-        forced_block,
-        "Failed to force QPACK decoder into blocked state"
-    );
 }
 
 #[test]
@@ -411,17 +329,13 @@ fn test_initialize_settings_success() {
 #[test]
 fn test_new_valid_config_success() {
     let params = H3Params {
-        initial_max_data: 100,
-        initial_max_streams_bidi: 5,
-        initial_max_streams_uni: 5,
-        max_capsule_size: 1000,
-        max_field_section_size: 1_048_576,
+        initial_max_data: 4 * 1024 * 1024,
+        initial_max_streams_bidi: 10,
+        initial_max_streams_uni: 10,
+        max_capsule_size: 65536,
+        max_field_section_size: 65536,
     };
-    let res = H3::new(true, params);
-    if let Err(e) = res {
-        let msg = format!("{e:?}");
-        assert_eq!(msg, "", "H3 initialization failed");
-    }
+    let _h3 = H3::new(true, params);
 }
 
 #[test]
@@ -483,7 +397,7 @@ fn test_recv_capsule_too_large() {
 
     let mut data = BytesMut::new();
     data.extend_from_slice(&[0x00]);
-    data.extend_from_slice(&[0x80, 0x00, 0x20, 0x00]);
+    data.extend_from_slice(&[0x80, 0x01, 0x00, 0x01]);
 
     p.capsule_buffer.extend_from_slice(&data);
 
@@ -879,86 +793,6 @@ fn test_recv_double_headers_error() {
 }
 
 #[test]
-fn test_recv_headers_blocked_by_qpack_then_unblocked() {
-    let mut server = create_h3(false);
-    let mock = MockConnectionLayout {
-        _padding: [0; 1024],
-    };
-    let stream_id = 0;
-    server.settings_received = true;
-
-    let mut client = create_h3(true);
-    if let Err(e) = client.set_local_stream_ids(2, 6, 10) {
-        let msg = format!("{e:?}");
-        assert_eq!(msg, "", "Failed to set client stream IDs");
-    }
-
-    let headers = vec![
-        (Bytes::from(":method"), Bytes::from("GET")),
-        (
-            Bytes::from(":path"),
-            Bytes::from("/dynamic/path/to/force/indexing"),
-        ),
-        (
-            Bytes::from("custom-header"),
-            Bytes::from("custom-value-that-should-be-indexed"),
-        ),
-    ];
-
-    let Ok(effects) = client.encode_headers(stream_id, &headers, false) else {
-        return;
-    };
-
-    let mut encoder_data = BytesMut::new();
-    let mut frame_data = BytesMut::new();
-
-    for eff in effects {
-        if let Effect::SendQuicData {
-            stream_id: sid,
-            data,
-            ..
-        } = eff
-        {
-            if sid == 6 {
-                encoder_data.extend_from_slice(&data);
-            } else if sid == stream_id {
-                frame_data.extend_from_slice(&data);
-            }
-        }
-    }
-
-    let mut preamble = BytesMut::new();
-    preamble.put_u8(0x02);
-
-    server.handle_transport_event(
-        &ProtocolEvent::TransportStreamDataReceived {
-            stream_id: 6,
-            data: preamble.freeze(),
-            end_stream: false,
-        },
-        mock.as_connection(),
-    );
-
-    server.handle_transport_event(
-        &ProtocolEvent::TransportStreamDataReceived {
-            stream_id,
-            data: frame_data.freeze(),
-            end_stream: false,
-        },
-        mock.as_connection(),
-    );
-
-    server.handle_transport_event(
-        &ProtocolEvent::TransportStreamDataReceived {
-            stream_id: 6,
-            data: encoder_data.freeze(),
-            end_stream: false,
-        },
-        mock.as_connection(),
-    );
-}
-
-#[test]
 fn test_recv_malformed_control_frame() {
     let mut h3 = create_h3(true);
     let mock = MockConnectionLayout {
@@ -1070,7 +904,7 @@ fn test_recv_request_data_headers_too_large() {
 
     let mut data = BytesMut::new();
     data.put_u8(0x01);
-    assert!(matches!(write_varint(&mut data, 1_048_577), Ok(())));
+    assert!(matches!(write_varint(&mut data, 65537), Ok(())));
 
     let (_, effects) = h3.handle_transport_event(
         &ProtocolEvent::TransportStreamDataReceived {

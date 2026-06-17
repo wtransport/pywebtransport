@@ -63,14 +63,6 @@ class TestMapper:
                 (abi.USER_GET_STREAM_DIAGNOSTICS, (9, 20)),
             ),
             (
-                events.UserGrantDataCredit(request_id=10, session_id=10, max_data=1024),
-                (abi.USER_GRANT_DATA_CREDIT, (10, 10, 1024)),
-            ),
-            (
-                events.UserGrantStreamsCredit(request_id=11, session_id=10, is_unidirectional=False, max_streams=5),
-                (abi.USER_GRANT_STREAMS_CREDIT, (11, 10, False, 5)),
-            ),
-            (
                 events.UserReadStream(request_id=17, stream_id=20, max_bytes=4096),
                 (abi.USER_READ_STREAM, (17, 20, 4096)),
             ),

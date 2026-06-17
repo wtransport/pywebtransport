@@ -17,7 +17,6 @@ from pywebtransport.constants import (
     DEFAULT_EVENT_HISTORY_CAPACITY,
     DEFAULT_EVENT_QUEUE_CAPACITY,
     DEFAULT_FLOW_CONTROL_WINDOW,
-    DEFAULT_FLOW_CONTROL_WINDOW_AUTO_SCALE_ENABLED,
     DEFAULT_INITIAL_MAX_DATA,
     DEFAULT_INITIAL_MAX_STREAMS_BIDI,
     DEFAULT_INITIAL_MAX_STREAMS_UNI,
@@ -63,30 +62,29 @@ class TestConstantsValues:
         assert DEFAULT_CONNECTION_IDLE_TIMEOUT == 60.0
         assert DEFAULT_DEV_PORT == 4433
         assert DEFAULT_EVENT_HISTORY_CAPACITY == 0
-        assert DEFAULT_EVENT_QUEUE_CAPACITY == 1000
-        assert DEFAULT_FLOW_CONTROL_WINDOW == 1024 * 1024
-        assert DEFAULT_FLOW_CONTROL_WINDOW_AUTO_SCALE_ENABLED is True
-        assert DEFAULT_INITIAL_MAX_DATA == 10 * 1024 * 1024
-        assert DEFAULT_INITIAL_MAX_STREAMS_BIDI == 100
-        assert DEFAULT_INITIAL_MAX_STREAMS_UNI == 100
+        assert DEFAULT_EVENT_QUEUE_CAPACITY == 100
+        assert DEFAULT_FLOW_CONTROL_WINDOW == 4 * 1024 * 1024
+        assert DEFAULT_INITIAL_MAX_DATA == 4 * 1024 * 1024
+        assert DEFAULT_INITIAL_MAX_STREAMS_BIDI == 10
+        assert DEFAULT_INITIAL_MAX_STREAMS_UNI == 10
         assert DEFAULT_KEEP_ALIVE_INTERVAL == 30.0
         assert DEFAULT_LOG_LEVEL == "INFO"
         assert DEFAULT_MAX_CAPSULE_SIZE == 65536
         assert DEFAULT_MAX_CONNECTIONS == 100
         assert DEFAULT_MAX_DATAGRAM_SIZE == 1350
-        assert DEFAULT_MAX_EVENT_LISTENERS == 100
+        assert DEFAULT_MAX_EVENT_LISTENERS == 10
         assert DEFAULT_MAX_FIELD_SECTION_SIZE == 65536
         assert DEFAULT_MAX_SESSION_PENDING_EVENTS == 100
-        assert DEFAULT_MAX_SESSIONS == 100
-        assert DEFAULT_MAX_STREAM_READ_BUFFER_SIZE == 2 * 1024 * 1024
-        assert DEFAULT_MAX_STREAM_WRITE_BUFFER_SIZE == 2 * 1024 * 1024
+        assert DEFAULT_MAX_SESSIONS == 10
+        assert DEFAULT_MAX_STREAM_READ_BUFFER_SIZE == 1024 * 1024
+        assert DEFAULT_MAX_STREAM_WRITE_BUFFER_SIZE == 1024 * 1024
         assert DEFAULT_MAX_TOTAL_PENDING_EVENTS == 1000
         assert DEFAULT_PENDING_EVENT_TTL == 5.0
-        assert DEFAULT_QUIC_MAX_CONCURRENT_BIDI_STREAMS == 65535
-        assert DEFAULT_QUIC_MAX_CONCURRENT_UNI_STREAMS == 65535
-        assert DEFAULT_QUIC_RECEIVE_WINDOW == 32 * 1024 * 1024
-        assert DEFAULT_QUIC_SEND_WINDOW == 32 * 1024 * 1024
-        assert DEFAULT_QUIC_STREAM_RECEIVE_WINDOW == 2 * 1024 * 1024
+        assert DEFAULT_QUIC_MAX_CONCURRENT_BIDI_STREAMS == 100
+        assert DEFAULT_QUIC_MAX_CONCURRENT_UNI_STREAMS == 100
+        assert DEFAULT_QUIC_RECEIVE_WINDOW == 16 * 1024 * 1024
+        assert DEFAULT_QUIC_SEND_WINDOW == 16 * 1024 * 1024
+        assert DEFAULT_QUIC_STREAM_RECEIVE_WINDOW == 1024 * 1024
         assert DEFAULT_READ_TIMEOUT == 60.0
         assert DEFAULT_RESOURCE_CLEANUP_INTERVAL == 15.0
         assert DEFAULT_STREAM_CREATION_TIMEOUT == 10.0
@@ -95,7 +93,7 @@ class TestConstantsValues:
         assert QUIC_VARINT_LIMIT == (1 << 62) - 1
         assert UDP_MAX_DATAGRAM_SIZE == 65535
         assert WT_SESSION_CONTROL_BIDI_STREAM_COUNT == 1
-        assert WT_STREAMS_LIMIT == 2**60
+        assert WT_STREAMS_LIMIT == 1 << 60
 
 
 class TestErrorCodes:
@@ -113,48 +111,48 @@ class TestErrorCodes:
             (ErrorCodes.APP_PERMISSION_DENIED, 0x1005),
             (ErrorCodes.APP_RESOURCE_EXHAUSTED, 0x1006),
             (ErrorCodes.APP_SERVICE_UNAVAILABLE, 0x1008),
-            (ErrorCodes.H3_CLOSED_CRITICAL_STREAM, 0x104),
-            (ErrorCodes.H3_CONNECT_ERROR, 0x10F),
-            (ErrorCodes.H3_DATAGRAM_ERROR, 0x33),
-            (ErrorCodes.H3_EXCESSIVE_LOAD, 0x107),
-            (ErrorCodes.H3_FRAME_ERROR, 0x106),
-            (ErrorCodes.H3_FRAME_UNEXPECTED, 0x105),
-            (ErrorCodes.H3_GENERAL_PROTOCOL_ERROR, 0x101),
-            (ErrorCodes.H3_ID_ERROR, 0x108),
-            (ErrorCodes.H3_INTERNAL_ERROR, 0x102),
-            (ErrorCodes.H3_MESSAGE_ERROR, 0x10E),
-            (ErrorCodes.H3_MISSING_SETTINGS, 0x10A),
-            (ErrorCodes.H3_NO_ERROR, 0x100),
-            (ErrorCodes.H3_REQUEST_CANCELLED, 0x10C),
-            (ErrorCodes.H3_REQUEST_INCOMPLETE, 0x10D),
-            (ErrorCodes.H3_REQUEST_REJECTED, 0x10B),
-            (ErrorCodes.H3_SETTINGS_ERROR, 0x109),
-            (ErrorCodes.H3_STREAM_CREATION_ERROR, 0x103),
-            (ErrorCodes.H3_VERSION_FALLBACK, 0x110),
+            (ErrorCodes.H3_CLOSED_CRITICAL_STREAM, 0x0104),
+            (ErrorCodes.H3_CONNECT_ERROR, 0x010F),
+            (ErrorCodes.H3_DATAGRAM_ERROR, 0x0033),
+            (ErrorCodes.H3_EXCESSIVE_LOAD, 0x0107),
+            (ErrorCodes.H3_FRAME_ERROR, 0x0106),
+            (ErrorCodes.H3_FRAME_UNEXPECTED, 0x0105),
+            (ErrorCodes.H3_GENERAL_PROTOCOL_ERROR, 0x0101),
+            (ErrorCodes.H3_ID_ERROR, 0x0108),
+            (ErrorCodes.H3_INTERNAL_ERROR, 0x0102),
+            (ErrorCodes.H3_MESSAGE_ERROR, 0x010E),
+            (ErrorCodes.H3_MISSING_SETTINGS, 0x010A),
+            (ErrorCodes.H3_NO_ERROR, 0x0100),
+            (ErrorCodes.H3_REQUEST_CANCELLED, 0x010C),
+            (ErrorCodes.H3_REQUEST_INCOMPLETE, 0x010D),
+            (ErrorCodes.H3_REQUEST_REJECTED, 0x010B),
+            (ErrorCodes.H3_SETTINGS_ERROR, 0x0109),
+            (ErrorCodes.H3_STREAM_CREATION_ERROR, 0x0103),
+            (ErrorCodes.H3_VERSION_FALLBACK, 0x0110),
             (ErrorCodes.LIB_CONNECTION_STATE_ERROR, 0x11000001),
             (ErrorCodes.LIB_INTERNAL_ERROR, 0x10000001),
             (ErrorCodes.LIB_SESSION_STATE_ERROR, 0x12000001),
             (ErrorCodes.LIB_STREAM_STATE_ERROR, 0x13000001),
-            (ErrorCodes.QPACK_DECODER_STREAM_ERROR, 0x202),
-            (ErrorCodes.QPACK_DECOMPRESSION_FAILED, 0x200),
-            (ErrorCodes.QPACK_ENCODER_STREAM_ERROR, 0x201),
-            (ErrorCodes.QUIC_AEAD_LIMIT_REACHED, 0xF),
-            (ErrorCodes.QUIC_APPLICATION_ERROR, 0xC),
-            (ErrorCodes.QUIC_CONNECTION_ID_LIMIT_ERROR, 0x9),
-            (ErrorCodes.QUIC_CONNECTION_REFUSED, 0x2),
-            (ErrorCodes.QUIC_CRYPTO_BUFFER_EXCEEDED, 0xD),
-            (ErrorCodes.QUIC_FINAL_SIZE_ERROR, 0x6),
-            (ErrorCodes.QUIC_FLOW_CONTROL_ERROR, 0x3),
-            (ErrorCodes.QUIC_FRAME_ENCODING_ERROR, 0x7),
-            (ErrorCodes.QUIC_INTERNAL_ERROR, 0x1),
-            (ErrorCodes.QUIC_INVALID_TOKEN, 0xB),
-            (ErrorCodes.QUIC_KEY_UPDATE_ERROR, 0xE),
-            (ErrorCodes.QUIC_NO_ERROR, 0x0),
+            (ErrorCodes.QPACK_DECODER_STREAM_ERROR, 0x0202),
+            (ErrorCodes.QPACK_DECOMPRESSION_FAILED, 0x0200),
+            (ErrorCodes.QPACK_ENCODER_STREAM_ERROR, 0x0201),
+            (ErrorCodes.QUIC_AEAD_LIMIT_REACHED, 0x0F),
+            (ErrorCodes.QUIC_APPLICATION_ERROR, 0x0C),
+            (ErrorCodes.QUIC_CONNECTION_ID_LIMIT_ERROR, 0x09),
+            (ErrorCodes.QUIC_CONNECTION_REFUSED, 0x02),
+            (ErrorCodes.QUIC_CRYPTO_BUFFER_EXCEEDED, 0x0D),
+            (ErrorCodes.QUIC_FINAL_SIZE_ERROR, 0x06),
+            (ErrorCodes.QUIC_FLOW_CONTROL_ERROR, 0x03),
+            (ErrorCodes.QUIC_FRAME_ENCODING_ERROR, 0x07),
+            (ErrorCodes.QUIC_INTERNAL_ERROR, 0x01),
+            (ErrorCodes.QUIC_INVALID_TOKEN, 0x0B),
+            (ErrorCodes.QUIC_KEY_UPDATE_ERROR, 0x0E),
+            (ErrorCodes.QUIC_NO_ERROR, 0x00),
             (ErrorCodes.QUIC_NO_VIABLE_PATH, 0x10),
-            (ErrorCodes.QUIC_PROTOCOL_VIOLATION, 0xA),
-            (ErrorCodes.QUIC_STREAM_LIMIT_ERROR, 0x4),
-            (ErrorCodes.QUIC_STREAM_STATE_ERROR, 0x5),
-            (ErrorCodes.QUIC_TRANSPORT_PARAMETER_ERROR, 0x8),
+            (ErrorCodes.QUIC_PROTOCOL_VIOLATION, 0x0A),
+            (ErrorCodes.QUIC_STREAM_LIMIT_ERROR, 0x04),
+            (ErrorCodes.QUIC_STREAM_STATE_ERROR, 0x05),
+            (ErrorCodes.QUIC_TRANSPORT_PARAMETER_ERROR, 0x08),
             (ErrorCodes.WT_ALPN_ERROR, 0x0817B3DD),
             (ErrorCodes.WT_APPLICATION_ERROR_FIRST, 0x52E4A40FA8DB),
             (ErrorCodes.WT_APPLICATION_ERROR_LAST, 0x52E5AC983162),

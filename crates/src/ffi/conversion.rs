@@ -311,17 +311,6 @@ impl<'a, 'py> FromPyObject<'a, 'py> for ProtocolEvent {
                 request_id: payload.get_item(0)?.extract()?,
                 stream_id: payload.get_item(1)?.extract()?,
             }),
-            abi::USER_GRANT_DATA_CREDIT => Ok(ProtocolEvent::UserGrantDataCredit {
-                request_id: payload.get_item(0)?.extract()?,
-                session_id: payload.get_item(1)?.extract()?,
-                max_data: payload.get_item(2)?.extract()?,
-            }),
-            abi::USER_GRANT_STREAMS_CREDIT => Ok(ProtocolEvent::UserGrantStreamsCredit {
-                request_id: payload.get_item(0)?.extract()?,
-                session_id: payload.get_item(1)?.extract()?,
-                is_unidirectional: payload.get_item(2)?.extract()?,
-                max_streams: payload.get_item(3)?.extract()?,
-            }),
             abi::USER_READ_STREAM => Ok(ProtocolEvent::UserReadStream {
                 request_id: payload.get_item(0)?.extract()?,
                 stream_id: payload.get_item(1)?.extract()?,

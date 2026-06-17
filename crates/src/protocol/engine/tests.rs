@@ -14,27 +14,20 @@ use crate::protocol::utils::write_varint;
 fn create_test_engine(is_client: bool) -> WebTransportEngine {
     let params = EngineParams {
         early_event_ttl: 5.0,
-        flow_control_window: 1024 * 1024,
-        flow_control_window_auto_scale_enabled: true,
-        initial_max_data: 10000,
+        flow_control_window: 4 * 1024 * 1024,
+        initial_max_data: 4 * 1024 * 1024,
         initial_max_streams_bidi: 10,
         initial_max_streams_uni: 10,
-        max_capsule_size: 1024,
-        max_field_section_size: 1_048_576,
-        max_session_pending_events: 10,
+        max_capsule_size: 65536,
+        max_field_section_size: 65536,
+        max_session_pending_events: 100,
         max_sessions: 10,
-        max_stream_read_buffer_size: 1024,
-        max_stream_write_buffer_size: 1024,
-        max_total_pending_events: 100,
+        max_stream_read_buffer_size: 1024 * 1024,
+        max_stream_write_buffer_size: 1024 * 1024,
+        max_total_pending_events: 1000,
     };
 
-    match WebTransportEngine::new(42, is_client, params) {
-        Ok(engine) => engine,
-        Err(e) => {
-            assert_eq!(format!("{e:?}"), "", "Engine initialization failed");
-            unreachable!()
-        }
-    }
+    WebTransportEngine::new(42, is_client, params)
 }
 
 #[fixture]
@@ -492,7 +485,7 @@ fn test_handle_transport_events(mut fixture_engine_server: WebTransportEngine) {
             stream_ended: false,
         },
         ProtocolEvent::TransportQuicParametersReceived {
-            peer_max_datagram_frame_size: 1200,
+            peer_max_datagram_frame_size: 1350,
         },
         ProtocolEvent::TransportStopSendingReceived {
             stream_id: 0,
@@ -550,17 +543,6 @@ fn test_handle_user_passthrough_events(mut fixture_engine_server: WebTransportEn
         ProtocolEvent::UserGetStreamDiagnostics {
             request_id: 6,
             stream_id: 4,
-        },
-        ProtocolEvent::UserGrantDataCredit {
-            request_id: 7,
-            session_id: 0,
-            max_data: 1000,
-        },
-        ProtocolEvent::UserGrantStreamsCredit {
-            request_id: 8,
-            session_id: 0,
-            is_unidirectional: false,
-            max_streams: 10,
         },
         ProtocolEvent::UserReadStream {
             request_id: 14,
@@ -755,7 +737,7 @@ fn test_user_stream_operations_success(mut fixture_engine_server: WebTransportEn
 
     let settings_event = ProtocolEvent::H3SettingsReceived {
         settings: crate::protocol::H3Settings {
-            wt_initial_max_data: Some(10000),
+            wt_initial_max_data: Some(4 * 1024 * 1024),
             ..Default::default()
         },
     };

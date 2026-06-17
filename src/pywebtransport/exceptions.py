@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Final, Self
 
 from pywebtransport.constants import ErrorCodes
-from pywebtransport.types import URL, Address, ConnectionHandle, SessionId, StreamId
+from pywebtransport.types import Address, ConnectionHandle, SessionId, StreamId
 
 __all__: list[str] = [
     "AuthenticationError",
@@ -189,7 +189,7 @@ class ClientError(WebTransportError):
         self,
         message: str,
         *,
-        url: URL | None = None,
+        url: str | None = None,
         error_code: int | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:

@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import ssl
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import AbstractAsyncContextManager as AsyncContextManager
 from enum import StrEnum
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 __all__: list[str] = [
     "Address",
@@ -17,47 +16,27 @@ __all__: list[str] = [
     "Buffer",
     "ConnectionHandle",
     "ConnectionState",
-    "Data",
     "ErrorCode",
-    "EventData",
     "EventType",
-    "Future",
     "Headers",
-    "Priority",
     "RequestId",
-    "SSLContext",
     "SessionId",
     "SessionProtocol",
     "SessionState",
     "StreamDirection",
     "StreamId",
     "StreamState",
-    "Timeout",
-    "Timestamp",
-    "URL",
-    "URLParts",
     "WebTransportProtocol",
-    "Weight",
 ]
 
 type Address = tuple[str, int]
 type Buffer = bytes | bytearray | memoryview
 type ConnectionHandle = int
-type Data = bytes | bytearray | memoryview | str
 type ErrorCode = int
-type EventData = Any
-type Future[T] = asyncio.Future[T]
 type Headers = dict[str | bytes, str | bytes] | list[tuple[str | bytes, str | bytes]]
-type Priority = int
 type RequestId = int
 type SessionId = int
-type SSLContext = ssl.SSLContext
 type StreamId = int
-type Timeout = float | None
-type Timestamp = float
-type URL = str
-type URLParts = tuple[str, str, int, str]
-type Weight = int
 
 
 class ConnectionState(StrEnum):

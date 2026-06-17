@@ -33,13 +33,17 @@ use crate::protocol::utils::{
 // Header value colon constant.
 const COLON: u8 = 0x3A;
 // Maximum permitted HTTP/3 control frame size.
-const CONTROL_FRAME_SIZE_LIMIT: usize = 1024 * 1024;
+const CONTROL_FRAME_SIZE_LIMIT: usize = 4096;
 // Header value tab constant.
 const HTAB: u8 = 0x09;
 // QPACK decoder blocked stream capacity.
-const QPACK_DECODER_BLOCKED_STREAM_CAPACITY: u64 = 16;
-// QPACK decoder table size.
-const QPACK_DECODER_TABLE_SIZE: u64 = 65536;
+const QPACK_DECODER_BLOCKED_STREAM_CAPACITY: u32 = 0;
+// QPACK decoder table capacity.
+const QPACK_DECODER_TABLE_CAPACITY: u32 = 0;
+// QPACK encoder blocked stream capacity.
+const QPACK_ENCODER_BLOCKED_STREAM_CAPACITY: u32 = 0;
+// QPACK encoder table capacity.
+const QPACK_ENCODER_TABLE_CAPACITY: u32 = 0;
 // Reserved settings identifier list.
 const RESERVED_SETTINGS: &[u64] = &[0x0, 0x2, 0x3, 0x4, 0x5];
 // Settings frame entries limit.
@@ -84,40 +88,29 @@ pub(super) struct H3 {
 
 impl H3 {
     // H3 engine initialization.
-    pub(super) fn new(is_client: bool, params: H3Params) -> Result<Self, WebTransportError> {
-        let max_table_capacity = u32::try_from(QPACK_DECODER_TABLE_SIZE).map_err(|e| {
-            debug!("qpack_max_table_capacity convert failed expected=u32 err={e:?}");
-            WebTransportError::Protocol(
-                Some(ERR_H3_INTERNAL_ERROR),
-                "qpack_max_table_capacity convert failed".into(),
-            )
-        })?;
-
-        let blocked_streams =
-            u32::try_from(QPACK_DECODER_BLOCKED_STREAM_CAPACITY).map_err(|e| {
-                debug!("qpack_blocked_streams convert failed expected=u32 err={e:?}");
-                WebTransportError::Protocol(
-                    Some(ERR_H3_INTERNAL_ERROR),
-                    "qpack_blocked_streams convert failed".into(),
-                )
-            })?;
-
-        Ok(Self {
-            blocked_streams,
-            decoder: Decoder::new(max_table_capacity, blocked_streams),
-            encoder: Encoder::new(),
+    pub(super) fn new(is_client: bool, params: H3Params) -> Self {
+        Self {
+            blocked_streams: QPACK_DECODER_BLOCKED_STREAM_CAPACITY,
+            decoder: Decoder::new(
+                QPACK_DECODER_TABLE_CAPACITY,
+                QPACK_DECODER_BLOCKED_STREAM_CAPACITY,
+            ),
+            encoder: Encoder::new(
+                QPACK_ENCODER_TABLE_CAPACITY,
+                QPACK_ENCODER_BLOCKED_STREAM_CAPACITY,
+            ),
             is_client,
             local_control_stream_id: None,
             local_decoder_stream_id: None,
             local_encoder_stream_id: None,
-            max_table_capacity,
+            max_table_capacity: QPACK_DECODER_TABLE_CAPACITY,
             params,
             partial_frames: FxHashMap::default(),
             peer_control_stream_id: None,
             peer_decoder_stream_id: None,
             peer_encoder_stream_id: None,
             settings_received: false,
-        })
+        }
     }
 
     // Stream state cleanup.

@@ -15,7 +15,7 @@ from pytest_benchmark.fixture import BenchmarkFixture
 from pywebtransport import ClientConfig, WebTransportClient, WebTransportSession
 
 SERVER_URL_BASE: Final[str] = "https://127.0.0.1:4433"
-CONNECTION_COUNT: Final[int] = 1000
+CONNECTION_COUNT: Final[int] = 3000
 STABILIZATION_SECONDS: Final[float] = 5.0
 
 logging.basicConfig(level=logging.CRITICAL)
@@ -23,7 +23,7 @@ logging.basicConfig(level=logging.CRITICAL)
 
 @pytest.fixture(scope="module")
 def client_config() -> ClientConfig:
-    return ClientConfig(verify_mode=ssl.CERT_NONE, connect_timeout=60.0, max_connections=2000)
+    return ClientConfig(verify_mode=ssl.CERT_NONE, connect_timeout=60.0, max_connections=4000)
 
 
 class TestResources:

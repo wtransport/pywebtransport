@@ -30,8 +30,6 @@ from pywebtransport._protocol.events import (
     UserCreateStream,
     UserExportKeyingMaterial,
     UserGetSessionDiagnostics,
-    UserGrantDataCredit,
-    UserGrantStreamsCredit,
     UserRejectSession,
     UserSendDatagram,
 )
@@ -60,15 +58,15 @@ class TestSessionDiagnostics:
             local_data_consumed=40,
             local_data_received=80,
             local_data_sent=50,
-            local_max_data=1000,
+            local_max_data=4 * 1024 * 1024,
             local_max_streams_bidi=10,
-            local_max_streams_uni=5,
+            local_max_streams_uni=10,
             local_streams_bidi_opened=1,
             local_streams_uni_opened=0,
             path="/",
-            peer_max_data=2000,
+            peer_max_data=4 * 1024 * 1024,
             peer_max_streams_bidi=10,
-            peer_max_streams_uni=5,
+            peer_max_streams_uni=10,
             peer_streams_bidi_closed=1,
             peer_streams_bidi_opened=2,
             peer_streams_uni_closed=0,
@@ -628,101 +626,6 @@ class TestWebTransportSession:
         assert event.context == b"ctx"
         assert event.length == 18
 
-    @pytest.mark.asyncio
-    async def test_grant_data_credit_cancelled(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
-        mock_connection.execute_request.side_effect = asyncio.CancelledError
-
-        with pytest.raises(expected_exception=asyncio.CancelledError):
-            await session.grant_data_credit(max_data=1000)
-
-    @pytest.mark.asyncio
-    async def test_grant_data_credit_connection_error(
-        self, session: WebTransportSession, mock_connection: MagicMock
-    ) -> None:
-        mock_connection.execute_request.side_effect = ConnectionError(message="fail")
-
-        with pytest.raises(expected_exception=ConnectionError):
-            await session.grant_data_credit(max_data=1000)
-
-    @pytest.mark.asyncio
-    async def test_grant_data_credit_generic_error(
-        self, session: WebTransportSession, mock_connection: MagicMock
-    ) -> None:
-        mock_connection.execute_request.side_effect = ValueError("fail")
-
-        with pytest.raises(expected_exception=SessionError, match="wt_session resolve failed session_id=1"):
-            await session.grant_data_credit(max_data=1000)
-
-    @pytest.mark.asyncio
-    async def test_grant_data_credit_session_error(
-        self, session: WebTransportSession, mock_connection: MagicMock
-    ) -> None:
-        mock_connection.execute_request.side_effect = SessionError(message="fail", session_id=1)
-
-        with pytest.raises(expected_exception=SessionError):
-            await session.grant_data_credit(max_data=1000)
-
-    @pytest.mark.asyncio
-    async def test_grant_data_credit_success(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
-        mock_connection.execute_request.return_value = None
-
-        await session.grant_data_credit(max_data=1000)
-
-        mock_connection.execute_request.assert_awaited_once()
-        event = mock_connection.execute_request.call_args.kwargs["event_factory"](123)
-
-        assert isinstance(event, UserGrantDataCredit)
-        assert event.max_data == 1000
-
-    @pytest.mark.asyncio
-    async def test_grant_streams_credit_cancelled(
-        self, session: WebTransportSession, mock_connection: MagicMock
-    ) -> None:
-        mock_connection.execute_request.side_effect = asyncio.CancelledError
-
-        with pytest.raises(expected_exception=asyncio.CancelledError):
-            await session.grant_streams_credit(is_unidirectional=True, max_streams=5)
-
-    @pytest.mark.asyncio
-    async def test_grant_streams_credit_connection_error(
-        self, session: WebTransportSession, mock_connection: MagicMock
-    ) -> None:
-        mock_connection.execute_request.side_effect = ConnectionError(message="fail")
-
-        with pytest.raises(expected_exception=ConnectionError):
-            await session.grant_streams_credit(is_unidirectional=True, max_streams=5)
-
-    @pytest.mark.asyncio
-    async def test_grant_streams_credit_generic_error(
-        self, session: WebTransportSession, mock_connection: MagicMock
-    ) -> None:
-        mock_connection.execute_request.side_effect = ValueError("fail")
-
-        with pytest.raises(expected_exception=SessionError, match="wt_session resolve failed session_id=1"):
-            await session.grant_streams_credit(is_unidirectional=True, max_streams=5)
-
-    @pytest.mark.asyncio
-    async def test_grant_streams_credit_session_error(
-        self, session: WebTransportSession, mock_connection: MagicMock
-    ) -> None:
-        mock_connection.execute_request.side_effect = SessionError(message="fail", session_id=1)
-
-        with pytest.raises(expected_exception=SessionError):
-            await session.grant_streams_credit(is_unidirectional=True, max_streams=5)
-
-    @pytest.mark.asyncio
-    async def test_grant_streams_credit_success(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
-        mock_connection.execute_request.return_value = None
-
-        await session.grant_streams_credit(is_unidirectional=True, max_streams=5)
-
-        mock_connection.execute_request.assert_awaited_once()
-        event = mock_connection.execute_request.call_args.kwargs["event_factory"](123)
-
-        assert isinstance(event, UserGrantStreamsCredit)
-        assert event.max_streams == 5
-        assert event.is_unidirectional is True
-
     def test_headers_copy(self, session: WebTransportSession) -> None:
         h = cast(dict[str, str], session.headers)
         h["New"] = "Value"
@@ -779,12 +682,6 @@ class TestWebTransportSession:
     @pytest.mark.asyncio
     async def test_methods_connection_gone(self, session: WebTransportSession) -> None:
         session._connection = lambda: None  # type: ignore[assignment]
-
-        with pytest.raises(expected_exception=ConnectionError):
-            await session.grant_data_credit(max_data=1)
-
-        with pytest.raises(expected_exception=ConnectionError):
-            await session.grant_streams_credit(is_unidirectional=True, max_streams=1)
 
         with pytest.raises(expected_exception=ConnectionError):
             await session.send_datagram(data=b"")

@@ -1,20 +1,22 @@
 """Benchmark for Latency and RTT metrics."""
 
 import asyncio
+import contextlib
 import gc
 import logging
 import ssl
+from collections.abc import Generator
 from typing import Any, Final, cast
 
 import pytest
 import uvloop
 from pytest_benchmark.fixture import BenchmarkFixture
 
-from pywebtransport import ClientConfig, Event, WebTransportClient
+from pywebtransport import ClientConfig, Event, WebTransportClient, WebTransportSession
 from pywebtransport.types import EventType
 
 SERVER_URL_BASE: Final[str] = "https://127.0.0.1:4433"
-WARMUP_ROUNDS: Final[int] = 10
+WARMUP_ROUNDS: Final[int] = 5
 PAYLOAD_64B: Final[bytes] = b"x" * 64
 PAYLOAD_1KB: Final[bytes] = b"x" * 1024
 
@@ -55,19 +57,18 @@ class TestLatency:
     ) -> None:
         url = f"{SERVER_URL_BASE}/latency"
 
-        async def run_req_res() -> None:
-            async with WebTransportClient(config=client_config) as client:
-                session = await client.connect(url=url)
+        with self._sync_session(config=client_config, url=url) as (loop, session):
+
+            async def run_req_res() -> None:
                 stream = await session.create_bidirectional_stream()
                 await stream.write_all(data=payload, end_stream=True)
                 await stream.read_all()
-                await session.close()
 
-        for _ in range(WARMUP_ROUNDS):
-            uvloop.run(run_req_res())
-        gc.collect()
+            for _ in range(WARMUP_ROUNDS):
+                loop.run_until_complete(run_req_res())
+            gc.collect()
 
-        benchmark(lambda: uvloop.run(run_req_res()))
+            benchmark(lambda: loop.run_until_complete(run_req_res()))
 
         stats = cast(dict[str, Any], benchmark.stats)
         benchmark.extra_info[f"req_res_{label}_median_ms"] = stats["median"] * 1000
@@ -78,36 +79,49 @@ class TestLatency:
         url = f"{SERVER_URL_BASE}/echo"
         payload = PAYLOAD_64B
 
-        async def run_dgram_rtt() -> None:
-            async with WebTransportClient(config=client_config) as client:
-                session = await client.connect(url=url)
-                loop = asyncio.get_running_loop()
-                echo_received = loop.create_future()
+        with self._sync_session(config=client_config, url=url) as (loop, session):
+            echo_future: asyncio.Future[bool] = loop.create_future()
 
-                async def on_dgram(event: Event) -> None:
-                    if isinstance(event.data, dict) and (data := event.data.get("data")):
-                        if data == payload and not echo_received.done():
-                            echo_received.set_result(True)
+            async def on_dgram(event: Event) -> None:
+                if isinstance(event.data, dict) and (data := event.data.get("data")):
+                    if data == payload and not echo_future.done():
+                        echo_future.set_result(True)
 
-                session.events.on(event_type=EventType.DATAGRAM_RECEIVED, handler=on_dgram)
+            session.events.on(event_type=EventType.DATAGRAM_RECEIVED, handler=on_dgram)
 
-                while not echo_received.done():
-                    await session.send_datagram(data=payload)
-                    try:
-                        async with asyncio.timeout(delay=0.1):
-                            await echo_received
-                    except asyncio.TimeoutError:
-                        pass
+            async def run_dgram_rtt() -> None:
+                nonlocal echo_future
+                echo_future = loop.create_future()
+                await session.send_datagram(data=payload)
+                await asyncio.wait_for(echo_future, timeout=1.0)
 
-                await session.close()
+            for _ in range(WARMUP_ROUNDS):
+                loop.run_until_complete(run_dgram_rtt())
+            gc.collect()
 
-        for _ in range(WARMUP_ROUNDS):
-            uvloop.run(run_dgram_rtt())
-        gc.collect()
-
-        benchmark(lambda: uvloop.run(run_dgram_rtt()))
+            benchmark(lambda: loop.run_until_complete(run_dgram_rtt()))
 
         stats = cast(dict[str, Any], benchmark.stats)
         benchmark.extra_info["dgram_rtt_median_ms"] = stats["median"] * 1000
         benchmark.extra_info["dgram_rtt_max_ms"] = stats["max"] * 1000
         benchmark.extra_info["dgram_rtt_min_ms"] = stats["min"] * 1000
+
+    @contextlib.contextmanager
+    def _sync_session(
+        self, config: ClientConfig, url: str
+    ) -> Generator[tuple[asyncio.AbstractEventLoop, WebTransportSession], None, None]:
+        loop = uvloop.new_event_loop()
+        asyncio.set_event_loop(loop)
+        stack = contextlib.AsyncExitStack()
+        session: WebTransportSession | None = None
+
+        try:
+            client = loop.run_until_complete(stack.enter_async_context(WebTransportClient(config=config)))
+            session = loop.run_until_complete(client.connect(url=url))
+            yield loop, session
+        finally:
+            if session is not None:
+                loop.run_until_complete(session.close())
+            loop.run_until_complete(stack.aclose())
+            loop.close()
+            asyncio.set_event_loop(None)

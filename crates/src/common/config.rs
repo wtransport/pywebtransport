@@ -10,7 +10,6 @@ pub(crate) struct RustBaseConfig {
     pub(crate) congestion_control_algorithm: String,
     pub(crate) connection_idle_timeout: Duration,
     pub(crate) flow_control_window: u64,
-    pub(crate) flow_control_window_auto_scale_enabled: bool,
     pub(crate) initial_max_data: u64,
     pub(crate) initial_max_streams_bidi: u64,
     pub(crate) initial_max_streams_uni: u64,

@@ -6,7 +6,7 @@ from typing import Final
 
 __all__: list[str] = []
 
-ABI_VERSION: Final[int] = 5
+ABI_VERSION: Final[int] = 6
 COMMAND_COMPLETED: Final[int] = 0x00
 COMMAND_FAILED: Final[int] = 0x01
 CONNECTION_EFFECTS: Final[int] = 0x02
@@ -29,11 +29,9 @@ USER_EXPORT_KEYING_MATERIAL: Final[int] = 0x86
 USER_GET_CONNECTION_DIAGNOSTICS: Final[int] = 0x87
 USER_GET_SESSION_DIAGNOSTICS: Final[int] = 0x88
 USER_GET_STREAM_DIAGNOSTICS: Final[int] = 0x89
-USER_GRANT_DATA_CREDIT: Final[int] = 0x8A
-USER_GRANT_STREAMS_CREDIT: Final[int] = 0x8B
-USER_READ_STREAM: Final[int] = 0x8C
-USER_REJECT_SESSION: Final[int] = 0x8D
-USER_RESET_STREAM: Final[int] = 0x8E
-USER_SEND_DATAGRAM: Final[int] = 0x8F
-USER_SEND_STREAM_DATA: Final[int] = 0x90
-USER_STOP_SENDING: Final[int] = 0x91
+USER_READ_STREAM: Final[int] = 0x8A
+USER_REJECT_SESSION: Final[int] = 0x8B
+USER_RESET_STREAM: Final[int] = 0x8C
+USER_SEND_DATAGRAM: Final[int] = 0x8D
+USER_SEND_STREAM_DATA: Final[int] = 0x8E
+USER_STOP_SENDING: Final[int] = 0x8F

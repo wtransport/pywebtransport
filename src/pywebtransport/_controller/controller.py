@@ -21,6 +21,7 @@ __all__: list[str] = []
 type _ConnectionCallback = Callable[[EventType, dict[str, Any]], None]
 type _SpawnCallback = Callable[[int], None]
 
+_IPC_CLOSE_TIMEOUT: Final[float] = 5.0
 _WAKER_DRAIN_BUFFER_SIZE: Final[int] = 8192
 
 _logger = logging.getLogger(name=__name__)
@@ -38,6 +39,7 @@ class EndpointController:
         self._loop = loop or asyncio.get_running_loop()
 
         self._is_closed = False
+        self._ipc_shutdown_event = asyncio.Event()
         self._connection_callbacks: dict[int, _ConnectionCallback] = {}
         self._remote_addresses: dict[int, Address] = {}
         self._spawn_callback: _SpawnCallback | None = None
@@ -52,7 +54,7 @@ class EndpointController:
 
         self._waker_task = self._loop.create_task(self._waker_task_loop())
 
-    def close(self) -> None:
+    async def close(self) -> None:
         """Terminate the controller and shutdown the background reactor."""
         if self._is_closed:
             return
@@ -60,6 +62,13 @@ class EndpointController:
         self._is_closed = True
 
         self._endpoint.close()
+
+        try:
+            async with asyncio.timeout(delay=_IPC_CLOSE_TIMEOUT):
+                await self._ipc_shutdown_event.wait()
+        except asyncio.TimeoutError:
+            _logger.warning("rt close failed")
+
         self._connection_callbacks.clear()
         self._remote_addresses.clear()
         self._spawn_callback = None
@@ -229,7 +238,7 @@ class EndpointController:
                 self._execute_effects(handle=handle, effects=effects)
             case abi.REACTOR_SHUTDOWN:
                 _logger.debug("rt close")
-                self.close()
+                self._ipc_shutdown_event.set()
 
     async def _waker_task_loop(self) -> None:
         """Continuously monitor the internal socket for cross-thread wake-up signals."""

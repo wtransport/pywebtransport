@@ -36,8 +36,9 @@ __all__: list[str] = [
 type StreamType = WebTransportStream | WebTransportReceiveStream | WebTransportSendStream
 
 _EVENT_HISTORY_CAPACITY: Final[int] = 0
-_EVENT_LISTENER_CAPACITY: Final[int] = 20
-_EVENT_QUEUE_CAPACITY: Final[int] = 16
+_EVENT_LISTENER_CAPACITY: Final[int] = 10
+_EVENT_QUEUE_CAPACITY: Final[int] = 10
+_WRITE_CHUNK_SIZE: Final[int] = 65536
 
 _logger = logging.getLogger(name=__name__)
 
@@ -418,7 +419,7 @@ class WebTransportSendStream(_BaseStream):
                 message=f"wt_stream send failed stream_id={self.stream_id}", cause=e, stream_id=self.stream_id
             ) from e
 
-    async def write_all(self, *, data: Buffer, chunk_size: int = 65536, end_stream: bool = False) -> None:
+    async def write_all(self, *, data: Buffer, chunk_size: int = _WRITE_CHUNK_SIZE, end_stream: bool = False) -> None:
         """Write buffer data to the stream in chunks."""
         try:
             buffer_data = _ensure_buffer(data=data)
@@ -523,7 +524,7 @@ class WebTransportStream(_BaseStream):
         """Write data to the stream."""
         await self._writer.write(data=data, end_stream=end_stream)
 
-    async def write_all(self, *, data: Buffer, chunk_size: int = 65536, end_stream: bool = False) -> None:
+    async def write_all(self, *, data: Buffer, chunk_size: int = _WRITE_CHUNK_SIZE, end_stream: bool = False) -> None:
         """Write buffer data to the stream in chunks."""
         await self._writer.write_all(data=data, chunk_size=chunk_size, end_stream=end_stream)
 

@@ -124,17 +124,6 @@ pub(crate) enum ProtocolEvent {
         request_id: RequestId,
         stream_id: StreamId,
     },
-    UserGrantDataCredit {
-        request_id: RequestId,
-        session_id: SessionId,
-        max_data: u64,
-    },
-    UserGrantStreamsCredit {
-        request_id: RequestId,
-        session_id: SessionId,
-        is_unidirectional: bool,
-        max_streams: u64,
-    },
     UserReadStream {
         request_id: RequestId,
         stream_id: StreamId,

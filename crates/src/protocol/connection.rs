@@ -57,7 +57,6 @@ pub(super) struct Connection {
     early_event_count: usize,
     early_event_ttl: f64,
     flow_control_window: u64,
-    flow_control_window_auto_scale_enabled: bool,
     handle: ConnectionHandle,
     handshake_complete: bool,
     initial_max_data: u64,
@@ -95,7 +94,6 @@ impl Connection {
             early_event_count: 0,
             early_event_ttl: params.early_event_ttl,
             flow_control_window: params.flow_control_window,
-            flow_control_window_auto_scale_enabled: params.flow_control_window_auto_scale_enabled,
             handle,
             handshake_complete: false,
             initial_max_data: params.initial_max_data,
@@ -448,51 +446,6 @@ impl Connection {
             result: RequestResult::None,
         });
         effects
-    }
-
-    // Manual data credit grant handling (delegated).
-    pub(super) fn grant_data_credit(
-        &mut self,
-        session_id: SessionId,
-        request_id: RequestId,
-        max_data: u64,
-    ) -> Vec<Effect> {
-        if let Some(session) = self.sessions.get_mut(&session_id) {
-            return session.grant_data_credit(request_id, max_data);
-        }
-        debug!(
-            "wt_session resolve failed connection_handle={} request_id={request_id} session_id={session_id}",
-            self.handle
-        );
-        vec![Effect::NotifyRequestFailed {
-            request_id,
-            source: ErrorSource::Session,
-            error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
-            reason: "wt_session resolve failed".into(),
-        }]
-    }
-
-    // Manual streams credit grant handling (delegated).
-    pub(super) fn grant_streams_credit(
-        &mut self,
-        session_id: SessionId,
-        request_id: RequestId,
-        is_unidirectional: bool,
-        max_streams: u64,
-    ) -> Vec<Effect> {
-        if let Some(session) = self.sessions.get_mut(&session_id) {
-            return session.grant_streams_credit(request_id, is_unidirectional, max_streams);
-        }
-        debug!(
-            "wt_session resolve failed connection_handle={} request_id={request_id} session_id={session_id}",
-            self.handle
-        );
-        vec![Effect::NotifyRequestFailed {
-            request_id,
-            source: ErrorSource::Session,
-            error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
-            reason: "wt_session resolve failed".into(),
-        }]
     }
 
     // Handshake completion handling.
@@ -850,8 +803,6 @@ impl Connection {
                     SessionParams {
                         flow_control_negotiated: self.has_flow_control(),
                         flow_control_window: self.flow_control_window,
-                        flow_control_window_auto_scale_enabled: self
-                            .flow_control_window_auto_scale_enabled,
                         initial_max_data: self.initial_max_data,
                         initial_max_streams_bidi: self.initial_max_streams_bidi,
                         initial_max_streams_uni: self.initial_max_streams_uni,
@@ -1026,8 +977,6 @@ impl Connection {
                 SessionParams {
                     flow_control_negotiated: self.has_flow_control(),
                     flow_control_window: self.flow_control_window,
-                    flow_control_window_auto_scale_enabled: self
-                        .flow_control_window_auto_scale_enabled,
                     initial_max_data: self.initial_max_data,
                     initial_max_streams_bidi: self.initial_max_streams_bidi,
                     initial_max_streams_uni: self.initial_max_streams_uni,
@@ -1517,7 +1466,6 @@ impl Connection {
 pub(super) struct ConnectionParams {
     pub(super) early_event_ttl: f64,
     pub(super) flow_control_window: u64,
-    pub(super) flow_control_window_auto_scale_enabled: bool,
     pub(super) initial_max_data: u64,
     pub(super) initial_max_streams_bidi: u64,
     pub(super) initial_max_streams_uni: u64,

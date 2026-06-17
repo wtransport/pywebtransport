@@ -130,13 +130,8 @@ pub(super) fn next_data_limit(
     current_limit: u64,
     consumed: u64,
     window_size: u64,
-    auto_scale: bool,
     force_update: bool,
 ) -> Option<u64> {
-    if !auto_scale {
-        return None;
-    }
-
     let new_limit = consumed.saturating_add(window_size);
     let threshold = if force_update { 0 } else { window_size / 2 };
 
@@ -152,13 +147,8 @@ pub(super) fn next_stream_limit(
     current_limit: u64,
     closed_count: u64,
     initial_window: u64,
-    auto_scale: bool,
     force_update: bool,
 ) -> Option<u64> {
-    if !auto_scale {
-        return None;
-    }
-
     let new_limit = closed_count.saturating_add(initial_window);
     let threshold = if force_update { 0 } else { initial_window / 2 };
 

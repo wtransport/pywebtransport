@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from pywebtransport import ClientConfig, ConfigurationError, Headers, ServerConfig
-from pywebtransport.config import _MAX_FIELD_SECTION_SIZE
+from pywebtransport.config import _FIELD_SECTION_SIZE_LIMIT
 from pywebtransport.constants import (
     DEFAULT_ALPN_PROTOCOLS,
     DEFAULT_CONNECT_TIMEOUT,
@@ -180,7 +180,7 @@ class TestClientConfig:
             ({"max_datagram_size": UDP_MAX_DATAGRAM_SIZE + 1}, "cfg_max_datagram_size validate invalid"),
             ({"max_event_listeners": 0}, "cfg_max_event_listeners validate invalid"),
             ({"max_field_section_size": 0}, "cfg_max_field_section_size validate invalid"),
-            ({"max_field_section_size": _MAX_FIELD_SECTION_SIZE + 1}, "cfg_max_field_section_size validate invalid"),
+            ({"max_field_section_size": _FIELD_SECTION_SIZE_LIMIT + 1}, "cfg_max_field_section_size validate invalid"),
             ({"max_session_pending_events": 0}, "cfg_max_session_pending_events validate invalid"),
             ({"max_sessions": 0}, "cfg_max_sessions validate invalid"),
             ({"max_stream_read_buffer_size": 0}, "cfg_max_stream_read_buffer_size validate invalid"),
@@ -369,7 +369,7 @@ class TestServerConfig:
             ({"max_datagram_size": UDP_MAX_DATAGRAM_SIZE + 1}, "cfg_max_datagram_size validate invalid"),
             ({"max_event_listeners": 0}, "cfg_max_event_listeners validate invalid"),
             ({"max_field_section_size": 0}, "cfg_max_field_section_size validate invalid"),
-            ({"max_field_section_size": _MAX_FIELD_SECTION_SIZE + 1}, "cfg_max_field_section_size validate invalid"),
+            ({"max_field_section_size": _FIELD_SECTION_SIZE_LIMIT + 1}, "cfg_max_field_section_size validate invalid"),
             ({"max_session_pending_events": 0}, "cfg_max_session_pending_events validate invalid"),
             ({"max_sessions": 0}, "cfg_max_sessions validate invalid"),
             ({"max_stream_read_buffer_size": 0}, "cfg_max_stream_read_buffer_size validate invalid"),

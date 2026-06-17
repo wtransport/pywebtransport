@@ -15,7 +15,7 @@ from pywebtransport.constants import (
     DEFAULT_EVENT_QUEUE_CAPACITY,
     DEFAULT_MAX_EVENT_LISTENERS,
 )
-from pywebtransport.types import EventData, EventType, Future
+from pywebtransport.types import EventType
 
 __all__: list[str] = ["Event", "EventEmitter", "EventHandler"]
 
@@ -28,7 +28,7 @@ _logger = logging.getLogger(name=__name__)
 class Event:
     """Encapsulate system event data."""
 
-    data: EventData | None = None
+    data: Any | None = None
     source: Any | None = None
     timestamp: float = field(default_factory=time.perf_counter)
     type: EventType | str
@@ -116,7 +116,7 @@ class EventEmitter:
         self.remove_all_listeners()
         _logger.debug("rt_channel close")
 
-    async def emit(self, *, event_type: EventType | str, data: EventData | None = None, source: Any = None) -> None:
+    async def emit(self, *, event_type: EventType | str, data: Any | None = None, source: Any = None) -> None:
         """Dispatch an event to registered listeners."""
         event = Event(type=event_type, data=data, source=source)
         self._add_to_history(event=event)
@@ -127,7 +127,7 @@ class EventEmitter:
 
         await self._process_event(event=event)
 
-    def emit_nowait(self, *, event_type: EventType | str, data: EventData | None = None, source: Any = None) -> None:
+    def emit_nowait(self, *, event_type: EventType | str, data: Any | None = None, source: Any = None) -> None:
         """Schedule an event dispatch without awaiting."""
         event = Event(type=event_type, data=data, source=source)
         self._add_to_history(event=event)
@@ -278,7 +278,7 @@ class EventEmitter:
         timeout: float | None = None,
     ) -> Event:
         """Await the emission of a specific event."""
-        future: Future[Event] = asyncio.Future()
+        future: asyncio.Future[Event] = asyncio.Future()
         event_types = [event_type] if isinstance(event_type, (str, EventType)) else event_type
 
         async def handler(event: Event) -> None:

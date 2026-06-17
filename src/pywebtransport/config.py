@@ -22,7 +22,6 @@ from pywebtransport.constants import (
     DEFAULT_EVENT_HISTORY_CAPACITY,
     DEFAULT_EVENT_QUEUE_CAPACITY,
     DEFAULT_FLOW_CONTROL_WINDOW,
-    DEFAULT_FLOW_CONTROL_WINDOW_AUTO_SCALE_ENABLED,
     DEFAULT_INITIAL_MAX_DATA,
     DEFAULT_INITIAL_MAX_STREAMS_BIDI,
     DEFAULT_INITIAL_MAX_STREAMS_UNI,
@@ -60,7 +59,7 @@ from pywebtransport.types import Headers
 __all__: list[str] = ["BaseConfig", "ClientConfig", "ServerConfig"]
 
 _CONGESTION_CONTROL_ALGORITHMS: Final[list[str]] = ["bbr", "cubic", "reno"]
-_MAX_FIELD_SECTION_SIZE: Final[int] = 16 * 1024 * 1024
+_FIELD_SECTION_SIZE_LIMIT: Final[int] = 16 * 1024 * 1024
 _VERIFY_MODES: Final[list[ssl.VerifyMode]] = [ssl.CERT_NONE, ssl.CERT_OPTIONAL, ssl.CERT_REQUIRED]
 
 
@@ -75,7 +74,6 @@ class BaseConfig(ABC):
     event_history_capacity: int = DEFAULT_EVENT_HISTORY_CAPACITY
     event_queue_capacity: int = DEFAULT_EVENT_QUEUE_CAPACITY
     flow_control_window: int = DEFAULT_FLOW_CONTROL_WINDOW
-    flow_control_window_auto_scale_enabled: bool = DEFAULT_FLOW_CONTROL_WINDOW_AUTO_SCALE_ENABLED
     initial_max_data: int = DEFAULT_INITIAL_MAX_DATA
     initial_max_streams_bidi: int = DEFAULT_INITIAL_MAX_STREAMS_BIDI
     initial_max_streams_uni: int = DEFAULT_INITIAL_MAX_STREAMS_UNI
@@ -280,7 +278,7 @@ class BaseConfig(ABC):
                 config_value=self.max_event_listeners,
             )
 
-        if self.max_field_section_size <= 0 or self.max_field_section_size > _MAX_FIELD_SECTION_SIZE:
+        if self.max_field_section_size <= 0 or self.max_field_section_size > _FIELD_SECTION_SIZE_LIMIT:
             raise ConfigurationError(
                 message=f"cfg_max_field_section_size validate invalid actual={self.max_field_section_size}",
                 config_key="max_field_section_size",

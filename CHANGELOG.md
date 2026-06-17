@@ -7,14 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planned for future release
+
+_(No planned changes for the next release yet.)_
+
+## [0.19.0] - 2026-06-17
+
+This release focuses on automating session flow control semantics, decoupling underlying QUIC transport configurations from application-layer quotas, and stabilizing graceful shutdown lifecycles across the IPC boundary. It additionally establishes rigorous performance benchmarking baselines and streamlines the internal memory model and API type boundaries.
+
 ### Changed
 
-- **Protocol Constants**: Renamed `QUIC_MAX_STREAM_ID` to `QUIC_VARINT_LIMIT` to accurately reflect RFC 9000 variable-length integer encoding constraints.
-- **Transport Configuration**: Introduced fine-grained QUIC flow control window parameters to directly expose and manage underlying transport window sizing.
+- **Flow Control Automation**: Enforced unconditional automatic credit allocation when session flow control is enabled. Removed manual `grant_data_credit` and `grant_streams_credit` APIs, associated configuration flags, and protocol events. Incremented the FFI `ABI_VERSION` to 6 to reflect the compacted instruction layout.
+- **Transport Configuration**: Introduced fine-grained QUIC flow control window parameters (`quic_receive_window`, `quic_send_window`, `quic_stream_receive_window`) to directly expose and manage underlying transport sizing without session-level interference.
+- **Memory & State Optimization**: Optimized the `TransportEndpoint` by pre-allocating a `handles_workspace` to eliminate repeated heap allocations during connection polling. Calibrated default I/O buffers, concurrent stream limits, and QPACK table capacities to align with standard protocol profiles.
+- **Protocol Constants & Types**: Renamed `QUIC_MAX_STREAM_ID` to `QUIC_VARINT_LIMIT` to accurately reflect RFC 9000 encoding constraints. Replaced redundant type aliases with native Python types across the API boundary and refactored URL parsing to utilize a strongly-typed `_ConnectionTarget` dataclass.
+- **Telemetry Alignment**: Updated transmission error logging to emit the `sys_socket` event domain instead of `udp_datagram`, strictly adhering to the structured telemetry DSL for precise L4 origin tracking.
+- **Benchmark Methodology**: Refactored the performance test suite to isolate protocol state machine overhead from event loop contention. Scaled steady-state load profiles (e.g., 100MB stream payloads, 30,000 datagram bursts) and utilized a deterministic UDP socket readiness probe for objective metric extraction.
 
 ### Fixed
 
-- **Cross-Layer Flow Control**: Resolved a stream allocation stall in specific edge cases by strictly decoupling L4 physical concurrency constraints from L7 session quotas.
+- **Cross-Layer Flow Control**: Resolved a stream allocation stall in specific edge cases by strictly decoupling L4 physical concurrency constraints from L7 session quotas, mapping QUIC stream limits directly.
+- **Shutdown Determinism**: Prevented premature resource deallocation during endpoint shutdown by migrating `EndpointController.close` to an asynchronous coroutine bounded by `_IPC_CLOSE_TIMEOUT`. Enforced terminal `flush_transmits()` execution in the Tokio reactor prior to cross-thread waker notification.
 - **Session Protocol Compliance**: Enforced state machine boundaries to prohibit the generation and emission of flow control capsules when session-level flow control is disabled.
 
 ## [0.18.1] - 2026-05-31
@@ -973,7 +986,8 @@ This is a major release focused on enhancing runtime safety and modernizing the 
 - cryptography (>=45.0.4,<46.0.0) for SSL/TLS operations
 - typing-extensions (>=4.14.0,<5.0.0) for Python <3.10 support
 
-[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.18.1...HEAD
+[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/wtransport/pywebtransport/compare/v0.18.1...v0.19.0
 [0.18.1]: https://github.com/wtransport/pywebtransport/compare/v0.18.0...v0.18.1
 [0.18.0]: https://github.com/wtransport/pywebtransport/compare/v0.17.1...v0.18.0
 [0.17.1]: https://github.com/wtransport/pywebtransport/compare/v0.17.0...v0.17.1

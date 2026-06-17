@@ -17,8 +17,6 @@ from pywebtransport._protocol.events import (
     UserCreateStream,
     UserExportKeyingMaterial,
     UserGetSessionDiagnostics,
-    UserGrantDataCredit,
-    UserGrantStreamsCredit,
     UserRejectSession,
     UserSendDatagram,
 )
@@ -316,47 +314,6 @@ class WebTransportSession:
                         request_id=request_id, session_id=self.session_id, label=label, context=context, length=length
                     )
                 ),
-            )
-        except (ConnectionError, SessionError, asyncio.CancelledError):
-            raise
-        except Exception as e:
-            raise SessionError.from_cause(
-                message=f"wt_session resolve failed session_id={self.session_id}", cause=e, session_id=self.session_id
-            ) from e
-
-    async def grant_data_credit(self, *, max_data: int) -> None:
-        """Allocate data flow control credit to the peer."""
-        connection = self._connection()
-        if connection is None:
-            raise ConnectionError(message="wt_connection resolve failed")
-
-        try:
-            await connection.execute_request(
-                event_factory=lambda request_id: UserGrantDataCredit(
-                    request_id=request_id, session_id=self.session_id, max_data=max_data
-                )
-            )
-        except (ConnectionError, SessionError, asyncio.CancelledError):
-            raise
-        except Exception as e:
-            raise SessionError.from_cause(
-                message=f"wt_session resolve failed session_id={self.session_id}", cause=e, session_id=self.session_id
-            ) from e
-
-    async def grant_streams_credit(self, *, is_unidirectional: bool, max_streams: int) -> None:
-        """Allocate stream flow control credit to the peer."""
-        connection = self._connection()
-        if connection is None:
-            raise ConnectionError(message="wt_connection resolve failed")
-
-        try:
-            await connection.execute_request(
-                event_factory=lambda request_id: UserGrantStreamsCredit(
-                    request_id=request_id,
-                    session_id=self.session_id,
-                    is_unidirectional=is_unidirectional,
-                    max_streams=max_streams,
-                )
             )
         except (ConnectionError, SessionError, asyncio.CancelledError):
             raise

@@ -100,23 +100,6 @@ class UserGetStreamDiagnostics(UserEvent[dict[str, Any]]):
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
-class UserGrantDataCredit(UserEvent[None]):
-    """User command to manually grant data credit."""
-
-    session_id: SessionId
-    max_data: int
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
-class UserGrantStreamsCredit(UserEvent[None]):
-    """User command to manually grant stream credit."""
-
-    session_id: SessionId
-    is_unidirectional: bool
-    max_streams: int
-
-
-@dataclass(frozen=True, kw_only=True, slots=True)
 class UserReadStream(UserEvent[bytes]):
     """User command to read data from a stream."""
 

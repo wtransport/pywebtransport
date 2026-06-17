@@ -38,10 +38,10 @@ class TestConnectionDiagnostics:
             is_client=True,
             local_goaway_sent=False,
             peer_goaway_received=False,
-            peer_initial_max_data=10000,
+            peer_initial_max_data=4 * 1024 * 1024,
             peer_initial_max_streams_bidi=10,
             peer_initial_max_streams_uni=10,
-            peer_max_datagram_frame_size=1200,
+            peer_max_datagram_frame_size=1350,
             peer_settings_received=True,
             pending_request_count=0,
             session_count=1,
@@ -61,10 +61,10 @@ class TestConnectionDiagnostics:
         assert diag.is_client is True
         assert diag.local_goaway_sent is False
         assert diag.peer_goaway_received is False
-        assert diag.peer_initial_max_data == 10000
+        assert diag.peer_initial_max_data == 4 * 1024 * 1024
         assert diag.peer_initial_max_streams_bidi == 10
         assert diag.peer_initial_max_streams_uni == 10
-        assert diag.peer_max_datagram_frame_size == 1200
+        assert diag.peer_max_datagram_frame_size == 1350
         assert diag.peer_settings_received is True
         assert diag.pending_request_count == 0
         assert diag.session_count == 1
@@ -344,10 +344,10 @@ class TestWebTransportConnection:
             "is_client": True,
             "local_goaway_sent": False,
             "peer_goaway_received": False,
-            "peer_initial_max_data": 10000,
+            "peer_initial_max_data": 4 * 1024 * 1024,
             "peer_initial_max_streams_bidi": 10,
             "peer_initial_max_streams_uni": 10,
-            "peer_max_datagram_frame_size": 1200,
+            "peer_max_datagram_frame_size": 1350,
             "peer_settings_received": True,
             "pending_request_count": 0,
             "session_count": 1,

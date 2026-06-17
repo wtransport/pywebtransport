@@ -19,6 +19,7 @@ from pywebtransport import (
 from pywebtransport.client import (
     ClientDiagnostics,
     ClientStats,
+    _ConnectionTarget,
     _merge_headers,
     _normalize_headers,
     _parse_webtransport_url,
@@ -166,6 +167,7 @@ class TestWebTransportClient:
     def mock_controller(self, mocker: MockerFixture) -> Any:
         controller = mocker.MagicMock()
         controller.connect = mocker.AsyncMock(return_value=42)
+        controller.close = mocker.AsyncMock()
 
         return controller
 
@@ -198,7 +200,7 @@ class TestWebTransportClient:
     def setup_common_mocks(self, mocker: MockerFixture) -> None:
         mocker.patch(
             target="pywebtransport.client._parse_webtransport_url",
-            return_value=("example.com", "example.com", 443, "/"),
+            return_value=_ConnectionTarget(authority="example.com", host="example.com", path="/", port=443),
         )
         mocker.patch(target="time.perf_counter", return_value=1000.0)
         mocker.patch(
@@ -216,7 +218,7 @@ class TestWebTransportClient:
         await client.close()
 
         mock_connection_manager.shutdown.assert_awaited_once()
-        mock_controller.close.assert_called_once()
+        mock_controller.close.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_close_idempotency_and_concurrency(
@@ -1151,14 +1153,20 @@ def test_parse_webtransport_url_raises_error(url: str, error_msg: str) -> None:
 @pytest.mark.parametrize(
     argnames="url, expected",
     argvalues=[
-        ("https://example.com", ("example.com", "example.com", 443, "/")),
-        ("https://example.com:0", ("example.com:0", "example.com", 0, "/")),
-        ("https://localhost:8080/path", ("localhost:8080", "localhost", 8080, "/path")),
-        ("https://[::1]:9090/q?a=1#f", ("[::1]:9090", "::1", 9090, "/q?a=1")),
-        ("https://user:pass@test.com:4433", ("test.com:4433", "test.com", 4433, "/")),
+        ("https://example.com", _ConnectionTarget(authority="example.com", host="example.com", path="/", port=443)),
+        ("https://example.com:0", _ConnectionTarget(authority="example.com:0", host="example.com", path="/", port=0)),
+        (
+            "https://localhost:8080/path",
+            _ConnectionTarget(authority="localhost:8080", host="localhost", path="/path", port=8080),
+        ),
+        ("https://[::1]:9090/q?a=1#f", _ConnectionTarget(authority="[::1]:9090", host="::1", path="/q?a=1", port=9090)),
+        (
+            "https://user:pass@test.com:4433",
+            _ConnectionTarget(authority="test.com:4433", host="test.com", path="/", port=4433),
+        ),
     ],
 )
-def test_parse_webtransport_url_success(url: str, expected: tuple[str, str, int, str]) -> None:
+def test_parse_webtransport_url_success(url: str, expected: _ConnectionTarget) -> None:
     parsed_url = _parse_webtransport_url(url=url)
 
     assert parsed_url == expected

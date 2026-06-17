@@ -62,28 +62,27 @@ fn mock_base_config() -> RustBaseConfig {
     RustBaseConfig {
         alpn_protocols: vec!["h3".to_owned()],
         congestion_control_algorithm: "cubic".to_owned(),
-        connection_idle_timeout: Duration::from_mins(1),
-        flow_control_window: 1_048_576,
-        flow_control_window_auto_scale_enabled: true,
-        initial_max_data: 10_485_760,
-        initial_max_streams_bidi: 100,
-        initial_max_streams_uni: 100,
-        keep_alive_interval: Some(Duration::from_secs(10)),
-        max_capsule_size: 1500,
-        max_datagram_size: 1200,
+        connection_idle_timeout: Duration::from_secs_f64(60.0),
+        flow_control_window: 4 * 1024 * 1024,
+        initial_max_data: 4 * 1024 * 1024,
+        initial_max_streams_bidi: 10,
+        initial_max_streams_uni: 10,
+        keep_alive_interval: Some(Duration::from_secs_f64(30.0)),
+        max_capsule_size: 65536,
+        max_datagram_size: 1350,
         max_field_section_size: 65536,
         max_session_pending_events: 100,
-        max_sessions: 100,
-        max_stream_read_buffer_size: 1_048_576,
-        max_stream_write_buffer_size: 1_048_576,
+        max_sessions: 10,
+        max_stream_read_buffer_size: 1024 * 1024,
+        max_stream_write_buffer_size: 1024 * 1024,
         max_total_pending_events: 1000,
-        pending_event_ttl: Duration::from_secs(30),
-        quic_max_concurrent_bidi_streams: 65535,
-        quic_max_concurrent_uni_streams: 65535,
-        quic_receive_window: 33_554_432,
-        quic_send_window: 33_554_432,
-        quic_stream_receive_window: 2_097_152,
-        resource_cleanup_interval: Duration::from_secs(5),
+        pending_event_ttl: Duration::from_secs_f64(5.0),
+        quic_max_concurrent_bidi_streams: 100,
+        quic_max_concurrent_uni_streams: 100,
+        quic_receive_window: 16 * 1024 * 1024,
+        quic_send_window: 16 * 1024 * 1024,
+        quic_stream_receive_window: 1024 * 1024,
+        resource_cleanup_interval: Duration::from_secs_f64(15.0),
     }
 }
 
@@ -263,7 +262,7 @@ fn test_routing_with_active_connection() {
         unreachable!()
     };
     let event = ProtocolEvent::InternalCleanupResources;
-    let future_time = now + Duration::from_mins(1);
+    let future_time = now + Duration::from_secs_f64(60.0);
 
     let transport_event = endpoint.handle_user_event(handle, event, 0.0, now);
     let earliest_timeout = endpoint.timeout();

@@ -76,6 +76,7 @@ class TestWebTransportServer:
     def mock_controller(self, mocker: MockerFixture) -> Any:
         controller = mocker.MagicMock()
         controller.get_local_addresses.return_value = [("127.0.0.1", 4433)]
+        controller.close = mocker.AsyncMock()
         return controller
 
     @pytest.fixture
@@ -158,7 +159,7 @@ class TestWebTransportServer:
 
         mock_connection_manager.shutdown.assert_awaited_once()
         mock_session_manager.shutdown.assert_awaited_once()
-        mock_controller.close.assert_called_once()
+        mock_controller.close.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_close_already_in_progress(self, server: WebTransportServer) -> None:
@@ -188,11 +189,11 @@ class TestWebTransportServer:
 
         await server.close()
 
-        mock_controller.close.assert_called_once()
+        mock_controller.close.assert_awaited_once()
 
         await server.close()
 
-        mock_controller.close.assert_called_once()
+        mock_controller.close.assert_awaited_once()
         assert not server.is_serving
 
     @pytest.mark.asyncio
@@ -245,7 +246,7 @@ class TestWebTransportServer:
         await server.close()
 
         assert server._close_task is not done_task
-        mock_controller.close.assert_called_once()
+        mock_controller.close.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_close_with_manager_shutdown_error(

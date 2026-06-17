@@ -6,7 +6,7 @@ import asyncio
 import itertools
 from typing import Any
 
-from pywebtransport.types import Future, RequestId
+from pywebtransport.types import RequestId
 
 __all__: list[str] = []
 
@@ -18,7 +18,7 @@ class PendingRequestManager:
 
     def __init__(self) -> None:
         """Initialize the instance."""
-        self._requests: dict[RequestId, Future[Any]] = {}
+        self._requests: dict[RequestId, asyncio.Future[Any]] = {}
         self._counter = itertools.count()
 
     def complete_request(self, *, request_id: RequestId, result: Any) -> None:
@@ -27,7 +27,7 @@ class PendingRequestManager:
         if future is not None and not future.done():
             future.set_result(result)
 
-    def create_request(self) -> tuple[RequestId, Future[Any]]:
+    def create_request(self) -> tuple[RequestId, asyncio.Future[Any]]:
         """Create a new tracked request and return its ID and Future."""
         loop = asyncio.get_running_loop()
         future = loop.create_future()

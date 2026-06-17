@@ -124,7 +124,7 @@ fn test_effect_emit_session_event_optional_fields_some_success(
         wt_protocol: Some("h3".to_owned()),
         data: Some(fixture_bytes),
         is_unidirectional: Some(true),
-        max_data: Some(1024),
+        max_data: Some(4 * 1024 * 1024),
         max_streams: Some(10),
         ready_at: Some(1.5),
         error_code: Some(fixture_error_code),
@@ -145,7 +145,7 @@ fn test_effect_emit_session_event_optional_fields_some_success(
         assert_eq!(path, Some("/test".to_owned()));
         assert_eq!(wt_available_protocols, Some(vec!["h3".to_owned()]));
         assert_eq!(wt_protocol, Some("h3".to_owned()));
-        assert_eq!(max_data, Some(1024));
+        assert_eq!(max_data, Some(4 * 1024 * 1024));
         assert!(ready_at.is_some());
     }
 }

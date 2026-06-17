@@ -25,12 +25,8 @@ mod sys {
 const DECODER_INSTRUCTION_BUFFER_SIZE: usize = 1024;
 // Decoder pending block capacity for DoS protection.
 const DECODER_PENDING_BLOCK_CAPACITY: usize = 256;
-// Encoder blocked stream capacity.
-const ENCODER_BLOCKED_STREAM_CAPACITY: u32 = 16;
 // Maximum retry iterations for encoder memory fallback.
 const ENCODER_FALLBACK_RETRY: usize = 4;
-// Encoder table size.
-const ENCODER_TABLE_SIZE: u32 = 65536;
 
 // Header block decoding status.
 #[derive(Debug)]
@@ -49,7 +45,7 @@ unsafe impl Send for Decoder {}
 
 impl Decoder {
     // Decoder instance initialization.
-    pub(super) fn new(max_table_size: u32, dyn_table_size: u32) -> Self {
+    pub(super) fn new(max_table_capacity: u32, blocked_streams: u32) -> Self {
         let mut inner = Box::pin(InnerDecoder {
             _pin: PhantomPinned,
             cb: sys::lsqpack_dec_hset_if {
@@ -68,8 +64,8 @@ impl Decoder {
             sys::lsqpack_dec_init(
                 &raw mut inner_ptr.decoder,
                 ptr::null_mut(),
-                max_table_size,
-                dyn_table_size,
+                max_table_capacity,
+                blocked_streams,
                 &raw const inner_ptr.cb,
                 0,
             );
@@ -324,12 +320,13 @@ unsafe impl Send for Encoder {}
 
 impl Encoder {
     // Encoder instance initialization.
-    pub(super) fn new() -> Self {
+    pub(super) fn new(max_table_capacity: u32, blocked_streams: u32) -> Self {
         let mut inner = Box::pin(InnerEncoder {
             _pin: PhantomPinned,
             enc_buffer: Vec::new(),
             encoder: unsafe { MaybeUninit::zeroed().assume_init() },
             hdr_buffer: Vec::new(),
+            max_table_capacity,
         });
 
         let inner_ptr = unsafe { inner.as_mut().get_unchecked_mut() };
@@ -338,9 +335,9 @@ impl Encoder {
             sys::lsqpack_enc_init(
                 &raw mut inner_ptr.encoder,
                 ptr::null_mut(),
-                ENCODER_TABLE_SIZE,
+                max_table_capacity,
                 0,
-                ENCODER_BLOCKED_STREAM_CAPACITY,
+                blocked_streams,
                 0,
                 ptr::null_mut(),
                 ptr::null_mut(),
@@ -360,7 +357,7 @@ impl Encoder {
         let mut written: usize = buffer.len();
         let inner = unsafe { self.inner.as_mut().get_unchecked_mut() };
         let requested_capacity = u32::try_from(max_table_capacity).unwrap_or(u32::MAX);
-        let capacity = cmp::min(requested_capacity, ENCODER_TABLE_SIZE);
+        let capacity = cmp::min(requested_capacity, inner.max_table_capacity);
 
         let result = unsafe {
             sys::lsqpack_enc_set_max_capacity(
@@ -562,6 +559,7 @@ struct InnerEncoder {
     enc_buffer: Vec<u8>,
     encoder: sys::lsqpack_enc,
     hdr_buffer: Vec<u8>,
+    max_table_capacity: u32,
 }
 
 impl Drop for InnerEncoder {

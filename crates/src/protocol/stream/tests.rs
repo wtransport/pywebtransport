@@ -13,7 +13,15 @@ use crate::protocol::utils::wt_to_http_error;
 
 #[fixture]
 fn fixture_stream() -> Stream {
-    Stream::new(0, 0, StreamDirection::Bidirectional, false, 1024, 1024, 0.0)
+    Stream::new(
+        0,
+        0,
+        StreamDirection::Bidirectional,
+        false,
+        1024 * 1024,
+        1024 * 1024,
+        0.0,
+    )
 }
 
 #[rstest]
@@ -77,7 +85,15 @@ fn test_abort_on_closed_stream_idempotency_success(mut fixture_stream: Stream) {
 
 #[rstest]
 fn test_abort_receive_only_success() {
-    let mut stream = Stream::new(0, 0, StreamDirection::ReceiveOnly, false, 1024, 1024, 0.0);
+    let mut stream = Stream::new(
+        0,
+        0,
+        StreamDirection::ReceiveOnly,
+        false,
+        1024 * 1024,
+        1024 * 1024,
+        0.0,
+    );
     let effects = stream.abort(500, 1.0);
 
     assert!(matches!(
@@ -97,7 +113,15 @@ fn test_abort_receive_only_success() {
 
 #[rstest]
 fn test_abort_send_only_success() {
-    let mut stream = Stream::new(0, 0, StreamDirection::SendOnly, false, 1024, 1024, 0.0);
+    let mut stream = Stream::new(
+        0,
+        0,
+        StreamDirection::SendOnly,
+        false,
+        1024 * 1024,
+        1024 * 1024,
+        0.0,
+    );
     let effects = stream.abort(500, 1.0);
 
     assert!(matches!(
@@ -258,7 +282,7 @@ fn test_new_stream_initialization_success(fixture_stream: Stream) {
     assert_eq!(stream.state, StreamState::Open);
     assert_eq!(stream.read_buffer_size, 0);
     assert_eq!(stream.write_buffer_size, 0);
-    assert_eq!(stream.max_read_buffer_size, 1024);
+    assert_eq!(stream.max_read_buffer_size, 1024 * 1024);
     assert!(!stream.is_peer_initiated);
 }
 
@@ -428,7 +452,15 @@ fn test_read_queues_request_when_empty_success(mut fixture_stream: Stream) {
 
 #[rstest]
 fn test_read_send_only_fails() {
-    let mut stream = Stream::new(0, 0, StreamDirection::SendOnly, false, 1024, 1024, 0.0);
+    let mut stream = Stream::new(
+        0,
+        0,
+        StreamDirection::SendOnly,
+        false,
+        1024 * 1024,
+        1024 * 1024,
+        0.0,
+    );
 
     let (effects, consumed) = stream.read(1, 100);
 
@@ -573,7 +605,7 @@ fn test_recv_data_on_reset_received_ignored(mut fixture_stream: Stream) {
 
 #[rstest]
 fn test_recv_data_overflow_error_success(mut fixture_stream: Stream) {
-    let size = usize::try_from(1024 + 1).unwrap_or(usize::MAX);
+    let size = usize::try_from(1024 * 1024 + 1).unwrap_or(usize::MAX);
     let large_data = Bytes::from(vec![0u8; size]);
 
     let (effects, _) = fixture_stream.recv_data(large_data, false, 1.0);
@@ -816,7 +848,15 @@ fn test_reset_on_reset_sent_idempotency_success(mut fixture_stream: Stream) {
 
 #[rstest]
 fn test_reset_receive_only_fails() {
-    let mut stream = Stream::new(0, 0, StreamDirection::ReceiveOnly, false, 1024, 1024, 0.0);
+    let mut stream = Stream::new(
+        0,
+        0,
+        StreamDirection::ReceiveOnly,
+        false,
+        1024 * 1024,
+        1024 * 1024,
+        0.0,
+    );
 
     let effects = stream.reset(1, 404, 1.0);
 
@@ -945,7 +985,15 @@ fn test_stop_on_reset_received_idempotency_success(mut fixture_stream: Stream) {
 
 #[rstest]
 fn test_stop_send_only_fails() {
-    let mut stream = Stream::new(0, 0, StreamDirection::SendOnly, false, 1024, 1024, 0.0);
+    let mut stream = Stream::new(
+        0,
+        0,
+        StreamDirection::SendOnly,
+        false,
+        1024 * 1024,
+        1024 * 1024,
+        0.0,
+    );
 
     let effects = stream.stop(1, 500, 1.0);
 
@@ -1075,7 +1123,7 @@ fn test_write_appends_to_existing_buffer_success(mut fixture_stream: Stream) {
 
 #[rstest]
 fn test_write_buffer_full_rejects_success(mut fixture_stream: Stream) {
-    let size = usize::try_from(1024).unwrap_or(usize::MAX);
+    let size = usize::try_from(1024 * 1024).unwrap_or(usize::MAX);
     let data = Bytes::from(vec![0u8; size]);
     fixture_stream.write(1, data, false, 0, 1.0);
 
@@ -1095,7 +1143,7 @@ fn test_write_buffer_full_rejects_success(mut fixture_stream: Stream) {
 #[rstest]
 fn test_write_buffer_overflow_error_success(mut fixture_stream: Stream) {
     let req_id = 1;
-    let size = usize::try_from(1024 + 1).unwrap_or(usize::MAX);
+    let size = usize::try_from(1024 * 1024 + 1).unwrap_or(usize::MAX);
     let large_data = Bytes::from(vec![0u8; size]);
 
     let (effects, sent) = fixture_stream.write(req_id, large_data, false, 0, 1.0);
@@ -1298,7 +1346,15 @@ fn test_write_partial_credit_buffering_success(mut fixture_stream: Stream) {
 
 #[rstest]
 fn test_write_receive_only_fails() {
-    let mut stream = Stream::new(0, 0, StreamDirection::ReceiveOnly, false, 1024, 1024, 0.0);
+    let mut stream = Stream::new(
+        0,
+        0,
+        StreamDirection::ReceiveOnly,
+        false,
+        1024 * 1024,
+        1024 * 1024,
+        0.0,
+    );
 
     let (effects, sent) = stream.write(1, Bytes::from_static(b"data"), false, 100, 1.0);
 

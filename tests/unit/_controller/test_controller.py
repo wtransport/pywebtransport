@@ -37,7 +37,8 @@ class TestEndpointController:
         yield ctrl
 
         if not ctrl._is_closed:
-            ctrl.close()
+            coro = ctrl.close()
+            coro.close()
 
     @pytest.fixture
     def mock_endpoint(self) -> MagicMock:
@@ -47,23 +48,28 @@ class TestEndpointController:
     def mock_waker(self) -> MagicMock:
         return MagicMock()
 
-    def test_close_idempotent(self, controller: EndpointController) -> None:
-        controller.close()
+    @pytest.mark.asyncio
+    async def test_close_idempotent(self, controller: EndpointController) -> None:
+        controller._ipc_shutdown_event.set()
+        await controller.close()
 
-        controller.close()
+        await controller.close()
 
         assert controller._is_closed is True
 
-    def test_close_oserror(self, controller: EndpointController, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.mark.asyncio
+    async def test_close_oserror(self, controller: EndpointController, monkeypatch: pytest.MonkeyPatch) -> None:
+        controller._ipc_shutdown_event.set()
         mock_r_sock = MagicMock()
         mock_r_sock.close.side_effect = OSError("mock close error")
         monkeypatch.setattr(controller, "_r_sock", mock_r_sock)
 
-        controller.close()
+        await controller.close()
 
         assert controller._is_closed is True
 
-    def test_close_success(
+    @pytest.mark.asyncio
+    async def test_close_success(
         self, controller: EndpointController, mock_endpoint: MagicMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         controller.register_connection(handle=1, callback=MagicMock())
@@ -78,7 +84,8 @@ class TestEndpointController:
         monkeypatch.setattr(controller, "_r_sock", r_sock_mock)
         monkeypatch.setattr(controller, "_w_sock", w_sock_mock)
 
-        controller.close()
+        controller._ipc_shutdown_event.set()
+        await controller.close()
 
         mock_endpoint.close.assert_called_once()
         assert controller._is_closed is True
@@ -88,6 +95,20 @@ class TestEndpointController:
         cast(MagicMock, mock_task.cancel).assert_called_once()
         r_sock_mock.close.assert_called_once()
         w_sock_mock.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_close_timeout(
+        self, controller: EndpointController, mock_endpoint: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def mock_wait() -> None:
+            raise asyncio.TimeoutError()
+
+        monkeypatch.setattr(controller._ipc_shutdown_event, "wait", mock_wait)
+
+        await controller.close()
+
+        assert controller._is_closed is True
+        mock_endpoint.close.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_connect_failure(self, controller: EndpointController, mock_endpoint: MagicMock) -> None:
@@ -378,26 +399,22 @@ class TestEndpointController:
         assert controller.get_remote_address(handle=1) == ("127.0.0.1", 443)
         cb.assert_called_once_with(1)
 
-    def test_process_runtime_event_reactor_shutdown(
-        self, controller: EndpointController, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        mock_close = MagicMock()
-        monkeypatch.setattr(controller, "close", mock_close)
+    def test_process_runtime_event_reactor_shutdown(self, controller: EndpointController) -> None:
+        mock_event = MagicMock()
+        controller._ipc_shutdown_event = mock_event
 
         controller._process_runtime_event(event_tuple=(abi.REACTOR_SHUTDOWN, None))
 
-        mock_close.assert_called_once()
+        mock_event.set.assert_called_once()
 
-    def test_process_runtime_event_reactor_shutdown_already_closed(
-        self, controller: EndpointController, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_process_runtime_event_reactor_shutdown_already_closed(self, controller: EndpointController) -> None:
         controller._is_closed = True
-        mock_close = MagicMock()
-        monkeypatch.setattr(controller, "close", mock_close)
+        mock_event = MagicMock()
+        controller._ipc_shutdown_event = mock_event
 
         controller._process_runtime_event(event_tuple=(abi.REACTOR_SHUTDOWN, None))
 
-        mock_close.assert_called_once()
+        mock_event.set.assert_called_once()
 
     def test_process_runtime_event_unknown_opcode(self, controller: EndpointController) -> None:
         controller._process_runtime_event(event_tuple=(999, None))
