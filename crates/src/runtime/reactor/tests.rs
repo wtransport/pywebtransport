@@ -478,11 +478,11 @@ async fn test_reactor_run_loop_full_tick_and_waker() {
 async fn test_reactor_run_loop_processes_multiple_datagrams() {
     let (reactor, cmd_tx, event_tx, _) = create_test_reactor(10).await;
     let local = tokio::task::LocalSet::new();
-    let Some(socket) = reactor.sockets.first() else {
+    let Some(bound_socket) = reactor.sockets.first() else {
         assert_eq!("some", "none", "Expected socket in reactor");
         unreachable!()
     };
-    let Ok(addr) = socket.local_addr() else {
+    let Ok(addr) = bound_socket.socket.local_addr() else {
         assert_eq!("ok", "err", "Failed to read local socket address");
         unreachable!()
     };
@@ -552,11 +552,11 @@ async fn test_reactor_run_loop_terminates_on_shutdown() {
 async fn test_reactor_udp_receive_loop_forwards_datagrams() {
     let (mut reactor, _, _, _) = create_test_reactor(10).await;
     let payload = b"hello_world";
-    let Some(socket) = reactor.sockets.first() else {
+    let Some(bound_socket) = reactor.sockets.first() else {
         assert_eq!("some", "none", "Expected socket in reactor");
         unreachable!()
     };
-    let Ok(addr) = socket.local_addr() else {
+    let Ok(addr) = bound_socket.socket.local_addr() else {
         assert_eq!("ok", "err", "Failed to read local socket address");
         unreachable!()
     };
@@ -589,11 +589,11 @@ async fn test_reactor_udp_slab_reallocation_is_triggered() {
     let (mut reactor, _, _, _) = create_test_reactor(100).await;
     let payload = vec![0u8; 1200];
     let mut count = 0;
-    let Some(socket) = reactor.sockets.first() else {
+    let Some(bound_socket) = reactor.sockets.first() else {
         assert_eq!("some", "none", "Expected socket in reactor");
         unreachable!()
     };
-    let Ok(addr) = socket.local_addr() else {
+    let Ok(addr) = bound_socket.socket.local_addr() else {
         assert_eq!("ok", "err", "Failed to read local socket address");
         unreachable!()
     };

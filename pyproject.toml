@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin>=1.13.3,<2.0"]
+requires = ["maturin>=1.14.1,<2.0"]
 build-backend = "maturin"
 
 [project]
@@ -45,7 +45,7 @@ dev = [
     "black>=26.5.1,<27.0.0",
     "flake8>=7.3.0,<8.0.0",
     "isort>=8.0.1,<9.0.0",
-    "maturin[patchelf]>=1.13.3,<2.0",
+    "maturin[patchelf]>=1.14.1,<2.0",
     "mypy>=2.1.0,<3.0.0",
     "pywebtransport[test]",
 ]
@@ -56,8 +56,8 @@ docs = [
 ]
 test = [
     "psutil>=7.2.2,<8.0.0",
-    "pytest>=9.0.3,<10.0.0",
-    "pytest-asyncio>=1.3.0,<2.0.0",
+    "pytest>=9.1.1,<10.0.0",
+    "pytest-asyncio>=1.4.0,<2.0.0",
     "pytest-benchmark>=5.2.3,<6.0.0",
     "pytest-cov>=7.1.0,<8.0.0",
     "pytest-mock>=3.15.1,<4.0.0",
@@ -129,9 +129,14 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 minversion = "9.0"
-addopts = "-ra -q --strict-markers --strict-config --ignore-glob='tests/e2e/test_[0-9][0-9]_*.py'"
+addopts = "-ra -q --strict-markers --strict-config"
 testpaths = ["tests"]
-norecursedirs = "examples tests/benchmark"
+norecursedirs = [
+    "examples",
+    "tests/benchmark",
+    "tests/e2e",
+    "tests/integration",
+]
 asyncio_mode = "strict"
 markers = [
     "benchmark: Benchmark tests",
@@ -145,7 +150,7 @@ requires = ["tox>=4"]
 env_list = ["lint", "py312", "py313", "py314"]
 
 [tool.tox.env_run_base]
-description = "Run pytest for {env_name}"
+description = "Test python ({env_name})"
 package = "editable"
 deps = "-r dev-requirements.txt"
 commands = [
@@ -158,7 +163,7 @@ commands = [
 ]
 
 [tool.tox.env.lint]
-description = "Run code quality checks"
+description = "Run linters"
 base_python = ["python3.14"]
 package = "skip"
 deps = "-r dev-requirements.txt"

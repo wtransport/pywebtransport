@@ -1,4 +1,4 @@
-//! X509 certificate generation loading and validation subsystem
+//! X509 certificate generation loading and validation subsystem.
 
 use std::fs::{self, File};
 use std::io::{self, BufReader};
@@ -25,19 +25,19 @@ pub(crate) struct NoCertificateVerification;
 impl ServerCertVerifier for NoCertificateVerification {
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
         vec![
-            SignatureScheme::RSA_PKCS1_SHA1,
-            SignatureScheme::ECDSA_SHA1_Legacy,
-            SignatureScheme::RSA_PKCS1_SHA256,
             SignatureScheme::ECDSA_NISTP256_SHA256,
-            SignatureScheme::RSA_PKCS1_SHA384,
             SignatureScheme::ECDSA_NISTP384_SHA384,
-            SignatureScheme::RSA_PKCS1_SHA512,
             SignatureScheme::ECDSA_NISTP521_SHA512,
+            SignatureScheme::ECDSA_SHA1_Legacy,
+            SignatureScheme::ED25519,
+            SignatureScheme::ED448,
+            SignatureScheme::RSA_PKCS1_SHA1,
+            SignatureScheme::RSA_PKCS1_SHA256,
+            SignatureScheme::RSA_PKCS1_SHA384,
+            SignatureScheme::RSA_PKCS1_SHA512,
             SignatureScheme::RSA_PSS_SHA256,
             SignatureScheme::RSA_PSS_SHA384,
             SignatureScheme::RSA_PSS_SHA512,
-            SignatureScheme::ED25519,
-            SignatureScheme::ED448,
         ]
     }
 
@@ -71,7 +71,7 @@ impl ServerCertVerifier for NoCertificateVerification {
     }
 }
 
-/// Self-signed certificate generation and persistence.
+// Self-signed certificate generation and persistence.
 pub(crate) fn generate_self_signed_cert(
     hostname: &str,
     output_dir: &Path,

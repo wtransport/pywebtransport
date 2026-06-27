@@ -32,7 +32,7 @@ pub(crate) struct Reactor {
     endpoint: TransportEndpoint,
     event_tx: RuntimeEventTx,
     events_emitted: bool,
-    sockets: Vec<Arc<UdpSocket>>,
+    sockets: Vec<BoundSocket>,
     start_instant: Instant,
     waker: WakerCallback,
 }
@@ -50,8 +50,12 @@ impl Reactor {
         let mut arc_sockets = Vec::new();
 
         for socket in sockets {
+            let is_ipv4 = socket.local_addr().is_ok_and(|l| l.is_ipv4());
             let socket = Arc::new(socket);
-            arc_sockets.push(Arc::clone(&socket));
+            arc_sockets.push(BoundSocket {
+                is_ipv4,
+                socket: Arc::clone(&socket),
+            });
 
             let tx = datagram_tx.clone();
             let sock_clone = Arc::clone(&socket);
@@ -320,8 +324,9 @@ impl Reactor {
             let target_socket = self
                 .sockets
                 .iter()
-                .find(|s| s.local_addr().is_ok_and(|l| l.is_ipv4() == is_ipv4))
-                .or_else(|| self.sockets.first());
+                .find(|s| s.is_ipv4 == is_ipv4)
+                .map(|s| &s.socket)
+                .or_else(|| self.sockets.first().map(|s| &s.socket));
 
             if let Some(socket) = target_socket {
                 let mut offset = 0;
@@ -340,6 +345,12 @@ impl Reactor {
             }
         }
     }
+}
+
+// Pre-evaluated UDP socket instance with cached protocol state.
+struct BoundSocket {
+    is_ipv4: bool,
+    socket: Arc<UdpSocket>,
 }
 
 #[cfg(test)]

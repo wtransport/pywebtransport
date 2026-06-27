@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(No planned changes for the next release yet.)_
 
+## [0.19.1] - 2026-06-27
+
+This release focuses on optimizing the I/O reactor hot path for high-throughput transmission, redefining testing boundaries for deterministic execution, and decoupling the CI/CD architecture.
+
+### Added
+
+- **Cross-Platform Artifacts**: Expanded the pre-compiled binary distribution matrix (wheels) to include native support for Linux (aarch64), macOS (Universal2), and Windows (x86_64, aarch64).
+
+### Changed
+
+- **Reactor Optimization**: Optimized the Tokio reactor by pre-evaluating and caching the IP address family (`BoundSocket`). This eliminates `local_addr()` system call overhead within the `send_transmit` hot path, improving UDP datagram throughput.
+- **CI/CD Architecture**: Decoupled continuous integration and delivery responsibilities. Migrated artifact compilation and PyPI deployment to GitHub Actions (upgrading to OIDC-secured trusted publishing). Optimized the internal GitLab CI pipeline utilizing DAG scheduling for rapid baseline validation.
+- **Test Discovery Isolation**: Refined `pytest` discovery heuristics in `pyproject.toml` to explicitly exclude `tests/e2e` and `tests/integration`. This structurally isolates pure deterministic state machine unit tests from environment-sensitive I/O suites during default execution.
+- **Toolchain Upgrades**: Upgraded core build and testing dependencies to ensure ABI compatibility and pipeline stability, including `maturin` (>=1.14.1), `pytest` (>=9.1.1), and `pytest-asyncio` (>=1.4.0).
+
+### Fixed
+
+- **GHCR Image Provenance**: Explicitly disabled SLSA provenance attestation (`provenance: false`) in the Docker buildx configuration to resolve multi-architecture manifest parsing failures and unknown layer generation in the GitHub Container Registry.
+
 ## [0.19.0] - 2026-06-17
 
 This release focuses on automating session flow control semantics, decoupling underlying QUIC transport configurations from application-layer quotas, and stabilizing graceful shutdown lifecycles across the IPC boundary. It additionally establishes rigorous performance benchmarking baselines and streamlines the internal memory model and API type boundaries.
@@ -986,7 +1005,8 @@ This is a major release focused on enhancing runtime safety and modernizing the 
 - cryptography (>=45.0.4,<46.0.0) for SSL/TLS operations
 - typing-extensions (>=4.14.0,<5.0.0) for Python <3.10 support
 
-[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.19.1...HEAD
+[0.19.1]: https://github.com/wtransport/pywebtransport/compare/v0.19.0...v0.19.1
 [0.19.0]: https://github.com/wtransport/pywebtransport/compare/v0.18.1...v0.19.0
 [0.18.1]: https://github.com/wtransport/pywebtransport/compare/v0.18.0...v0.18.1
 [0.18.0]: https://github.com/wtransport/pywebtransport/compare/v0.17.1...v0.18.0

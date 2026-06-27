@@ -14,7 +14,7 @@ body:
     attributes:
       label: "Version"
       description: "Specific version identifier."
-      placeholder: "e.g., 0.17.0"
+      placeholder: "e.g., 0.1.0"
     validations:
       required: true
 
@@ -23,7 +23,7 @@ body:
     attributes:
       label: "Python Runtime"
       description: "Interpreter version."
-      placeholder: "e.g., 3.12.13"
+      placeholder: "e.g., 3.12.10"
     validations:
       required: true
 

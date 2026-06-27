@@ -36,7 +36,7 @@ The following methodologies are enforced to ensure result reproducibility and st
 
 ## 3. Stream Throughput
 
-This section details the sustained goodput over reliable WebTransport streams, utilizing a 1 MB payload per stream.
+This section details the sustained goodput over reliable WebTransport streams, utilizing a 100 MB payload per stream.
 
 | Scenario     | Result (MB/s) |
 | :----------- | :------------ |

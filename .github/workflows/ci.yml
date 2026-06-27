@@ -4,13 +4,16 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "dry-run/*"]
+    tags: ["v*"]
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
+  id-token: write
+  packages: write
 
 env:
   CARGO_HOME: ${{ github.workspace }}/.cargo
@@ -22,14 +25,14 @@ env:
 
 jobs:
   lint:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     container:
       image: python:3.14-slim-trixie
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Cache dependencies
+      - name: Setup cache
         uses: actions/cache@v5
         with:
           path: .cache/pip
@@ -42,17 +45,17 @@ jobs:
           apt-get update
           apt-get install -y curl build-essential clang
 
-      - name: Install Rust toolchain
+      - name: Install rust toolchain
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.1
           echo "$CARGO_HOME/bin" >> $GITHUB_PATH
 
-      - name: Install Python dependencies
+      - name: Install python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r dev-requirements.txt
 
-      - name: Code quality checks
+      - name: Run linters
         run: |
           isort --check-only src tests
           black --check src tests
@@ -63,7 +66,7 @@ jobs:
 
   test:
     needs: lint
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:
@@ -74,7 +77,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Cache dependencies
+      - name: Setup cache
         uses: actions/cache@v5
         with:
           path: |
@@ -90,26 +93,26 @@ jobs:
           apt-get update
           apt-get install -y curl build-essential clang
 
-      - name: Install Rust toolchain
+      - name: Install rust toolchain
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.1
           echo "$CARGO_HOME/bin" >> $GITHUB_PATH
 
-      - name: Install Python dependencies
+      - name: Install python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r dev-requirements.txt
           pip install -e .
 
-      - name: Run Rust tests
+      - name: Test rust
         run: |
           cargo test --manifest-path crates/Cargo.toml
 
-      - name: Run Python tests
+      - name: Test python
         run: |
           pytest --cov=pywebtransport --cov-report=xml:coverage-${{ matrix.python-version }}.xml
 
-      - name: Upload coverage reports
+      - name: Upload coverage
         uses: actions/upload-artifact@v7
         with:
           name: coverage-reports-${{ matrix.python-version }}
@@ -117,27 +120,130 @@ jobs:
 
   report:
     needs: test
-    runs-on: ubuntu-24.04
-    if: github.event_name == 'push'
-    container:
-      image: python:3.14-slim-trixie
+    runs-on: ubuntu-26.04
+    if: github.ref == 'refs/heads/main'
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Download coverage reports
+      - name: Download coverage
         uses: actions/download-artifact@v8
         with:
           path: coverage-reports/
 
-      - name: Install Codecov dependencies
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends git curl gpg
-
-      - name: Upload coverage to Codecov
+      - name: Publish coverage
         uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: wtransport/pywebtransport
           directory: ./coverage-reports/
+
+  build-sdist:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/') || startsWith(github.ref, 'refs/heads/dry-run/')
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist --manifest-path crates/Cargo.toml
+
+      - name: Upload sdist
+        uses: actions/upload-artifact@v7
+        with:
+          name: wheels-sdist
+          path: dist/*.tar.gz
+
+  build-wheels:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/') || startsWith(github.ref, 'refs/heads/dry-run/')
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-26
+            target: universal2-apple-darwin
+          - os: ubuntu-26.04
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-26.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: windows-11-vs2026-arm
+            target: aarch64-pc-windows-msvc
+          - os: windows-2025-vs2026
+            target: x86_64-pc-windows-msvc
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --strip --out dist --manifest-path crates/Cargo.toml --target ${{ matrix.target }}
+          container: off
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v7
+        with:
+          name: wheels-${{ matrix.os }}
+          path: dist/*.whl
+
+  publish-image:
+    needs: [build-sdist, build-wheels]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Download wheels
+        uses: actions/download-artifact@v8
+        with:
+          path: dist/
+          name: wheels-ubuntu-26.04
+
+      - name: Extract version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
+
+      - name: Login ghcr
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: examples/interop/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/wtransport/interop-server:${{ env.VERSION }}
+            ghcr.io/wtransport/interop-server:latest
+          provenance: false
+
+  publish-package:
+    needs: publish-image
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-26.04
+    environment:
+      name: pypi
+      url: https://pypi.org/project/pywebtransport/
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: dist/
+          pattern: wheels-*
+          merge-multiple: true
+
+      - name: Publish package
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/

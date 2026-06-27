@@ -22,7 +22,7 @@ isort==8.0.1
     # via pywebtransport (pyproject.toml)
 librt==0.11.0
     # via mypy
-maturin[patchelf]==1.13.3
+maturin[patchelf]==1.14.1
     # via pywebtransport (pyproject.toml)
 mccabe==0.7.0
     # via flake8
@@ -58,14 +58,14 @@ pyflakes==3.4.0
     # via flake8
 pygments==2.19.2
     # via pytest
-pytest==9.0.3
+pytest==9.1.1
     # via
     #   pytest-asyncio
     #   pytest-benchmark
     #   pytest-cov
     #   pytest-mock
     #   pywebtransport (pyproject.toml)
-pytest-asyncio==1.3.0
+pytest-asyncio==1.4.0
     # via pywebtransport (pyproject.toml)
 pytest-benchmark==5.2.3
     # via pywebtransport (pyproject.toml)
