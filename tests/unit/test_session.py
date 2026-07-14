@@ -566,6 +566,64 @@ class TestWebTransportSession:
         assert True
 
     @pytest.mark.asyncio
+    async def test_ensure_ready_already_connected(self, session: WebTransportSession) -> None:
+        session._cached_state = SessionState.CONNECTED
+
+        await session.ensure_ready()
+
+    @pytest.mark.asyncio
+    async def test_ensure_ready_invalid_state(self, session: WebTransportSession) -> None:
+        session._cached_state = SessionState.CLOSED
+
+        with pytest.raises(expected_exception=SessionError, match="wt_session open failed session_id=1"):
+            await session.ensure_ready()
+
+    @pytest.mark.asyncio
+    async def test_ensure_ready_waits_and_fails_with_dict_data(
+        self, session: WebTransportSession, mocker: MockerFixture
+    ) -> None:
+        session._cached_state = SessionState.CONNECTING
+        event = Event(type=EventType.SESSION_CLOSED, data={"error_code": 123})
+        mock_wait_for = mocker.AsyncMock(return_value=event)
+        mock_events = mocker.Mock()
+        mock_events.wait_for = mock_wait_for
+        session.events = mock_events
+
+        with pytest.raises(expected_exception=SessionError, match="wt_session open failed session_id=1") as exc:
+            await session.ensure_ready()
+
+        assert exc.value.error_code == 123
+
+    @pytest.mark.asyncio
+    async def test_ensure_ready_waits_and_fails_with_non_dict_data(
+        self, session: WebTransportSession, mocker: MockerFixture
+    ) -> None:
+        session._cached_state = SessionState.CONNECTING
+        event = Event(type=EventType.SESSION_CLOSED, data=None)
+        mock_wait_for = mocker.AsyncMock(return_value=event)
+        mock_events = mocker.Mock()
+        mock_events.wait_for = mock_wait_for
+        session.events = mock_events
+
+        with pytest.raises(expected_exception=SessionError, match="wt_session open failed session_id=1") as exc:
+            await session.ensure_ready()
+
+        assert exc.value.error_code == ErrorCodes.LIB_SESSION_STATE_ERROR
+
+    @pytest.mark.asyncio
+    async def test_ensure_ready_waits_and_succeeds(self, session: WebTransportSession, mocker: MockerFixture) -> None:
+        session._cached_state = SessionState.CONNECTING
+        event = Event(type=EventType.SESSION_READY, data={})
+        mock_wait_for = mocker.AsyncMock(return_value=event)
+        mock_events = mocker.Mock()
+        mock_events.wait_for = mock_wait_for
+        session.events = mock_events
+
+        await session.ensure_ready()
+
+        mock_wait_for.assert_awaited_once_with(event_type=[EventType.SESSION_READY, EventType.SESSION_CLOSED])
+
+    @pytest.mark.asyncio
     async def test_export_keying_material_cancelled(
         self, session: WebTransportSession, mock_connection: MagicMock
     ) -> None:

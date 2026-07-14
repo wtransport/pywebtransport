@@ -6,11 +6,11 @@
 #
 --index-url https://pypi.org/simple
 
-ast-serialize==0.3.0
+ast-serialize==0.6.0
     # via mypy
 black==26.5.1
     # via pywebtransport (pyproject.toml)
-click==8.3.0
+click==8.4.2
     # via black
 coverage[toml]==7.10.7
     # via pytest-cov
@@ -20,13 +20,13 @@ iniconfig==2.1.0
     # via pytest
 isort==8.0.1
     # via pywebtransport (pyproject.toml)
-librt==0.11.0
+librt==0.13.0
     # via mypy
 maturin[patchelf]==1.14.1
     # via pywebtransport (pyproject.toml)
 mccabe==0.7.0
     # via flake8
-mypy==2.1.0
+mypy==2.3.0
     # via pywebtransport (pyproject.toml)
 mypy-extensions==1.1.0
     # via
@@ -56,7 +56,7 @@ pycodestyle==2.14.0
     # via flake8
 pyflakes==3.4.0
     # via flake8
-pygments==2.19.2
+pygments==2.20.0
     # via pytest
 pytest==9.1.1
     # via

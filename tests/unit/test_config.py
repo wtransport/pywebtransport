@@ -18,6 +18,9 @@ from pywebtransport.constants import (
     DEFAULT_MAX_CAPSULE_SIZE,
     DEFAULT_MAX_CONNECTIONS,
     DEFAULT_MAX_FIELD_SECTION_SIZE,
+    DEFAULT_MAX_PENDING_CAPSULES,
+    DEFAULT_MAX_PENDING_DATAGRAMS,
+    DEFAULT_MAX_PENDING_STREAMS,
     DEFAULT_MAX_SESSIONS,
     DEFAULT_QUIC_MAX_CONCURRENT_BIDI_STREAMS,
     DEFAULT_QUIC_MAX_CONCURRENT_UNI_STREAMS,
@@ -60,6 +63,9 @@ class TestClientConfig:
         assert config.max_capsule_size == DEFAULT_MAX_CAPSULE_SIZE
         assert config.max_connections == DEFAULT_MAX_CONNECTIONS
         assert config.max_field_section_size == DEFAULT_MAX_FIELD_SECTION_SIZE
+        assert config.max_pending_capsules == DEFAULT_MAX_PENDING_CAPSULES
+        assert config.max_pending_datagrams == DEFAULT_MAX_PENDING_DATAGRAMS
+        assert config.max_pending_streams == DEFAULT_MAX_PENDING_STREAMS
         assert config.max_sessions == DEFAULT_MAX_SESSIONS
         assert config.quic_max_concurrent_bidi_streams == DEFAULT_QUIC_MAX_CONCURRENT_BIDI_STREAMS
         assert config.quic_max_concurrent_uni_streams == DEFAULT_QUIC_MAX_CONCURRENT_UNI_STREAMS
@@ -181,6 +187,9 @@ class TestClientConfig:
             ({"max_event_listeners": 0}, "cfg_max_event_listeners validate invalid"),
             ({"max_field_section_size": 0}, "cfg_max_field_section_size validate invalid"),
             ({"max_field_section_size": _FIELD_SECTION_SIZE_LIMIT + 1}, "cfg_max_field_section_size validate invalid"),
+            ({"max_pending_capsules": 0}, "cfg_max_pending_capsules validate invalid"),
+            ({"max_pending_datagrams": 0}, "cfg_max_pending_datagrams validate invalid"),
+            ({"max_pending_streams": 0}, "cfg_max_pending_streams validate invalid"),
             ({"max_session_pending_events": 0}, "cfg_max_session_pending_events validate invalid"),
             ({"max_sessions": 0}, "cfg_max_sessions validate invalid"),
             ({"max_stream_read_buffer_size": 0}, "cfg_max_stream_read_buffer_size validate invalid"),
@@ -240,6 +249,9 @@ class TestServerConfig:
         assert config.max_capsule_size == DEFAULT_MAX_CAPSULE_SIZE
         assert config.max_connections == DEFAULT_MAX_CONNECTIONS
         assert config.max_field_section_size == DEFAULT_MAX_FIELD_SECTION_SIZE
+        assert config.max_pending_capsules == DEFAULT_MAX_PENDING_CAPSULES
+        assert config.max_pending_datagrams == DEFAULT_MAX_PENDING_DATAGRAMS
+        assert config.max_pending_streams == DEFAULT_MAX_PENDING_STREAMS
 
     def test_from_dict_coercion(self) -> None:
         config_dict = {"bind_port": "8080", "certfile": "dummy.crt", "keyfile": "dummy.key"}
@@ -370,6 +382,9 @@ class TestServerConfig:
             ({"max_event_listeners": 0}, "cfg_max_event_listeners validate invalid"),
             ({"max_field_section_size": 0}, "cfg_max_field_section_size validate invalid"),
             ({"max_field_section_size": _FIELD_SECTION_SIZE_LIMIT + 1}, "cfg_max_field_section_size validate invalid"),
+            ({"max_pending_capsules": 0}, "cfg_max_pending_capsules validate invalid"),
+            ({"max_pending_datagrams": 0}, "cfg_max_pending_datagrams validate invalid"),
+            ({"max_pending_streams": 0}, "cfg_max_pending_streams validate invalid"),
             ({"max_session_pending_events": 0}, "cfg_max_session_pending_events validate invalid"),
             ({"max_sessions": 0}, "cfg_max_sessions validate invalid"),
             ({"max_stream_read_buffer_size": 0}, "cfg_max_stream_read_buffer_size validate invalid"),

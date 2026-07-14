@@ -64,6 +64,9 @@ pub(super) struct Connection {
     initial_max_streams_uni: u64,
     is_client: bool,
     local_goaway_sent: bool,
+    max_pending_capsules: u64,
+    max_pending_datagrams: u64,
+    max_pending_streams: u64,
     max_session_pending_events: u64,
     max_sessions: u64,
     max_stream_read_buffer_size: u64,
@@ -77,6 +80,7 @@ pub(super) struct Connection {
     peer_settings_received: bool,
     pending_requests: FxHashMap<StreamId, RequestId>,
     pending_session_configs: FxHashMap<RequestId, SessionInitData>,
+    pending_wt_available_protocols: FxHashMap<StreamId, Option<Vec<String>>>,
     sessions: FxHashMap<SessionId, Session>,
     state: ConnectionState,
     stream_map: FxHashMap<StreamId, SessionId>,
@@ -101,6 +105,9 @@ impl Connection {
             initial_max_streams_uni: params.initial_max_streams_uni,
             is_client,
             local_goaway_sent: false,
+            max_pending_capsules: params.max_pending_capsules,
+            max_pending_datagrams: params.max_pending_datagrams,
+            max_pending_streams: params.max_pending_streams,
             max_session_pending_events: params.max_session_pending_events,
             max_sessions: params.max_sessions,
             max_stream_read_buffer_size: params.max_stream_read_buffer_size,
@@ -114,6 +121,7 @@ impl Connection {
             peer_settings_received: false,
             pending_requests: FxHashMap::default(),
             pending_session_configs: FxHashMap::default(),
+            pending_wt_available_protocols: FxHashMap::default(),
             sessions: FxHashMap::default(),
             state: ConnectionState::Idle,
             stream_map: FxHashMap::default(),
@@ -150,6 +158,65 @@ impl Connection {
         request_id: RequestId,
     ) -> Vec<Effect> {
         self.pending_requests.insert(stream_id, request_id);
+
+        let is_optimistic = self
+            .pending_session_configs
+            .get(&request_id)
+            .is_some_and(|init_data| init_data.optimistic);
+
+        if is_optimistic && let Some(init_data) = self.pending_session_configs.remove(&request_id) {
+            self.pending_wt_available_protocols
+                .insert(stream_id, init_data.wt_available_protocols);
+
+            let session = Session::new(
+                stream_id,
+                init_data.path.clone(),
+                init_data.headers.clone(),
+                None,
+                SessionState::Connecting,
+                self.is_client,
+                SessionParams {
+                    flow_control_negotiated: self.has_flow_control(),
+                    flow_control_window: self.flow_control_window,
+                    initial_max_data: self.initial_max_data,
+                    initial_max_streams_bidi: self.initial_max_streams_bidi,
+                    initial_max_streams_uni: self.initial_max_streams_uni,
+                    max_pending_capsules: self.max_pending_capsules,
+                    max_pending_datagrams: self.max_pending_datagrams,
+                    max_pending_streams: self.max_pending_streams,
+                    max_stream_read_buffer_size: self.max_stream_read_buffer_size,
+                    max_stream_write_buffer_size: self.max_stream_write_buffer_size,
+                    peer_max_data: self.peer_initial_max_data,
+                    peer_max_streams_bidi: self.peer_initial_max_streams_bidi,
+                    peer_max_streams_uni: self.peer_initial_max_streams_uni,
+                },
+                init_data.created_at,
+            );
+            self.sessions.insert(stream_id, session);
+
+            return vec![
+                Effect::EmitSessionEvent {
+                    session_id: stream_id,
+                    event_type: EventType::SessionPending,
+                    path: Some(init_data.path.clone()),
+                    headers: Some(init_data.headers.clone()),
+                    wt_available_protocols: None,
+                    wt_protocol: None,
+                    data: None,
+                    is_unidirectional: None,
+                    max_data: None,
+                    max_streams: None,
+                    ready_at: None,
+                    error_code: None,
+                    reason: None,
+                },
+                Effect::NotifyRequestDone {
+                    request_id,
+                    result: RequestResult::SessionId(stream_id),
+                },
+            ];
+        }
+
         Vec::new()
     }
 
@@ -241,6 +308,10 @@ impl Connection {
     }
 
     // User session creation request handling.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Orthogonal domain primitives post-extraction."
+    )]
     pub(super) fn create_session(
         &mut self,
         request_id: RequestId,
@@ -248,6 +319,7 @@ impl Connection {
         path: String,
         headers: Headers,
         wt_available_protocols: Option<Vec<String>>,
+        optimistic: bool,
         now: f64,
     ) -> Vec<Effect> {
         if !self.is_client {
@@ -340,6 +412,7 @@ impl Connection {
             SessionInitData {
                 created_at: now,
                 headers: headers.clone(),
+                optimistic,
                 path: path.clone(),
                 wt_available_protocols,
             },
@@ -620,6 +693,7 @@ impl Connection {
                 self.handle
             );
             self.sessions.remove(&sid);
+            self.pending_wt_available_protocols.remove(&sid);
             effects.push(Effect::CleanupH3Stream { stream_id: sid });
         }
 
@@ -725,21 +799,30 @@ impl Connection {
                 return effects;
             };
 
-            let Some(init_data) = self.pending_session_configs.remove(&request_id) else {
-                debug!(
-                    "wt_session resolve failed connection_handle={} request_id={request_id}",
-                    self.handle
-                );
-                if stream_ended {
-                    effects.extend(self.recv_connect_close(stream_id, now));
-                }
-                effects.push(Effect::NotifyRequestFailed {
-                    request_id,
-                    source: ErrorSource::Unspecified,
-                    error_code: Some(ERR_LIB_INTERNAL_ERROR),
-                    reason: "wt_session resolve failed".into(),
-                });
-                return effects;
+            let is_optimistic = self.sessions.contains_key(&stream_id);
+
+            let wt_available_protocols = if is_optimistic {
+                self.pending_wt_available_protocols
+                    .remove(&stream_id)
+                    .flatten()
+            } else {
+                let Some(init_data) = self.pending_session_configs.get(&request_id) else {
+                    debug!(
+                        "wt_session resolve failed connection_handle={} request_id={request_id}",
+                        self.handle
+                    );
+                    if stream_ended {
+                        effects.extend(self.recv_connect_close(stream_id, now));
+                    }
+                    effects.push(Effect::NotifyRequestFailed {
+                        request_id,
+                        source: ErrorSource::Unspecified,
+                        error_code: Some(ERR_LIB_INTERNAL_ERROR),
+                        reason: "wt_session resolve failed".into(),
+                    });
+                    return effects;
+                };
+                init_data.wt_available_protocols.clone()
             };
 
             let status_str = find_header_str(&headers, ":status");
@@ -751,7 +834,7 @@ impl Connection {
                     .and_then(|key| find_header(&headers, key))
                     .and_then(|val| parse_wt_protocol_string(&val));
 
-                if let Some(ref requested_protos) = init_data.wt_available_protocols {
+                if let Some(ref requested_protos) = wt_available_protocols {
                     let is_valid = match wt_protocol {
                         Some(ref negotiated) => requested_protos.contains(negotiated),
                         None => false,
@@ -775,66 +858,78 @@ impl Connection {
                         if stream_ended {
                             effects.extend(self.recv_connect_close(stream_id, now));
                         }
-                        effects.push(Effect::NotifyRequestFailed {
-                            request_id,
-                            source: ErrorSource::Session,
-                            error_code: Some(ERR_WT_ALPN_ERROR),
-                            reason: reason.into(),
-                        });
-                        effects.push(Effect::StopQuicStream {
-                            stream_id,
-                            error_code: ERR_WT_ALPN_ERROR,
-                        });
-                        effects.push(Effect::ResetQuicStream {
-                            stream_id,
-                            error_code: ERR_WT_ALPN_ERROR,
-                        });
+                        if let Some(session) = self.sessions.get_mut(&stream_id) {
+                            effects.extend(session.abort(ERR_WT_ALPN_ERROR, reason.into(), now));
+                        } else {
+                            self.pending_session_configs.remove(&request_id);
+                            effects.push(Effect::NotifyRequestFailed {
+                                request_id,
+                                source: ErrorSource::Session,
+                                error_code: Some(ERR_WT_ALPN_ERROR),
+                                reason: reason.into(),
+                            });
+                            effects.push(Effect::StopQuicStream {
+                                stream_id,
+                                error_code: ERR_WT_ALPN_ERROR,
+                            });
+                            effects.push(Effect::ResetQuicStream {
+                                stream_id,
+                                error_code: ERR_WT_ALPN_ERROR,
+                            });
+                        }
                         return effects;
                     }
                 }
 
-                let session = Session::new(
-                    stream_id,
-                    init_data.path.clone(),
-                    init_data.headers.clone(),
-                    wt_protocol.clone(),
-                    SessionState::Connected,
-                    self.is_client,
-                    SessionParams {
-                        flow_control_negotiated: self.has_flow_control(),
-                        flow_control_window: self.flow_control_window,
-                        initial_max_data: self.initial_max_data,
-                        initial_max_streams_bidi: self.initial_max_streams_bidi,
-                        initial_max_streams_uni: self.initial_max_streams_uni,
-                        max_stream_read_buffer_size: self.max_stream_read_buffer_size,
-                        max_stream_write_buffer_size: self.max_stream_write_buffer_size,
-                        peer_max_data: self.peer_initial_max_data,
-                        peer_max_streams_bidi: self.peer_initial_max_streams_bidi,
-                        peer_max_streams_uni: self.peer_initial_max_streams_uni,
-                    },
-                    init_data.created_at,
-                );
-                self.sessions.insert(stream_id, session);
+                if let Some(session) = self.sessions.get_mut(&stream_id) {
+                    effects.extend(session.confirm(wt_protocol, now));
+                } else if let Some(init_data) = self.pending_session_configs.remove(&request_id) {
+                    let session = Session::new(
+                        stream_id,
+                        init_data.path.clone(),
+                        init_data.headers.clone(),
+                        wt_protocol.clone(),
+                        SessionState::Connected,
+                        self.is_client,
+                        SessionParams {
+                            flow_control_negotiated: self.has_flow_control(),
+                            flow_control_window: self.flow_control_window,
+                            initial_max_data: self.initial_max_data,
+                            initial_max_streams_bidi: self.initial_max_streams_bidi,
+                            initial_max_streams_uni: self.initial_max_streams_uni,
+                            max_pending_capsules: self.max_pending_capsules,
+                            max_pending_datagrams: self.max_pending_datagrams,
+                            max_pending_streams: self.max_pending_streams,
+                            max_stream_read_buffer_size: self.max_stream_read_buffer_size,
+                            max_stream_write_buffer_size: self.max_stream_write_buffer_size,
+                            peer_max_data: self.peer_initial_max_data,
+                            peer_max_streams_bidi: self.peer_initial_max_streams_bidi,
+                            peer_max_streams_uni: self.peer_initial_max_streams_uni,
+                        },
+                        init_data.created_at,
+                    );
+                    self.sessions.insert(stream_id, session);
 
-                effects.push(Effect::EmitSessionEvent {
-                    session_id: stream_id,
-                    event_type: EventType::SessionReady,
-                    path: Some(init_data.path),
-                    headers: Some(init_data.headers),
-                    wt_available_protocols: None,
-                    wt_protocol,
-                    data: None,
-                    is_unidirectional: None,
-                    max_data: None,
-                    max_streams: None,
-                    ready_at: Some(now),
-                    error_code: None,
-                    reason: None,
-                });
-                effects.push(Effect::NotifyRequestDone {
-                    request_id,
-                    result: RequestResult::SessionId(stream_id),
-                });
+                    effects.push(Effect::EmitSessionEvent {
+                        session_id: stream_id,
+                        event_type: EventType::SessionReady,
+                        path: Some(init_data.path),
+                        headers: Some(init_data.headers),
+                        wt_available_protocols: None,
+                        wt_protocol,
+                        data: None,
+                        is_unidirectional: None,
+                        max_data: None,
+                        max_streams: None,
+                        ready_at: Some(now),
+                        error_code: None,
+                        reason: None,
+                    });
+                    effects.push(Effect::NotifyRequestDone {
+                        request_id,
+                        result: RequestResult::SessionId(stream_id),
+                    });
+                }
 
                 if let Some(events) = self.early_event_buffer.remove(&stream_id) {
                     if self.early_event_count >= events.len() {
@@ -859,12 +954,22 @@ impl Connection {
                     self.early_event_count -= events.len();
                 }
 
-                effects.push(Effect::NotifyRequestFailed {
-                    request_id,
-                    source: ErrorSource::Session,
-                    error_code: Some(ERR_H3_REQUEST_REJECTED),
-                    reason: "wt_session abort".into(),
-                });
+                self.pending_session_configs.remove(&request_id);
+
+                if let Some(session) = self.sessions.get_mut(&stream_id) {
+                    effects.extend(session.abort(
+                        ERR_H3_REQUEST_REJECTED,
+                        "wt_session abort".into(),
+                        now,
+                    ));
+                } else {
+                    effects.push(Effect::NotifyRequestFailed {
+                        request_id,
+                        source: ErrorSource::Session,
+                        error_code: Some(ERR_H3_REQUEST_REJECTED),
+                        reason: "wt_session abort".into(),
+                    });
+                }
             }
         } else {
             if self.sessions.contains_key(&stream_id) {
@@ -980,6 +1085,9 @@ impl Connection {
                     initial_max_data: self.initial_max_data,
                     initial_max_streams_bidi: self.initial_max_streams_bidi,
                     initial_max_streams_uni: self.initial_max_streams_uni,
+                    max_pending_capsules: self.max_pending_capsules,
+                    max_pending_datagrams: self.max_pending_datagrams,
+                    max_pending_streams: self.max_pending_streams,
                     max_stream_read_buffer_size: self.max_stream_read_buffer_size,
                     max_stream_write_buffer_size: self.max_stream_write_buffer_size,
                     peer_max_data: self.peer_initial_max_data,
@@ -1353,6 +1461,7 @@ impl Connection {
 
         self.pending_session_configs.clear();
         self.pending_requests.clear();
+        self.pending_wt_available_protocols.clear();
 
         let mut session_ids: Vec<SessionId> = self.sessions.keys().copied().collect();
         session_ids.sort_unstable();
@@ -1469,6 +1578,9 @@ pub(super) struct ConnectionParams {
     pub(super) initial_max_data: u64,
     pub(super) initial_max_streams_bidi: u64,
     pub(super) initial_max_streams_uni: u64,
+    pub(super) max_pending_capsules: u64,
+    pub(super) max_pending_datagrams: u64,
+    pub(super) max_pending_streams: u64,
     pub(super) max_session_pending_events: u64,
     pub(super) max_sessions: u64,
     pub(super) max_stream_read_buffer_size: u64,
@@ -1481,6 +1593,7 @@ pub(super) struct ConnectionParams {
 struct SessionInitData {
     created_at: f64,
     headers: Headers,
+    optimistic: bool,
     path: String,
     wt_available_protocols: Option<Vec<String>>,
 }

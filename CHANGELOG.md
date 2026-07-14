@@ -11,6 +11,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(No planned changes for the next release yet.)_
 
+## [0.20.0] - 2026-07-14
+
+This release marks the definitive alignment of the implementation with the `draft-ietf-webtrans-http3-16` specification, introducing optimistic session establishment with bounded pending-queue buffering and migrating flow control, settings, and termination semantics to the updated normative requirements. It additionally hardens the software supply chain across build and CI environments.
+
+### Added
+
+- **Optimistic Session Establishment**: Introduced an optimistic client establishment path, exposing `connect_optimistic()`, `create_session_optimistic()`, and `ensure_ready()`. Sessions are instantiated in the `Connecting` state upon CONNECT stream binding, surfaced via a new `SESSION_PENDING` event, and resolved to user handles before the CONNECT response arrives, permitting stream creation and data transmission while awaiting confirmation (Draft-16, Sec. 3.2 & 4.6).
+- **Pending Queue Buffering**: Implemented per-session buffering of capsules, datagrams, and streams received prior to session confirmation, bounded by the new `max_pending_capsules`, `max_pending_datagrams`, and `max_pending_streams` configuration limits. Overflow enforcement rejects streams with `WT_BUFFERED_STREAM_REJECTED`, drops datagrams, and terminates sessions with `H3_EXCESSIVE_LOAD`. Deferred `StreamOpened` emission and confirmation-time replay guarantee that no stream event precedes its opening notification (Draft-16, Sec. 4.6).
+- **Supply Chain Auditing**: Integrated `cargo-deny` and `pip-audit` into continuous integration pipelines to enforce license compliance, block wildcard dependencies, and prevent known CVEs.
+
+### Changed
+
+- **Flow Control Capsule Semantics**: Migrated to the strictly monotonic limit progression model. `WT_MAX_DATA` and `WT_MAX_STREAMS` capsules that do not increase the previously received limit now terminate the session with `WT_FLOW_CONTROL_ERROR`, superseding the former tolerance of equal values. Remapped the error code for Maximum Streams values exceeding 2^60 from `H3_DATAGRAM_ERROR` to `WT_FLOW_CONTROL_ERROR` and extended payload validation to `WT_STREAMS_BLOCKED` capsules (Draft-16, Sec. 5.6.2-5.6.4).
+- **Session Termination Semantics**: Adopted the newly specified receiver dispositions for `WT_CLOSE_SESSION` capsules. Reason strings exceeding 1024 bytes or containing invalid UTF-8 now terminate the session with `H3_MESSAGE_ERROR` instead of undergoing lossy truncation, and receipt is now acknowledged with a `STOP_SENDING` carrying `WT_SESSION_GONE` (Draft-16, Sec. 6).
+- **Graceful Shutdown Semantics**: Permitted datagram transmission during the `Draining` state in accordance with the explicit allowance introduced for draining sessions (Draft-16, Sec. 4.7).
+- **Settings Validation**: Enforced client-side rejection of `SETTINGS_WT_ENABLED` values greater than 1 as an `H3_SETTINGS_ERROR` connection error (Draft-16, Sec. 3.1).
+- **Session Rejection Status**: Aligned the application framework's unrouted session rejection status with the updated specification, responding with status 405 instead of 404 (Draft-16, Sec. 3.2).
+- **Session Lifecycle Guards**: Synchronized session state validation with the introduced `Connecting` lifecycle, adding a uniform guard to the stream send path, enforcing idempotent terminal-state handling in session aborts, and cascading stream teardown upon rejection to cover streams buffered prior to the accept decision.
+- **FFI Contract**: Incremented `ABI_VERSION` to 7 to accommodate the `USER_CREATE_SESSION_OPTIMISTIC` opcode insertion and the consequent renumbering of subsequent user opcodes.
+- **TLS Material Loading**: Modernized certificate and private key file loading in the Rust engine by adopting the `PemObject` trait, eliminating deprecated stream APIs and the `rustls-pemfile` dependency.
+- **Toolchain Synchronization**: Upgraded the global Rust compiler toolchain across CI workflows, Read the Docs configuration, and local development environments.
+- **Dependency Maintenance**: Upgraded the QUIC protocol state machine (`quinn-proto`), indirect cryptographic dependencies, and the vendored `ls-qpack` C library for HTTP/3 header compression to current secure versions.
+- **Contribution Governance**: Revised contribution guidelines and security policies to mandate local auditing and document the CI supply chain enforcement.
+
+### Fixed
+
+- **Session Termination Compliance**: Enforced the pre-existing mandate to close or reset the CONNECT stream upon receiving a `WT_CLOSE_SESSION` capsule, responding with a FIN, and reset the stream with `H3_MESSAGE_ERROR` when capsules arrive after closure.
+
 ## [0.19.1] - 2026-06-27
 
 This release focuses on optimizing the I/O reactor hot path for high-throughput transmission, redefining testing boundaries for deterministic execution, and decoupling the CI/CD architecture.
@@ -1005,7 +1033,8 @@ This is a major release focused on enhancing runtime safety and modernizing the 
 - cryptography (>=45.0.4,<46.0.0) for SSL/TLS operations
 - typing-extensions (>=4.14.0,<5.0.0) for Python <3.10 support
 
-[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.19.1...HEAD
+[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/wtransport/pywebtransport/compare/v0.19.1...v0.20.0
 [0.19.1]: https://github.com/wtransport/pywebtransport/compare/v0.19.0...v0.19.1
 [0.19.0]: https://github.com/wtransport/pywebtransport/compare/v0.18.1...v0.19.0
 [0.18.1]: https://github.com/wtransport/pywebtransport/compare/v0.18.0...v0.18.1

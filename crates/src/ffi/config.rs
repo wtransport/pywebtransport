@@ -23,6 +23,9 @@ impl<'a> TryFrom<&Bound<'a, PyAny>> for RustBaseConfig {
         let max_capsule_size: u64 = conf.getattr("max_capsule_size")?.extract()?;
         let max_datagram_size: u64 = conf.getattr("max_datagram_size")?.extract()?;
         let max_field_section_size: u64 = conf.getattr("max_field_section_size")?.extract()?;
+        let max_pending_capsules: u64 = conf.getattr("max_pending_capsules")?.extract()?;
+        let max_pending_datagrams: u64 = conf.getattr("max_pending_datagrams")?.extract()?;
+        let max_pending_streams: u64 = conf.getattr("max_pending_streams")?.extract()?;
         let max_session_pending_events: u64 =
             conf.getattr("max_session_pending_events")?.extract()?;
         let max_sessions: u64 = conf.getattr("max_sessions")?.extract()?;
@@ -56,6 +59,9 @@ impl<'a> TryFrom<&Bound<'a, PyAny>> for RustBaseConfig {
             max_capsule_size,
             max_datagram_size,
             max_field_section_size,
+            max_pending_capsules,
+            max_pending_datagrams,
+            max_pending_streams,
             max_session_pending_events,
             max_sessions,
             max_stream_read_buffer_size,

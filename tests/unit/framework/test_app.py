@@ -170,7 +170,7 @@ class TestServerApp:
 
         await app._dispatch_to_handler(session=mock_session)
 
-        mock_session.reject.assert_awaited_once_with(status_code=404)
+        mock_session.reject.assert_awaited_once_with(status_code=405)
 
     @pytest.mark.asyncio
     async def test_dispatch_to_handler_no_task_group(

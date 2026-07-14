@@ -1,7 +1,7 @@
 //! X509 certificate generation loading and validation subsystem.
 
-use std::fs::{self, File};
-use std::io::{self, BufReader};
+use std::fs;
+use std::io;
 use std::net::IpAddr;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -14,7 +14,7 @@ use rcgen::{
     Issuer, KeyPair, KeyUsagePurpose, SanType,
 };
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime, pem::PemObject};
 use rustls::{DigitallySignedStruct, Error as RustlsError, SignatureScheme};
 use time::{Duration, OffsetDateTime};
 
@@ -124,19 +124,15 @@ pub(crate) fn generate_self_signed_cert(
 
 // Extracts PEM certificate chains from the filesystem.
 pub(crate) fn load_certs(path: &Path) -> io::Result<Vec<CertificateDer<'static>>> {
-    let file = File::open(path)?;
-    let mut reader = BufReader::new(file);
-
-    rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()
+    CertificateDer::pem_file_iter(path)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
+        .map(|res| res.map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e)))
+        .collect::<Result<Vec<_>, _>>()
 }
 
 // Extracts a PEM private key from the filesystem.
 pub(crate) fn load_private_key(path: &Path) -> io::Result<PrivateKeyDer<'static>> {
-    let file = File::open(path)?;
-    let mut reader = BufReader::new(file);
-
-    rustls_pemfile::private_key(&mut reader)?
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "cfg_keyfile resolve failed"))
+    PrivateKeyDer::from_pem_file(path).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
 // Root CA parameter construction.

@@ -142,6 +142,7 @@ class TestWebTransportClient:
             conn.events = mocker.MagicMock()
             conn.events.wait_for = mocker.AsyncMock()
             conn.create_session = mocker.AsyncMock(return_value=mock_session)
+            conn.create_session_optimistic = mocker.AsyncMock(return_value=mock_session)
             conn.close = mocker.AsyncMock()
             return conn
 
@@ -192,6 +193,7 @@ class TestWebTransportClient:
         connection.events = mocker.MagicMock()
         connection.events.wait_for = mocker.AsyncMock()
         connection.create_session = mocker.AsyncMock(return_value=mock_session)
+        connection.create_session_optimistic = mocker.AsyncMock(return_value=mock_session)
         connection.close = mocker.AsyncMock()
 
         return connection
@@ -769,6 +771,40 @@ class TestWebTransportClient:
         assert session is mock_session
         await asyncio.sleep(delay=0.01)
         conn3.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_connect_optimistic_success(
+        self,
+        client: WebTransportClient,
+        mock_controller_cls: Any,
+        mock_connection_cls: Any,
+        mock_controller: Any,
+        mock_connection_manager: Any,
+        mock_webtransport_connection: Any,
+        mock_session: Any,
+        mocker: MockerFixture,
+    ) -> None:
+        mocker.patch(target="time.perf_counter", side_effect=[2000.0, 2001.23])
+
+        session = await client.connect_optimistic(url="https://example.com")
+
+        mock_controller_cls.assert_called_once()
+        mock_controller.connect.assert_awaited_once_with(
+            remote_host="192.0.2.1", remote_port=443, server_name="example.com"
+        )
+        mock_connection_cls.assert_called_once()
+
+        mock_webtransport_connection.create_session_optimistic.assert_awaited_once()
+        mock_webtransport_connection.create_session.assert_not_called()
+
+        _, session_kwargs = mock_webtransport_connection.create_session_optimistic.call_args
+        assert session_kwargs["authority"] == "example.com"
+        assert session_kwargs["path"] == "/"
+
+        assert session is mock_session
+        stats = client._stats
+        assert stats.connections_successful == 1
+        assert stats.total_connect_time == pytest.approx(expected=1.23)
 
     @pytest.mark.asyncio
     async def test_connect_success(

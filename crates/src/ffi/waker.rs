@@ -16,7 +16,7 @@ mod sys {
     #[inline]
     pub(super) fn write_waker(fd: usize) -> io::Result<()> {
         let raw_fd = RawFd::try_from(fd)
-            .map_err(|_e| io::Error::new(io::ErrorKind::InvalidInput, "sys_fd convert invalid "))?;
+            .map_err(|_e| io::Error::new(io::ErrorKind::InvalidInput, "sys_fd convert invalid"))?;
 
         let mut file = ManuallyDrop::new(unsafe { File::from_raw_fd(raw_fd) });
 

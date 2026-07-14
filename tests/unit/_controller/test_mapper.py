@@ -41,6 +41,16 @@ class TestMapper:
                 (abi.USER_CREATE_SESSION, (5, "localhost", "/test", {b":method": b"CONNECT"}, ["h3"])),
             ),
             (
+                events.UserCreateSessionOptimistic(
+                    request_id=55,
+                    authority="localhost",
+                    path="/test",
+                    headers={b":method": b"CONNECT"},
+                    wt_available_protocols=["h3"],
+                ),
+                (abi.USER_CREATE_SESSION_OPTIMISTIC, (55, "localhost", "/test", {b":method": b"CONNECT"}, ["h3"])),
+            ),
+            (
                 events.UserCreateStream(request_id=6, session_id=10, is_unidirectional=True),
                 (abi.USER_CREATE_STREAM, (6, 10, True)),
             ),

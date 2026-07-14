@@ -32,6 +32,9 @@ from pywebtransport.constants import (
     DEFAULT_MAX_DATAGRAM_SIZE,
     DEFAULT_MAX_EVENT_LISTENERS,
     DEFAULT_MAX_FIELD_SECTION_SIZE,
+    DEFAULT_MAX_PENDING_CAPSULES,
+    DEFAULT_MAX_PENDING_DATAGRAMS,
+    DEFAULT_MAX_PENDING_STREAMS,
     DEFAULT_MAX_SESSION_PENDING_EVENTS,
     DEFAULT_MAX_SESSIONS,
     DEFAULT_MAX_STREAM_READ_BUFFER_SIZE,
@@ -84,6 +87,9 @@ class BaseConfig(ABC):
     max_datagram_size: int = DEFAULT_MAX_DATAGRAM_SIZE
     max_event_listeners: int = DEFAULT_MAX_EVENT_LISTENERS
     max_field_section_size: int = DEFAULT_MAX_FIELD_SECTION_SIZE
+    max_pending_capsules: int = DEFAULT_MAX_PENDING_CAPSULES
+    max_pending_datagrams: int = DEFAULT_MAX_PENDING_DATAGRAMS
+    max_pending_streams: int = DEFAULT_MAX_PENDING_STREAMS
     max_session_pending_events: int = DEFAULT_MAX_SESSION_PENDING_EVENTS
     max_sessions: int = DEFAULT_MAX_SESSIONS
     max_stream_read_buffer_size: int = DEFAULT_MAX_STREAM_READ_BUFFER_SIZE
@@ -283,6 +289,27 @@ class BaseConfig(ABC):
                 message=f"cfg_max_field_section_size validate invalid actual={self.max_field_section_size}",
                 config_key="max_field_section_size",
                 config_value=self.max_field_section_size,
+            )
+
+        if self.max_pending_capsules <= 0:
+            raise ConfigurationError(
+                message=f"cfg_max_pending_capsules validate invalid actual={self.max_pending_capsules}",
+                config_key="max_pending_capsules",
+                config_value=self.max_pending_capsules,
+            )
+
+        if self.max_pending_datagrams <= 0:
+            raise ConfigurationError(
+                message=f"cfg_max_pending_datagrams validate invalid actual={self.max_pending_datagrams}",
+                config_key="max_pending_datagrams",
+                config_value=self.max_pending_datagrams,
+            )
+
+        if self.max_pending_streams <= 0:
+            raise ConfigurationError(
+                message=f"cfg_max_pending_streams validate invalid actual={self.max_pending_streams}",
+                config_key="max_pending_streams",
+                config_value=self.max_pending_streams,
             )
 
         if self.max_session_pending_events <= 0:

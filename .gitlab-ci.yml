@@ -2,6 +2,7 @@
 
 stages:
   - lint
+  - audit
   - test
   - delivery
 
@@ -33,7 +34,7 @@ lint:
     - update-ca-certificates
     - sed -i -e "s|http://deb.debian.org/debian-security|$APT_SECURITY_PROXY_URL|g" -e "s|http://deb.debian.org/debian|$APT_PROXY_URL|g" /etc/apt/sources.list.d/debian.sources
     - apt-get update && apt-get install -y curl build-essential clang
-    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.1
+    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.96.1
     - export PATH="$CARGO_HOME/bin:$PATH"
     - python -m pip install --upgrade pip
     - pip install -r dev-requirements.txt
@@ -44,6 +45,34 @@ lint:
     - flake8 src tests
     - mypy src tests
     - cargo clippy --manifest-path crates/Cargo.toml -- -D warnings
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH == "main"'
+    - when: never
+
+audit:
+  stage: audit
+  image: python:3.14-slim-trixie
+  cache:
+    key: "$CI_JOB_NAME_SLUG"
+    paths:
+      - .cache/pip
+      - .cargo/registry
+  needs:
+    - lint
+  dependencies: []
+  before_script:
+    - cp "$INTERNAL_CA_CERT" /usr/local/share/ca-certificates/internal_ca.crt
+    - update-ca-certificates
+    - sed -i -e "s|http://deb.debian.org/debian-security|$APT_SECURITY_PROXY_URL|g" -e "s|http://deb.debian.org/debian|$APT_PROXY_URL|g" /etc/apt/sources.list.d/debian.sources
+    - apt-get update && apt-get install -y curl git
+    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.96.1
+    - export PATH="$CARGO_HOME/bin:$PATH"
+    - python -m pip install --upgrade pip
+    - pip install pip-audit
+    - curl -fsSL https://github.com/EmbarkStudios/cargo-deny/releases/download/0.19.9/cargo-deny-0.19.9-x86_64-unknown-linux-musl.tar.gz | tar xz --wildcards --strip-components=1 -C /usr/local/bin '*/cargo-deny'
+  script:
+    - cargo deny --manifest-path crates/Cargo.toml check
+    - pip-audit -r dev-requirements.txt
   rules:
     - if: '$CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH == "main"'
     - when: never
@@ -61,14 +90,14 @@ test:
       - .cargo/registry
       - crates/target/
   needs:
-    - lint
+    - audit
   dependencies: []
   before_script:
     - cp "$INTERNAL_CA_CERT" /usr/local/share/ca-certificates/internal_ca.crt
     - update-ca-certificates
     - sed -i -e "s|http://deb.debian.org/debian-security|$APT_SECURITY_PROXY_URL|g" -e "s|http://deb.debian.org/debian|$APT_PROXY_URL|g" /etc/apt/sources.list.d/debian.sources
     - apt-get update && apt-get install -y curl build-essential clang
-    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.1
+    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.96.1
     - export PATH="$CARGO_HOME/bin:$PATH"
     - python -m pip install --upgrade pip
     - pip install -r dev-requirements.txt
@@ -89,6 +118,7 @@ delivery:
   cache: []
   needs:
     - lint
+    - audit
     - test
   dependencies: []
   before_script:

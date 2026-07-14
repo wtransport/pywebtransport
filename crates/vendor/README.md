@@ -4,7 +4,7 @@ This directory contains third-party source code vendored to ensure hermetic buil
 
 | Component | Version | License      | Source URL                                |
 | :-------- | :------ | :----------- | :---------------------------------------- |
-| ls-qpack  | 2.6.2   | MIT          | https://github.com/litespeedtech/ls-qpack |
+| ls-qpack  | 2.6.5   | MIT          | https://github.com/litespeedtech/ls-qpack |
 | xxHash    | 0.8.3   | BSD 2-Clause | https://github.com/Cyan4973/xxHash        |
 
 **License Compliance**:

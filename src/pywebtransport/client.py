@@ -167,6 +167,63 @@ class WebTransportClient(EventEmitter):
         timeout: float | None = None,
     ) -> WebTransportSession:
         """Establish a WebTransport session."""
+        return await self._establish_connection(
+            url=url,
+            headers=headers,
+            wt_available_protocols=wt_available_protocols,
+            optimistic=False,
+            timeout=timeout,
+        )
+
+    async def connect_optimistic(
+        self,
+        *,
+        url: str,
+        headers: Headers | None = None,
+        wt_available_protocols: list[str] | None = None,
+        timeout: float | None = None,
+    ) -> WebTransportSession:
+        """Optimistically establish a WebTransport session."""
+        return await self._establish_connection(
+            url=url,
+            headers=headers,
+            wt_available_protocols=wt_available_protocols,
+            optimistic=True,
+            timeout=timeout,
+        )
+
+    async def diagnostics(self) -> ClientDiagnostics:
+        """Retrieve a snapshot of the client's diagnostics and statistics."""
+        connections = await self._connection_manager.get_all_resources()
+        state_counts = Counter(conn.state for conn in connections)
+
+        return ClientDiagnostics(connection_states=dict(state_counts), stats=self._stats)
+
+    def set_default_headers(self, *, headers: Headers) -> None:
+        """Configure default headers for all subsequent connections."""
+        self._default_headers = _merge_headers(base=[], update=headers)
+
+    async def _close_implementation(self) -> None:
+        """Execute the internal client closure process."""
+        _logger.info("app_client drain")
+        self._closed = True
+        await self._connection_manager.shutdown()
+
+        if self._controller is not None:
+            await self._controller.close()
+
+        _logger.info("app_client close")
+
+    async def _establish_connection(
+        self,
+        *,
+        url: str,
+        headers: Headers | None,
+        wt_available_protocols: list[str] | None,
+        optimistic: bool,
+        timeout: float | None,
+    ) -> WebTransportSession:
+        """Resolve, race, and establish a WebTransport session for the target URL."""
         if self._closed:
             raise ClientError(message="app_client validate failed")
 
@@ -221,12 +278,20 @@ class WebTransportClient(EventEmitter):
 
                 await self._connection_manager.add_connection(connection=connection)
 
-                session = await connection.create_session(
-                    authority=target.authority,
-                    path=target.path,
-                    headers=normalized_headers,
-                    wt_available_protocols=effective_wt_available_protocols,
-                )
+                if optimistic:
+                    session = await connection.create_session_optimistic(
+                        authority=target.authority,
+                        path=target.path,
+                        headers=normalized_headers,
+                        wt_available_protocols=effective_wt_available_protocols,
+                    )
+                else:
+                    session = await connection.create_session(
+                        authority=target.authority,
+                        path=target.path,
+                        headers=normalized_headers,
+                        wt_available_protocols=effective_wt_available_protocols,
+                    )
 
                 elapsed = time.perf_counter() - start_time
                 self._update_success_stats(connect_time=elapsed)
@@ -251,28 +316,6 @@ class WebTransportClient(EventEmitter):
         finally:
             if not success and connection is not None and not connection.is_closed:
                 await connection.close()
-
-    async def diagnostics(self) -> ClientDiagnostics:
-        """Retrieve a snapshot of the client's diagnostics and statistics."""
-        connections = await self._connection_manager.get_all_resources()
-        state_counts = Counter(conn.state for conn in connections)
-
-        return ClientDiagnostics(connection_states=dict(state_counts), stats=self._stats)
-
-    def set_default_headers(self, *, headers: Headers) -> None:
-        """Configure default headers for all subsequent connections."""
-        self._default_headers = _merge_headers(base=[], update=headers)
-
-    async def _close_implementation(self) -> None:
-        """Execute the internal client closure process."""
-        _logger.info("app_client drain")
-        self._closed = True
-        await self._connection_manager.shutdown()
-
-        if self._controller is not None:
-            await self._controller.close()
-
-        _logger.info("app_client close")
 
     async def _race_addresses(
         self, *, addresses: list[str], port: int, host: str, conn_config: ClientConfig
@@ -446,7 +489,7 @@ async def _resolve_host(*, host: str, port: int = 0) -> list[str]:
 
         resolved_ips: list[str] = []
         for info in infos:
-            ip = info[4][0]
+            ip = str(info[4][0])
             if ip not in resolved_ips:
                 resolved_ips.append(ip)
         return resolved_ips

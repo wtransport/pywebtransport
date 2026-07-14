@@ -76,6 +76,18 @@ pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         constants::DEFAULT_MAX_FIELD_SECTION_SIZE,
     )?;
     m.add(
+        "DEFAULT_MAX_PENDING_CAPSULES",
+        constants::DEFAULT_MAX_PENDING_CAPSULES,
+    )?;
+    m.add(
+        "DEFAULT_MAX_PENDING_DATAGRAMS",
+        constants::DEFAULT_MAX_PENDING_DATAGRAMS,
+    )?;
+    m.add(
+        "DEFAULT_MAX_PENDING_STREAMS",
+        constants::DEFAULT_MAX_PENDING_STREAMS,
+    )?;
+    m.add(
         "DEFAULT_MAX_SESSION_PENDING_EVENTS",
         constants::DEFAULT_MAX_SESSION_PENDING_EVENTS,
     )?;

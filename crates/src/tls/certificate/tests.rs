@@ -61,7 +61,7 @@ fn test_build_cert_params_utf8_hostname_rejection_failure() {
 #[test]
 fn test_generate_self_signed_cert_io_operations_success() {
     let temp_dir = std::env::temp_dir().join("pywebtransport_cert_gen_test");
-    let _ = fs::remove_dir_all(&temp_dir).ok();
+    drop(fs::remove_dir_all(&temp_dir));
     let hostname = "test-node";
 
     let res = generate_self_signed_cert(hostname, &temp_dir, 1);
@@ -89,14 +89,14 @@ fn test_generate_self_signed_cert_io_operations_success() {
     assert!(cert_content.contains("BEGIN CERTIFICATE"));
     assert!(key_content.contains("PRIVATE KEY"));
 
-    let _ = fs::remove_dir_all(&temp_dir).ok();
+    drop(fs::remove_dir_all(&temp_dir));
 }
 
 #[cfg(unix)]
 #[test]
 fn test_generate_self_signed_cert_key_permissions_unix_success() {
     let temp_dir = std::env::temp_dir().join("pywebtransport_perm_test");
-    let _ = fs::remove_dir_all(&temp_dir).ok();
+    drop(fs::remove_dir_all(&temp_dir));
     let hostname = "secure-node";
 
     let res = generate_self_signed_cert(hostname, &temp_dir, 1);
@@ -108,7 +108,7 @@ fn test_generate_self_signed_cert_key_permissions_unix_success() {
     let Ok((_, _, key_path_str)) = res else {
         return;
     };
-    let metadata_res = fs::metadata(&key_path_str);
+    let metadata_res = fs::metadata(key_path_str);
 
     if let Err(e) = &metadata_res {
         assert!(metadata_res.is_ok(), "Failed to read metadata: {e}");
@@ -119,7 +119,7 @@ fn test_generate_self_signed_cert_key_permissions_unix_success() {
 
     assert_eq!(mode & 0o777, 0o600);
 
-    let _ = fs::remove_dir_all(&temp_dir).ok();
+    drop(fs::remove_dir_all(&temp_dir));
 }
 
 #[rstest]

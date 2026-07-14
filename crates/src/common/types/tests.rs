@@ -35,6 +35,14 @@ fn test_event_type_traits_behavior_success() {
 
     assert_eq!(event, event_copy);
     assert_eq!(debug_output, "StreamOpened");
+
+    let pending_event = EventType::SessionPending;
+
+    let pending_copy = pending_event;
+    let pending_debug = format!("{pending_event:?}");
+
+    assert_eq!(pending_event, pending_copy);
+    assert_eq!(pending_debug, "SessionPending");
 }
 
 #[test]

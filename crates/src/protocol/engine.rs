@@ -27,6 +27,9 @@ pub(crate) struct EngineParams {
     pub(crate) initial_max_streams_uni: u64,
     pub(crate) max_capsule_size: u64,
     pub(crate) max_field_section_size: u64,
+    pub(crate) max_pending_capsules: u64,
+    pub(crate) max_pending_datagrams: u64,
+    pub(crate) max_pending_streams: u64,
     pub(crate) max_session_pending_events: u64,
     pub(crate) max_sessions: u64,
     pub(crate) max_stream_read_buffer_size: u64,
@@ -53,6 +56,9 @@ impl WebTransportEngine {
                 initial_max_data: params.initial_max_data,
                 initial_max_streams_bidi: params.initial_max_streams_bidi,
                 initial_max_streams_uni: params.initial_max_streams_uni,
+                max_pending_capsules: params.max_pending_capsules,
+                max_pending_datagrams: params.max_pending_datagrams,
+                max_pending_streams: params.max_pending_streams,
                 max_session_pending_events: params.max_session_pending_events,
                 max_sessions: params.max_sessions,
                 max_stream_read_buffer_size: params.max_stream_read_buffer_size,
@@ -380,6 +386,36 @@ impl WebTransportEngine {
                             path,
                             headers,
                             wt_available_protocols,
+                            false,
+                            now,
+                        ));
+                    }
+                }
+                ProtocolEvent::UserCreateSessionOptimistic {
+                    request_id,
+                    authority,
+                    path,
+                    headers,
+                    wt_available_protocols,
+                } => {
+                    if self.connection.is_client() && self.connection.is_pre_connected() {
+                        self.pending_user_actions.push_back(
+                            ProtocolEvent::UserCreateSessionOptimistic {
+                                request_id,
+                                authority,
+                                path,
+                                headers,
+                                wt_available_protocols,
+                            },
+                        );
+                    } else {
+                        new_effects.extend(self.connection.create_session(
+                            request_id,
+                            authority,
+                            path,
+                            headers,
+                            wt_available_protocols,
+                            true,
                             now,
                         ));
                     }
@@ -592,6 +628,7 @@ impl WebTransportEngine {
         while let Some(action) = self.pending_user_actions.pop_front() {
             let req_id = match action {
                 ProtocolEvent::UserCreateSession { request_id, .. }
+                | ProtocolEvent::UserCreateSessionOptimistic { request_id, .. }
                 | ProtocolEvent::UserCreateStream { request_id, .. } => Some(request_id),
                 _ => None,
             };

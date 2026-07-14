@@ -16,6 +16,7 @@ from pywebtransport._protocol.events import (
     UserCloseConnection,
     UserCloseConnectionGracefully,
     UserCreateSession,
+    UserCreateSessionOptimistic,
     UserGetConnectionDiagnostics,
 )
 from pywebtransport.config import ClientConfig, ServerConfig
@@ -199,36 +200,34 @@ class WebTransportConnection:
         wt_available_protocols: list[str] | None = None,
     ) -> WebTransportSession:
         """Initiate a new WebTransport session."""
-        if not self.is_client:
-            raise ConnectionError(message=f"wt_connection validate failed actual={self.is_client} expected=true")
-
-        try:
-            session_id = cast(
-                SessionId,
-                await self.execute_request(
-                    event_factory=lambda request_id: UserCreateSession(
-                        request_id=request_id,
-                        authority=authority,
-                        path=path,
-                        headers=headers if headers is not None else {},
-                        wt_available_protocols=wt_available_protocols,
-                    )
-                ),
+        return await self._resolve_session_handle(
+            event_factory=lambda request_id: UserCreateSession(
+                request_id=request_id,
+                authority=authority,
+                path=path,
+                headers=headers if headers is not None else {},
+                wt_available_protocols=wt_available_protocols,
             )
-        except (ConnectionError, asyncio.CancelledError):
-            raise
-        except asyncio.TimeoutError:
-            raise TimeoutError(message=f"wt_session create failed connection_handle={self._handle}") from None
-        except Exception as e:
-            raise SessionError.from_cause(
-                message=f"wt_session create failed connection_handle={self._handle}", cause=e
-            ) from e
+        )
 
-        session_handle = self._session_handles.get(session_id)
-        if session_handle is None:
-            raise SessionError(message=f"wt_session resolve failed session_id={session_id}", session_id=session_id)
-
-        return session_handle
+    async def create_session_optimistic(
+        self,
+        *,
+        authority: str,
+        path: str,
+        headers: Headers | None = None,
+        wt_available_protocols: list[str] | None = None,
+    ) -> WebTransportSession:
+        """Optimistically initiate a new WebTransport session."""
+        return await self._resolve_session_handle(
+            event_factory=lambda request_id: UserCreateSessionOptimistic(
+                request_id=request_id,
+                authority=authority,
+                path=path,
+                headers=headers if headers is not None else {},
+                wt_available_protocols=wt_available_protocols,
+            )
+        )
 
     async def diagnostics(self) -> ConnectionDiagnostics:
         """Retrieve diagnostic information about the connection."""
@@ -287,7 +286,7 @@ class WebTransportConnection:
             return
 
         create_handle = (not self.is_client and event_type == EventType.SESSION_REQUEST) or (
-            self.is_client and event_type == EventType.SESSION_READY
+            self.is_client and event_type in (EventType.SESSION_PENDING, EventType.SESSION_READY)
         )
 
         if create_handle and session_id not in self._session_handles:
@@ -378,25 +377,26 @@ class WebTransportConnection:
                 self._stream_handles.clear()
                 _logger.info("wt_connection close connection_handle=%d", self._handle)
 
-            if event_type in (EventType.SESSION_REQUEST, EventType.SESSION_READY):
+            if event_type in (EventType.SESSION_PENDING, EventType.SESSION_READY, EventType.SESSION_REQUEST):
                 self._handle_session_event(event_type=event_type, data=data)
 
             if event_type in (
-                EventType.SESSION_READY,
+                EventType.DATAGRAM_RECEIVED,
                 EventType.SESSION_CLOSED,
+                EventType.SESSION_DATA_BLOCKED,
                 EventType.SESSION_DRAINING,
                 EventType.SESSION_MAX_DATA_UPDATED,
                 EventType.SESSION_MAX_STREAMS_BIDI_UPDATED,
                 EventType.SESSION_MAX_STREAMS_UNI_UPDATED,
-                EventType.SESSION_DATA_BLOCKED,
+                EventType.SESSION_PENDING,
+                EventType.SESSION_READY,
                 EventType.SESSION_STREAMS_BLOCKED,
-                EventType.DATAGRAM_RECEIVED,
             ):
                 self._route_session_event(event_type=event_type, data=data)
             elif event_type in (
-                EventType.STREAM_OPENED,
-                EventType.STREAM_CLOSED,
                 EventType.STOP_SENDING_RECEIVED,
+                EventType.STREAM_CLOSED,
+                EventType.STREAM_OPENED,
                 EventType.STREAM_RESET_RECEIVED,
             ):
                 self._handle_stream_event(event_type=event_type, data=data)
@@ -409,6 +409,28 @@ class WebTransportConnection:
                 cause=e,
                 connection_handle=self._handle,
             ) from e
+
+    async def _resolve_session_handle(self, *, event_factory: Callable[[int], ProtocolEvent]) -> WebTransportSession:
+        """Resolve a session-creation request into its handle."""
+        if not self.is_client:
+            raise ConnectionError(message=f"wt_connection validate failed actual={self.is_client} expected=true")
+
+        try:
+            session_id = cast(SessionId, await self.execute_request(event_factory=event_factory))
+        except (ConnectionError, asyncio.CancelledError):
+            raise
+        except asyncio.TimeoutError:
+            raise TimeoutError(message=f"wt_session create failed connection_handle={self._handle}") from None
+        except Exception as e:
+            raise SessionError.from_cause(
+                message=f"wt_session create failed connection_handle={self._handle}", cause=e
+            ) from e
+
+        session_handle = self._session_handles.get(session_id)
+        if session_handle is None:
+            raise SessionError(message=f"wt_session resolve failed session_id={session_id}", session_id=session_id)
+
+        return session_handle
 
     def _route_session_event(self, *, event_type: EventType, data: dict[str, Any]) -> None:
         """Dispatch events to the appropriate session handle."""

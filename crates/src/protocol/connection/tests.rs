@@ -7,7 +7,7 @@ use super::*;
 use crate::common::constants::{
     ERR_H3_REQUEST_REJECTED, ERR_LIB_CONNECTION_STATE_ERROR, ERR_LIB_INTERNAL_ERROR,
     ERR_LIB_SESSION_STATE_ERROR, ERR_LIB_STREAM_STATE_ERROR, ERR_WT_BUFFERED_STREAM_REJECTED,
-    WT_CAPSULE_TYPE_DRAIN_SESSION,
+    WT_AVAILABLE_PROTOCOLS, WT_CAPSULE_TYPE_DRAIN_SESSION,
 };
 use crate::common::types::{ConnectionState, ErrorSource, EventType, Headers, StreamId};
 use crate::protocol::H3Settings;
@@ -24,6 +24,9 @@ fn fixture_client_connection() -> Connection {
             initial_max_data: 4 * 1024 * 1024,
             initial_max_streams_bidi: 10,
             initial_max_streams_uni: 10,
+            max_pending_capsules: 20,
+            max_pending_datagrams: 100,
+            max_pending_streams: 10,
             max_session_pending_events: 100,
             max_sessions: 10,
             max_stream_read_buffer_size: 1024 * 1024,
@@ -64,6 +67,9 @@ fn fixture_server_connection() -> Connection {
             initial_max_data: 4 * 1024 * 1024,
             initial_max_streams_bidi: 10,
             initial_max_streams_uni: 10,
+            max_pending_capsules: 20,
+            max_pending_datagrams: 100,
+            max_pending_streams: 10,
             max_session_pending_events: 100,
             max_sessions: 10,
             max_stream_read_buffer_size: 1024 * 1024,
@@ -216,6 +222,7 @@ fn test_client_create_session_limit_reached(
         "/".into(),
         fixture_headers.clone(),
         None,
+        false,
         1.0,
     );
 
@@ -225,6 +232,7 @@ fn test_client_create_session_limit_reached(
         "/".into(),
         fixture_headers,
         None,
+        false,
         1.0,
     );
 
@@ -253,6 +261,7 @@ fn test_client_create_session_no_flow_control_limit_reached(
         "/".into(),
         fixture_headers.clone(),
         None,
+        false,
         1.0,
     );
 
@@ -262,6 +271,7 @@ fn test_client_create_session_no_flow_control_limit_reached(
         "/".into(),
         fixture_headers,
         None,
+        false,
         1.0,
     );
 
@@ -289,6 +299,7 @@ fn test_client_create_session_peer_goaway_rejects(
         "/".into(),
         fixture_headers,
         None,
+        false,
         1.0,
     );
 
@@ -320,6 +331,7 @@ fn test_client_create_session_success(
         "/".into(),
         input_headers,
         None,
+        false,
         1.0,
     );
 
@@ -348,6 +360,7 @@ fn test_client_create_session_with_invalid_wt_available_protocols(
         "/".into(),
         fixture_headers,
         wt_available_protocols,
+        false,
         1.0,
     );
 
@@ -380,6 +393,7 @@ fn test_client_create_session_with_wt_available_protocols(
         "/".into(),
         fixture_headers,
         wt_available_protocols,
+        false,
         1.0,
     );
 
@@ -402,6 +416,7 @@ fn test_client_create_session_wrong_state(mut fixture_client_connection: Connect
         "/".into(),
         vec![],
         None,
+        false,
         1.0,
     );
 
@@ -428,6 +443,7 @@ fn test_client_recv_headers_completes_session(
         "/".into(),
         fixture_headers,
         None,
+        false,
         1.0,
     );
     let response_headers = vec![(Bytes::from_static(b":status"), Bytes::from_static(b"200"))];
@@ -498,6 +514,7 @@ fn test_client_recv_headers_rejects_non_200(
         "/".into(),
         fixture_headers,
         None,
+        false,
         1.0,
     );
     fixture_client_connection.recv_stream_data(0, 4, Bytes::from_static(b"early"), false, 1.5);
@@ -616,6 +633,7 @@ fn test_create_session_server_failure(mut fixture_server_connection: Connection)
         "/".into(),
         vec![],
         None,
+        false,
         1.0,
     );
 
@@ -706,6 +724,7 @@ fn test_export_keying_material_delegates(
         "/".into(),
         fixture_headers,
         None,
+        false,
         1.0,
     );
     let response_headers = vec![(Bytes::from_static(b":status"), Bytes::from_static(b"200"))];
@@ -742,6 +761,7 @@ fn test_fail_session_cleans_pending(mut fixture_client_connection: Connection) {
         "/".into(),
         vec![],
         None,
+        false,
         1.0,
     );
 

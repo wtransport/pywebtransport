@@ -20,6 +20,9 @@ fn create_test_engine(is_client: bool) -> WebTransportEngine {
         initial_max_streams_uni: 10,
         max_capsule_size: 65536,
         max_field_section_size: 65536,
+        max_pending_capsules: 20,
+        max_pending_datagrams: 100,
+        max_pending_streams: 10,
         max_session_pending_events: 100,
         max_sessions: 10,
         max_stream_read_buffer_size: 1024 * 1024,
@@ -38,6 +41,28 @@ fn fixture_engine_client() -> WebTransportEngine {
 #[fixture]
 fn fixture_engine_server() -> WebTransportEngine {
     create_test_engine(false)
+}
+
+#[rstest]
+fn test_buffer_create_session_optimistic_when_connecting(
+    mut fixture_engine_client: WebTransportEngine,
+) {
+    let event = ProtocolEvent::UserCreateSessionOptimistic {
+        request_id: 100,
+        authority: "localhost".into(),
+        path: "/".into(),
+        headers: vec![],
+        wt_available_protocols: None,
+    };
+
+    let effects = fixture_engine_client.handle_event(event, 0.0);
+
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::CreateH3Session { .. }))
+    );
+    assert_eq!(fixture_engine_client.pending_user_actions.len(), 1);
 }
 
 #[rstest]
@@ -197,8 +222,18 @@ fn test_connection_close_event_fails_pending_actions(
     fixture_engine_client.handle_event(create_session_event, 0.0);
     assert_eq!(fixture_engine_client.pending_user_actions.len(), 2);
 
-    let close_event = ProtocolEvent::UserCloseConnection {
+    let create_optimistic_event = ProtocolEvent::UserCreateSessionOptimistic {
         request_id: 3,
+        authority: "localhost".into(),
+        path: "/".into(),
+        headers: vec![],
+        wt_available_protocols: None,
+    };
+    fixture_engine_client.handle_event(create_optimistic_event, 0.0);
+    assert_eq!(fixture_engine_client.pending_user_actions.len(), 3);
+
+    let close_event = ProtocolEvent::UserCloseConnection {
+        request_id: 4,
         error_code: 0,
         reason: None,
     };
@@ -223,7 +258,7 @@ fn test_connection_close_event_fails_pending_actions(
             )
         })
         .count();
-    assert_eq!(failures, 2);
+    assert_eq!(failures, 3);
     assert!(fixture_engine_client.pending_user_actions.is_empty());
 }
 
@@ -673,6 +708,16 @@ fn test_replay_user_actions_on_handshake(mut fixture_engine_client: WebTransport
     fixture_engine_client.handle_event(create_event, 0.0);
     assert_eq!(fixture_engine_client.pending_user_actions.len(), 1);
 
+    let create_optimistic_event = ProtocolEvent::UserCreateSessionOptimistic {
+        request_id: 101,
+        authority: "localhost".into(),
+        path: "/".into(),
+        headers: vec![],
+        wt_available_protocols: None,
+    };
+    fixture_engine_client.handle_event(create_optimistic_event, 0.0);
+    assert_eq!(fixture_engine_client.pending_user_actions.len(), 2);
+
     let handshake_event = ProtocolEvent::TransportHandshakeCompleted;
     fixture_engine_client.handle_event(handshake_event, 0.1);
     assert!(fixture_engine_client.connection.is_pre_connected());
@@ -704,6 +749,17 @@ fn test_server_immediate_actions(mut fixture_engine_server: WebTransportEngine) 
 
     fixture_engine_server.handle_event(event, 0.0);
 
+    assert!(fixture_engine_server.pending_user_actions.is_empty());
+
+    let event_opt = ProtocolEvent::UserCreateSessionOptimistic {
+        request_id: 101,
+        authority: "localhost".into(),
+        path: "/".into(),
+        headers: vec![],
+        wt_available_protocols: None,
+    };
+
+    fixture_engine_server.handle_event(event_opt, 0.0);
     assert!(fixture_engine_server.pending_user_actions.is_empty());
 }
 

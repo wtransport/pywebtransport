@@ -4,7 +4,7 @@
 /*
 MIT License
 
-Copyright (c) 2018 - 2023 LiteSpeed Technologies Inc
+Copyright (c) 2018 - 2026 LiteSpeed Technologies Inc
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -2262,14 +2262,10 @@ enc_proc_header_ack (struct lsqpack_enc *enc, uint64_t stream_id)
         return -1;
 
     TAILQ_FOREACH(hinfo, &enc->qpe_all_hinfos, qhi_next_all)
-        if (stream_id == hinfo->qhi_stream_id)
+        if (stream_id == hinfo->qhi_stream_id
+                /* Can't ACK a header that is still being encoded: */
+                                    && hinfo != enc->qpe_cur_header.hinfo)
             break;
-
-    /*
-     * XXX if an ACK comes in while a header is being encoded, it will not
-     *     have any effect because the the `qhi_max_id` is 0 until the header
-     *     encoding is finished (see enc_end_header()).
-     */
 
     if (!hinfo)
         return -1;
@@ -2306,13 +2302,15 @@ enc_proc_ici (struct lsqpack_enc *enc, uint64_t ins_count)
         return -1;
     }
 
-    max_acked = (lsqpack_abs_id_t) ins_count + enc->qpe_last_ici;
-    if (max_acked > enc->qpe_ins_count)
+    /* Check validity of the increment, guarding for overflow */
+    if (ins_count > (uint64_t) enc->qpe_ins_count - enc->qpe_last_ici)
     {
-        E_DEBUG("ICI: max_acked %u is larger than number of inserts %u",
-            max_acked, enc->qpe_ins_count);
+        E_DEBUG("ICI: increment %"PRIu64" exceeds outstanding inserts (%u)",
+            ins_count, enc->qpe_ins_count - enc->qpe_last_ici);
         return -1;
     }
+
+    max_acked = (lsqpack_abs_id_t) ins_count + enc->qpe_last_ici;
 
     if (max_acked > enc->qpe_max_acked_id)
     {
@@ -2425,7 +2423,7 @@ lsqpack_dec_int (const unsigned char **src_p, const unsigned char *src_end,
                 return -2;
         }
     }
-    while (B & 0x80);
+    while ((B & 0x80) && M < 64);
 
     if (M <= 63 || (M == 70 && src[-1] <= 1 && (val & (1ull << 63))))
     {
@@ -2964,6 +2962,12 @@ lsqpack_dec_cleanup (struct lsqpack_dec *dec)
     {
         if (dec->qpd_enc_state.ctx_u.with_namref.entry)
             free(dec->qpd_enc_state.ctx_u.with_namref.entry);
+        if (dec->qpd_enc_state.ctx_u.with_namref.reffed_entry)
+        {
+            qdec_decref_entry(dec->qpd_enc_state.ctx_u.with_namref
+                                                        .reffed_entry);
+            dec->qpd_enc_state.ctx_u.with_namref.reffed_entry = NULL;
+        }
     }
     else if (dec->qpd_enc_state.resume >= DEI_WONR_READ_NAME_LEN
             && dec->qpd_enc_state.resume <= DEI_WONR_READ_VALUE_PLAIN)
@@ -3276,6 +3280,7 @@ header_out_write_value (struct lsqpack_dec *dec,
             struct header_block_read_ctx *read_ctx, size_t nwritten, int done)
 {
     struct lsxpack_header *xhdr;    /* Shorthand */
+    unsigned bytes_out;
     int r;
 
     read_ctx->hbrc_out.off += (unsigned)nwritten;
@@ -3304,9 +3309,10 @@ header_out_write_value (struct lsqpack_dec *dec,
                                             xhdr->val_len, xhdr->name_hash);
             xhdr->flags |= LSXPACK_NAMEVAL_HASH;
         }
+        bytes_out = xhdr->name_len + xhdr->val_len;
         r = dec->qpd_dh_if->dhi_process_header(read_ctx->hbrc_hblock, xhdr);
         if (r == 0)
-            dec->qpd_bytes_out += xhdr->name_len + xhdr->val_len;
+            dec->qpd_bytes_out += bytes_out;
         ++read_ctx->hbrc_header_count;
         memset(&read_ctx->hbrc_out, 0, sizeof(read_ctx->hbrc_out));
         if (r != 0)
@@ -3349,6 +3355,7 @@ header_out_grow_buf (struct lsqpack_dec *dec,
         return -1;
     if (read_ctx->hbrc_out.xhdr->val_len < need)
     {
+        /* XXX Unnecessary if dhi_prepare_decode() follows contract */
         D_INFO("allocated xhdr size (%zd) is smaller than requested (%zd)",
             (size_t) read_ctx->hbrc_out.xhdr->val_len, need);
         memset(&read_ctx->hbrc_out, 0, sizeof(read_ctx->hbrc_out));
@@ -3511,7 +3518,10 @@ lsqpack_huff_decode_full (const unsigned char *src, int src_len,
 
 
 #if LS_QPACK_USE_LARGE_TABLES
-static struct huff_decode_retval
+#if !LSQPACK_DEVEL_MODE
+static
+#endif
+struct huff_decode_retval
 lsqpack_huff_decode (const unsigned char *src, int src_len,
             unsigned char *dst, int dst_len,
             struct lsqpack_huff_decode_state *state, int final)
@@ -3669,6 +3679,10 @@ parse_header_data (struct lsqpack_dec *dec,
                                                         &DATA.dec_int_state);
             if (r == 0)
             {
+#if LSXPACK_MAX_STRLEN == UINT16_MAX
+                if (DATA.left > LSXPACK_MAX_STRLEN)
+                    RETURN_ERROR();
+#endif
                 if (DATA.left)
                 {
                     if (DATA.is_huffman)
@@ -3752,6 +3766,10 @@ parse_header_data (struct lsqpack_dec *dec,
                                                         &DATA.dec_int_state);
             if (r == 0)
             {
+#if LSXPACK_MAX_STRLEN == UINT16_MAX
+                if (DATA.left > LSXPACK_MAX_STRLEN)
+                    RETURN_ERROR();
+#endif
                 size = DATA.is_huffman ? DATA.left + DATA.left / 2 : DATA.left;
                 if (0 != header_out_begin_literal(dec, read_ctx, size,
                                                             DATA.is_never))
@@ -4354,19 +4372,7 @@ qdec_remove_overflow_entries (struct lsqpack_dec *dec)
 static void
 qdec_update_max_capacity (struct lsqpack_dec *dec, unsigned new_capacity)
 {
-    unsigned old_max_entries;
     dec->qpd_cur_max_capacity = new_capacity;
-    old_max_entries = dec->qpd_max_entries;
-    dec->qpd_max_entries = dec->qpd_cur_max_capacity / DYNAMIC_ENTRY_OVERHEAD;
-    if (old_max_entries != dec->qpd_max_entries)
-    {
-        if (dec->qpd_last_id == dec->qpd_largest_known_id
-            && dec->qpd_last_id == old_max_entries * 2 - 1)
-        {
-            dec->qpd_last_id = dec->qpd_max_entries * 2 - 1;
-            dec->qpd_largest_known_id = dec->qpd_max_entries * 2 - 1;
-        }
-    }
     qdec_remove_overflow_entries(dec);
 }
 
@@ -4652,6 +4658,8 @@ lsqpack_dec_enc_in (struct lsqpack_dec *dec, const unsigned char *buf,
                     WINR.name_len = WINR.reffed_entry->dte_name_len;
                     WINR.name = DTE_NAME(WINR.reffed_entry);
                 }
+                if (WINR.name_len > dec->qpd_cur_max_capacity)
+                    return -1;
                 /* This check accounts for the fact that Huffman-encoded string
                  * can shrink.
                  */
@@ -4867,6 +4875,8 @@ lsqpack_dec_enc_in (struct lsqpack_dec *dec, const unsigned char *buf,
                                                         &WONR.dec_int_state);
             if (r == 0)
             {
+                if (WONR.entry->dte_name_len > dec->qpd_cur_max_capacity)
+                    return -1;
                 /* This check accounts for the fact that Huffman-encoded string
                  * can shrink.
                  */
@@ -5396,6 +5406,15 @@ huff_decode_fast (const unsigned char *src, int src_len,
             };
     }
 
+    if (avail_bits >= 8)
+        /* Valid Huffman padding is at most 7 bits, else must be treated as
+         * malformed.  RFC 7541, Section 5.2.
+         */
+        return (struct huff_decode_retval) {
+            .status = HUFF_DEC_ERROR,
+            .n_dst  = 0,
+            .n_src  = 0,
+        };
     if (avail_bits > 0)
     {
         if (((1u << avail_bits) - 1) != (buf & ((1u << avail_bits) - 1)))

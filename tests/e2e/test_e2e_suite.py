@@ -51,6 +51,19 @@ from .test_08_protocol_negotiation import test_rogue_missing as run_08_rogue_mis
 from .test_09_tls_export import test_context_and_label_isolation as run_09_context_and_label_isolation
 from .test_09_tls_export import test_e2e_symmetry as run_09_e2e_symmetry
 from .test_09_tls_export import test_error_handling as run_09_error_handling
+from .test_10_optimistic_sending import test_optimistic_basic_connection as run_10_optimistic_basic_connection
+from .test_10_optimistic_sending import test_optimistic_early_datagram_send as run_10_optimistic_early_datagram_send
+from .test_10_optimistic_sending import (
+    test_optimistic_early_send_before_rejection as run_10_optimistic_early_send_before_rejection,
+)
+from .test_10_optimistic_sending import test_optimistic_early_stream_write as run_10_optimistic_early_stream_write
+from .test_10_optimistic_sending import test_optimistic_lifecycle_events as run_10_optimistic_lifecycle_events
+from .test_10_optimistic_sending import (
+    test_optimistic_rejection_via_ensure_ready as run_10_optimistic_rejection_via_ensure_ready,
+)
+from .test_10_optimistic_sending import test_server_buffers_early_stream_data as run_10_server_buffers_early_stream_data
+from .test_10_optimistic_sending import test_server_datagram_overflow_drop as run_10_server_datagram_overflow_drop
+from .test_10_optimistic_sending import test_server_stream_overflow_drop as run_10_server_stream_overflow_drop
 
 
 async def _is_server_ready() -> bool:
@@ -223,3 +236,34 @@ class TestE2eSuite:
 
     async def test_09_error_handling(self) -> None:
         assert await run_09_error_handling() is True, "TLS export error handling test failed"
+
+    async def test_10_optimistic_basic_connection(self) -> None:
+        assert await run_10_optimistic_basic_connection() is True, "Optimistic basic connection failed"
+
+    async def test_10_optimistic_lifecycle_events(self) -> None:
+        assert await run_10_optimistic_lifecycle_events() is True, "Optimistic lifecycle events failed"
+
+    async def test_10_optimistic_early_stream_write(self) -> None:
+        assert await run_10_optimistic_early_stream_write() is True, "Optimistic early stream write failed"
+
+    async def test_10_optimistic_early_datagram_send(self) -> None:
+        assert await run_10_optimistic_early_datagram_send() is True, "Optimistic early datagram send failed"
+
+    async def test_10_optimistic_rejection_via_ensure_ready(self) -> None:
+        assert (
+            await run_10_optimistic_rejection_via_ensure_ready() is True
+        ), "Optimistic rejection via ensure_ready failed"
+
+    async def test_10_optimistic_early_send_before_rejection(self) -> None:
+        assert (
+            await run_10_optimistic_early_send_before_rejection() is True
+        ), "Optimistic early send before rejection failed"
+
+    async def test_10_server_buffers_early_stream_data(self) -> None:
+        assert await run_10_server_buffers_early_stream_data() is True, "Server buffering of early stream data failed"
+
+    async def test_10_server_stream_overflow_drop(self) -> None:
+        assert await run_10_server_stream_overflow_drop() is True, "Server stream overflow drop failed"
+
+    async def test_10_server_datagram_overflow_drop(self) -> None:
+        assert await run_10_server_datagram_overflow_drop() is True, "Server datagram overflow drop failed"

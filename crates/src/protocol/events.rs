@@ -101,6 +101,13 @@ pub(crate) enum ProtocolEvent {
         headers: Headers,
         wt_available_protocols: Option<Vec<String>>,
     },
+    UserCreateSessionOptimistic {
+        request_id: RequestId,
+        authority: String,
+        path: String,
+        headers: Headers,
+        wt_available_protocols: Option<Vec<String>>,
+    },
     UserCreateStream {
         request_id: RequestId,
         session_id: SessionId,

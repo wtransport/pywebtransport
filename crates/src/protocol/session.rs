@@ -10,11 +10,11 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::debug;
 
 use crate::common::constants::{
-    ERR_H3_DATAGRAM_ERROR, ERR_H3_FRAME_UNEXPECTED, ERR_H3_GENERAL_PROTOCOL_ERROR,
+    ERR_H3_EXCESSIVE_LOAD, ERR_H3_FRAME_UNEXPECTED, ERR_H3_GENERAL_PROTOCOL_ERROR,
     ERR_H3_MESSAGE_ERROR, ERR_LIB_SESSION_STATE_ERROR, ERR_LIB_STREAM_STATE_ERROR,
-    ERR_WT_FLOW_CONTROL_ERROR, ERR_WT_SESSION_GONE, WT_CAPSULE_TYPE_CLOSE_SESSION,
-    WT_CAPSULE_TYPE_DATA_BLOCKED, WT_CAPSULE_TYPE_DRAIN_SESSION, WT_CAPSULE_TYPE_MAX_DATA,
-    WT_CAPSULE_TYPE_MAX_STREAM_DATA, WT_CAPSULE_TYPE_MAX_STREAMS_BIDI,
+    ERR_WT_BUFFERED_STREAM_REJECTED, ERR_WT_FLOW_CONTROL_ERROR, ERR_WT_SESSION_GONE,
+    WT_CAPSULE_TYPE_CLOSE_SESSION, WT_CAPSULE_TYPE_DATA_BLOCKED, WT_CAPSULE_TYPE_DRAIN_SESSION,
+    WT_CAPSULE_TYPE_MAX_DATA, WT_CAPSULE_TYPE_MAX_STREAM_DATA, WT_CAPSULE_TYPE_MAX_STREAMS_BIDI,
     WT_CAPSULE_TYPE_MAX_STREAMS_UNI, WT_CAPSULE_TYPE_STREAM_DATA_BLOCKED,
     WT_CAPSULE_TYPE_STREAMS_BLOCKED_BIDI, WT_CAPSULE_TYPE_STREAMS_BLOCKED_UNI, WT_EXPORTER_LABEL,
     WT_MAX_CLOSE_REASON_SIZE, WT_PROTOCOL, WT_STREAMS_LIMIT,
@@ -101,6 +101,9 @@ pub(super) struct Session {
     local_max_streams_uni: u64,
     local_streams_bidi_opened: u64,
     local_streams_uni_opened: u64,
+    max_pending_capsules: u64,
+    max_pending_datagrams: u64,
+    max_pending_streams: u64,
     max_stream_read_buffer_size: u64,
     max_stream_write_buffer_size: u64,
     path: String,
@@ -112,6 +115,9 @@ pub(super) struct Session {
     peer_streams_uni_closed: u64,
     peer_streams_uni_opened: u64,
     pending_bidi_stream_requests: VecDeque<RequestId>,
+    pending_capsules: VecDeque<(u64, Bytes)>,
+    pending_datagrams: VecDeque<Bytes>,
+    pending_streams: VecDeque<StreamId>,
     pending_uni_stream_requests: VecDeque<RequestId>,
     ready_at: Option<f64>,
     state: SessionState,
@@ -165,6 +171,9 @@ impl Session {
             local_max_streams_uni: params.initial_max_streams_uni,
             local_streams_bidi_opened: 0,
             local_streams_uni_opened: 0,
+            max_pending_capsules: params.max_pending_capsules,
+            max_pending_datagrams: params.max_pending_datagrams,
+            max_pending_streams: params.max_pending_streams,
             max_stream_read_buffer_size: params.max_stream_read_buffer_size,
             max_stream_write_buffer_size: params.max_stream_write_buffer_size,
             path,
@@ -176,12 +185,63 @@ impl Session {
             peer_streams_uni_closed: 0,
             peer_streams_uni_opened: 0,
             pending_bidi_stream_requests: VecDeque::new(),
+            pending_capsules: VecDeque::new(),
+            pending_datagrams: VecDeque::new(),
+            pending_streams: VecDeque::new(),
             pending_uni_stream_requests: VecDeque::new(),
             ready_at: None,
             state,
             streams: FxHashMap::default(),
             wt_protocol,
         }
+    }
+
+    // Session error abort handling.
+    pub(super) fn abort(
+        &mut self,
+        error_code: ErrorCode,
+        reason: Cow<'static, str>,
+        now: f64,
+    ) -> Vec<Effect> {
+        if matches!(self.state, SessionState::Closed | SessionState::Closing) {
+            return Vec::new();
+        }
+
+        debug!(
+            "wt_session abort actual={:?} session_id={} err={error_code}",
+            self.state, self.id
+        );
+        self.close_code = Some(error_code);
+        self.close_reason = Some(reason.clone().into_owned());
+        self.closed_at = Some(now);
+        self.state = SessionState::Closed;
+        self.pending_capsules.clear();
+        self.pending_datagrams.clear();
+        self.pending_streams.clear();
+
+        let mut effects = self.abort_streams(now);
+
+        effects.push(Effect::ResetQuicStream {
+            stream_id: self.id,
+            error_code,
+        });
+        effects.push(Effect::EmitSessionEvent {
+            session_id: self.id,
+            event_type: EventType::SessionClosed,
+            path: None,
+            headers: None,
+            wt_available_protocols: None,
+            wt_protocol: None,
+            data: None,
+            is_unidirectional: None,
+            max_data: None,
+            max_streams: None,
+            ready_at: None,
+            error_code: Some(error_code),
+            reason: Some(reason),
+        });
+
+        effects
     }
 
     // User session acceptance handling.
@@ -278,6 +338,8 @@ impl Session {
             result: RequestResult::None,
         });
 
+        effects.extend(self.replay_pending_queues(now));
+
         effects
     }
 
@@ -352,6 +414,9 @@ impl Session {
         self.close_reason = reason.clone().map(Cow::into_owned);
         self.closed_at = Some(now);
         self.state = SessionState::Closing;
+        self.pending_capsules.clear();
+        self.pending_datagrams.clear();
+        self.pending_streams.clear();
 
         effects.extend(self.abort_streams(now));
 
@@ -404,6 +469,43 @@ impl Session {
         effects
     }
 
+    // Session confirmation and ready transition.
+    pub(super) fn confirm(&mut self, wt_protocol: Option<String>, now: f64) -> Vec<Effect> {
+        let mut effects = Vec::new();
+
+        if self.state != SessionState::Connecting {
+            return effects;
+        }
+
+        debug!(
+            "wt_session open actual={:?} session_id={}",
+            self.state, self.id
+        );
+        self.ready_at = Some(now);
+        self.wt_protocol.clone_from(&wt_protocol);
+        self.state = SessionState::Connected;
+
+        effects.push(Effect::EmitSessionEvent {
+            session_id: self.id,
+            event_type: EventType::SessionReady,
+            path: None,
+            headers: None,
+            wt_available_protocols: None,
+            wt_protocol,
+            data: None,
+            is_unidirectional: None,
+            max_data: None,
+            max_streams: None,
+            ready_at: Some(now),
+            error_code: None,
+            reason: None,
+        });
+
+        effects.extend(self.replay_pending_queues(now));
+
+        effects
+    }
+
     // User stream creation request handling.
     pub(super) fn create_stream(
         &mut self,
@@ -412,7 +514,10 @@ impl Session {
     ) -> Vec<Effect> {
         let mut effects = Vec::new();
 
-        if !matches!(self.state, SessionState::Connected | SessionState::Draining) {
+        if !matches!(
+            self.state,
+            SessionState::Connected | SessionState::Connecting | SessionState::Draining
+        ) {
             debug!(
                 "wt_session validate failed actual={:?} request_id={request_id} session_id={}",
                 self.state, self.id
@@ -632,6 +737,41 @@ impl Session {
 
     // Capsule reception handling.
     pub(super) fn recv_capsule(&mut self, capsule_type: u64, data: &[u8], now: f64) -> Vec<Effect> {
+        if self.state == SessionState::Connecting {
+            if (self.pending_capsules.len() as u64) >= self.max_pending_capsules {
+                debug!(
+                    "wt_session validate exceeded actual={} expected=max_pending_capsules session_id={}",
+                    self.pending_capsules.len(),
+                    self.id
+                );
+                return self.abort(
+                    ERR_H3_EXCESSIVE_LOAD,
+                    "wt_session validate exceeded".into(),
+                    now,
+                );
+            }
+
+            self.pending_capsules
+                .push_back((capsule_type, Bytes::copy_from_slice(data)));
+
+            return Vec::new();
+        }
+
+        if self.state == SessionState::Closing {
+            return Vec::new();
+        }
+
+        if self.state == SessionState::Closed {
+            debug!(
+                "wt_session validate failed actual={:?} session_id={}",
+                self.state, self.id
+            );
+            return vec![Effect::ResetQuicStream {
+                stream_id: self.id,
+                error_code: ERR_H3_MESSAGE_ERROR,
+            }];
+        }
+
         let mut effects = Vec::new();
 
         if !self.flow_control_negotiated
@@ -676,9 +816,32 @@ impl Session {
                 let payload = data.get(4..).unwrap_or_default();
 
                 let limit = usize::try_from(WT_MAX_CLOSE_REASON_SIZE).unwrap_or(usize::MAX);
-                let safe_len = std::cmp::min(payload.len(), limit);
-                let reason_payload = payload.get(..safe_len).unwrap_or_default();
-                let reason = String::from_utf8_lossy(reason_payload).into_owned();
+                if payload.len() > limit {
+                    debug!(
+                        "wt_capsule validate exceeded actual={} expected=wt_max_close_reason_size session_id={}",
+                        payload.len(),
+                        self.id
+                    );
+                    return self.abort(
+                        ERR_H3_MESSAGE_ERROR,
+                        "wt_capsule validate exceeded".into(),
+                        now,
+                    );
+                }
+
+                let Ok(reason) = std::str::from_utf8(payload) else {
+                    debug!(
+                        "wt_capsule validate invalid session_id={} size={}",
+                        self.id,
+                        payload.len()
+                    );
+                    return self.abort(
+                        ERR_H3_MESSAGE_ERROR,
+                        "wt_capsule validate invalid".into(),
+                        now,
+                    );
+                };
+                let reason = reason.to_owned();
 
                 debug!(
                     "wt_session close actual={:?} session_id={} err={error_code}",
@@ -688,7 +851,21 @@ impl Session {
                 self.close_reason = Some(reason.clone());
                 self.closed_at = Some(now);
                 self.state = SessionState::Closed;
+                self.pending_capsules.clear();
+                self.pending_datagrams.clear();
+                self.pending_streams.clear();
 
+                effects.extend(self.abort_streams(now));
+
+                effects.push(Effect::SendQuicData {
+                    stream_id: self.id,
+                    data: Bytes::new(),
+                    end_stream: true,
+                });
+                effects.push(Effect::StopQuicStream {
+                    stream_id: self.id,
+                    error_code: ERR_WT_SESSION_GONE,
+                });
                 effects.push(Effect::EmitSessionEvent {
                     session_id: self.id,
                     event_type: EventType::SessionClosed,
@@ -704,8 +881,6 @@ impl Session {
                     error_code: Some(error_code),
                     reason: Some(reason.into()),
                 });
-
-                effects.extend(self.abort_streams(now));
             }
             WT_CAPSULE_TYPE_DATA_BLOCKED => {
                 if let Some(credit_effect) = self.replenish_data_credit(true) {
@@ -770,7 +945,7 @@ impl Session {
                             reason: None,
                         });
                         effects.extend(self.flush_blocked_writes(now));
-                    } else if new_max < self.peer_max_data {
+                    } else {
                         debug!(
                             "wt_session validate failed actual={new_max} session_id={}",
                             self.id
@@ -809,7 +984,7 @@ impl Session {
                             self.id
                         );
                         return self.abort(
-                            ERR_H3_DATAGRAM_ERROR,
+                            ERR_WT_FLOW_CONTROL_ERROR,
                             "wt_session validate exceeded".into(),
                             now,
                         );
@@ -844,7 +1019,7 @@ impl Session {
                                 });
                             }
                         }
-                    } else if new_max < self.peer_max_streams_bidi {
+                    } else {
                         debug!(
                             "wt_session validate failed actual={new_max} session_id={}",
                             self.id
@@ -872,7 +1047,7 @@ impl Session {
                             self.id
                         );
                         return self.abort(
-                            ERR_H3_DATAGRAM_ERROR,
+                            ERR_WT_FLOW_CONTROL_ERROR,
                             "wt_session validate exceeded".into(),
                             now,
                         );
@@ -907,7 +1082,7 @@ impl Session {
                                 });
                             }
                         }
-                    } else if new_max < self.peer_max_streams_uni {
+                    } else {
                         debug!(
                             "wt_session validate failed actual={new_max} session_id={}",
                             self.id
@@ -929,6 +1104,28 @@ impl Session {
             }
             WT_CAPSULE_TYPE_STREAMS_BLOCKED_BIDI | WT_CAPSULE_TYPE_STREAMS_BLOCKED_UNI => {
                 let is_uni = capsule_type == WT_CAPSULE_TYPE_STREAMS_BLOCKED_UNI;
+
+                if let Ok(peer_reported_limit) = read_varint(&mut cur) {
+                    if peer_reported_limit > WT_STREAMS_LIMIT {
+                        debug!(
+                            "wt_session validate exceeded actual={peer_reported_limit} expected=wt_streams_limit session_id={}",
+                            self.id
+                        );
+                        return self.abort(
+                            ERR_WT_FLOW_CONTROL_ERROR,
+                            "wt_session validate exceeded".into(),
+                            now,
+                        );
+                    }
+                } else {
+                    debug!("varint decode invalid session_id={}", self.id);
+                    return self.abort(
+                        ERR_H3_GENERAL_PROTOCOL_ERROR,
+                        "varint decode invalid".into(),
+                        now,
+                    );
+                }
+
                 if let Some(credit_effect) = self.replenish_streams_credit(is_uni, true) {
                     effects.push(credit_effect);
                 } else {
@@ -978,6 +1175,9 @@ impl Session {
         self.close_reason = Some("wt_session close".to_owned());
         self.closed_at = Some(now);
         self.state = SessionState::Closed;
+        self.pending_capsules.clear();
+        self.pending_datagrams.clear();
+        self.pending_streams.clear();
 
         let mut effects = self.abort_streams(now);
 
@@ -1002,6 +1202,21 @@ impl Session {
 
     // Datagram reception handling.
     pub(super) fn recv_datagram(&mut self, data: Bytes) -> Vec<Effect> {
+        if self.state == SessionState::Connecting {
+            if (self.pending_datagrams.len() as u64) >= self.max_pending_datagrams {
+                debug!(
+                    "wt_session validate exceeded actual={} expected=max_pending_datagrams session_id={}",
+                    self.pending_datagrams.len(),
+                    self.id
+                );
+                return Vec::new();
+            }
+
+            self.pending_datagrams.push_back(data);
+
+            return Vec::new();
+        }
+
         let mut effects = Vec::new();
 
         if !matches!(self.state, SessionState::Connected | SessionState::Draining) {
@@ -1044,7 +1259,10 @@ impl Session {
     ) -> Vec<Effect> {
         let mut effects = Vec::new();
 
-        if !matches!(self.state, SessionState::Connected | SessionState::Draining) {
+        if !matches!(
+            self.state,
+            SessionState::Connected | SessionState::Connecting | SessionState::Draining
+        ) {
             debug!(
                 "wt_session validate failed actual={:?} session_id={} stream_id={stream_id}",
                 self.state, self.id
@@ -1098,6 +1316,57 @@ impl Session {
                 }
             }
 
+            if self.state == SessionState::Connecting {
+                if (self.pending_streams.len() as u64) >= self.max_pending_streams {
+                    debug!(
+                        "wt_session validate exceeded actual={} expected=max_pending_streams session_id={}",
+                        self.pending_streams.len(),
+                        self.id
+                    );
+
+                    self.local_data_received += data.len() as u64;
+                    if self.flow_control_negotiated
+                        && self.local_data_received > self.local_max_data
+                    {
+                        debug!(
+                            "wt_session validate exceeded actual={} limit={} session_id={}",
+                            self.local_data_received, self.local_max_data, self.id
+                        );
+                        return self.abort(
+                            ERR_WT_FLOW_CONTROL_ERROR,
+                            "wt_session validate exceeded".into(),
+                            now,
+                        );
+                    }
+
+                    let can_send = matches!(
+                        direction,
+                        StreamDirection::Bidirectional | StreamDirection::SendOnly
+                    );
+                    let can_receive = matches!(
+                        direction,
+                        StreamDirection::Bidirectional | StreamDirection::ReceiveOnly
+                    );
+
+                    if can_send {
+                        effects.push(Effect::ResetQuicStream {
+                            stream_id,
+                            error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
+                        });
+                    }
+                    if can_receive {
+                        effects.push(Effect::StopQuicStream {
+                            stream_id,
+                            error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
+                        });
+                    }
+
+                    return effects;
+                }
+
+                self.pending_streams.push_back(stream_id);
+            }
+
             self.active_streams.insert(stream_id);
 
             let stream = Stream::new(
@@ -1111,14 +1380,16 @@ impl Session {
             );
             self.streams.insert(stream_id, stream);
 
-            effects.push(Effect::EmitStreamEvent {
-                stream_id,
-                event_type: EventType::StreamOpened,
-                session_id: Some(self.id),
-                direction: Some(direction),
-                is_peer_initiated: Some(is_peer_initiated),
-                error_code: None,
-            });
+            if self.state != SessionState::Connecting {
+                effects.push(Effect::EmitStreamEvent {
+                    stream_id,
+                    event_type: EventType::StreamOpened,
+                    session_id: Some(self.id),
+                    direction: Some(direction),
+                    is_peer_initiated: Some(is_peer_initiated),
+                    error_code: None,
+                });
+            }
         }
 
         let Some(stream) = self.streams.get_mut(&stream_id) else {
@@ -1141,7 +1412,7 @@ impl Session {
         let (stream_effects, consumed) = stream.recv_data(data, end_stream, now);
         let is_closed = stream.is_closed();
 
-        effects.extend(stream_effects);
+        effects.extend(self.suppress_pending_stream_events(stream_id, stream_effects));
 
         if consumed > 0 {
             self.local_data_consumed += consumed;
@@ -1167,8 +1438,10 @@ impl Session {
         let mut effects = Vec::new();
 
         let is_closed = if let Some(stream) = self.streams.get_mut(&stream_id) {
-            effects.extend(stream.recv_reset(error_code, now));
-            stream.is_closed()
+            let stream_effects = stream.recv_reset(error_code, now);
+            let closed = stream.is_closed();
+            effects.extend(self.suppress_pending_stream_events(stream_id, stream_effects));
+            closed
         } else {
             false
         };
@@ -1185,10 +1458,12 @@ impl Session {
         stream_id: StreamId,
         error_code: ErrorCode,
     ) -> Vec<Effect> {
-        if let Some(stream) = self.streams.get_mut(&stream_id) {
-            return stream.recv_stop_sending(error_code);
-        }
-        Vec::new()
+        let Some(stream) = self.streams.get_mut(&stream_id) else {
+            return Vec::new();
+        };
+        let stream_effects = stream.recv_stop_sending(error_code);
+
+        self.suppress_pending_stream_events(stream_id, stream_effects)
     }
 
     // User session rejection handling.
@@ -1235,6 +1510,11 @@ impl Session {
         self.close_reason = Some("wt_session reject".to_owned());
         self.closed_at = Some(now);
         self.state = SessionState::Closed;
+        self.pending_capsules.clear();
+        self.pending_datagrams.clear();
+        self.pending_streams.clear();
+
+        effects.extend(self.abort_streams(now));
 
         effects.push(Effect::SendH3Headers {
             stream_id: self.id,
@@ -1310,9 +1590,12 @@ impl Session {
     ) -> Vec<Effect> {
         let mut effects = Vec::new();
 
-        if self.state != SessionState::Connected {
+        if !matches!(
+            self.state,
+            SessionState::Connected | SessionState::Connecting | SessionState::Draining
+        ) {
             debug!(
-                "wt_session validate failed actual={:?} expected=connected request_id={request_id} session_id={}",
+                "wt_session validate failed actual={:?} request_id={request_id} session_id={}",
                 self.state, self.id
             );
             effects.push(Effect::NotifyRequestFailed {
@@ -1368,6 +1651,23 @@ impl Session {
         now: f64,
     ) -> Vec<Effect> {
         let mut effects = Vec::new();
+
+        if !matches!(
+            self.state,
+            SessionState::Connected | SessionState::Connecting | SessionState::Draining
+        ) {
+            debug!(
+                "wt_session validate failed actual={:?} request_id={request_id} session_id={}",
+                self.state, self.id
+            );
+            effects.push(Effect::NotifyRequestFailed {
+                request_id,
+                source: ErrorSource::Session,
+                error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
+                reason: "wt_session validate failed".into(),
+            });
+            return effects;
+        }
 
         let Some(stream) = self.streams.get_mut(&stream_id) else {
             debug!(
@@ -1510,44 +1810,6 @@ impl Session {
         effects
     }
 
-    // Session error abort handling.
-    fn abort(&mut self, error_code: ErrorCode, reason: Cow<'static, str>, now: f64) -> Vec<Effect> {
-        debug!(
-            "wt_session abort actual={:?} session_id={} err={error_code}",
-            self.state, self.id
-        );
-        self.close_code = Some(error_code);
-        self.close_reason = Some(reason.clone().into_owned());
-        self.closed_at = Some(now);
-        self.state = SessionState::Closed;
-
-        let mut effects = vec![
-            Effect::ResetQuicStream {
-                stream_id: self.id,
-                error_code,
-            },
-            Effect::EmitSessionEvent {
-                session_id: self.id,
-                event_type: EventType::SessionClosed,
-                path: None,
-                headers: None,
-                wt_available_protocols: None,
-                wt_protocol: None,
-                data: None,
-                is_unidirectional: None,
-                max_data: None,
-                max_streams: None,
-                ready_at: None,
-                error_code: Some(error_code),
-                reason: Some(reason),
-            },
-        ];
-
-        effects.extend(self.abort_streams(now));
-
-        effects
-    }
-
     // Cascading streams teardown.
     fn abort_streams(&mut self, now: f64) -> Vec<Effect> {
         let mut effects = Vec::new();
@@ -1563,8 +1825,8 @@ impl Session {
         }
         self.streams.clear();
         self.active_streams.clear();
-        self.blocked_streams_queue.clear();
         self.blocked_streams.clear();
+        self.blocked_streams_queue.clear();
 
         while let Some(req_id) = self.pending_bidi_stream_requests.pop_front() {
             effects.push(Effect::NotifyRequestFailed {
@@ -1733,13 +1995,53 @@ impl Session {
         effects
     }
 
+    // Pending queue replay upon session confirmation.
+    fn replay_pending_queues(&mut self, now: f64) -> Vec<Effect> {
+        let mut effects = Vec::new();
+
+        while let Some((capsule_type, data)) = self.pending_capsules.pop_front() {
+            effects.extend(self.recv_capsule(capsule_type, &data, now));
+
+            if self.state != SessionState::Connected {
+                return effects;
+            }
+        }
+
+        while let Some(data) = self.pending_datagrams.pop_front() {
+            effects.extend(self.recv_datagram(data));
+        }
+
+        while let Some(stream_id) = self.pending_streams.pop_front() {
+            if !self.active_streams.contains(&stream_id) {
+                continue;
+            }
+
+            let direction = stream_dir_from_id(stream_id, self.is_client);
+            let is_peer_initiated = is_peer_initiated_stream(stream_id, self.is_client);
+
+            effects.push(Effect::EmitStreamEvent {
+                stream_id,
+                event_type: EventType::StreamOpened,
+                session_id: Some(self.id),
+                direction: Some(direction),
+                is_peer_initiated: Some(is_peer_initiated),
+                error_code: None,
+            });
+        }
+
+        effects
+    }
+
     // Data credit replenishment.
     fn replenish_data_credit(&mut self, force_send: bool) -> Option<Effect> {
         if !self.flow_control_negotiated {
             return None;
         }
 
-        if !matches!(self.state, SessionState::Connected | SessionState::Draining) {
+        if !matches!(
+            self.state,
+            SessionState::Connected | SessionState::Connecting | SessionState::Draining
+        ) {
             return None;
         }
 
@@ -1772,7 +2074,10 @@ impl Session {
             return None;
         }
 
-        if !matches!(self.state, SessionState::Connected | SessionState::Draining) {
+        if !matches!(
+            self.state,
+            SessionState::Connected | SessionState::Connecting | SessionState::Draining
+        ) {
             return None;
         }
 
@@ -1813,6 +2118,22 @@ impl Session {
             end_stream: false,
         })
     }
+
+    // Stream event suppression for streams awaiting confirmation replay.
+    fn suppress_pending_stream_events(
+        &self,
+        stream_id: StreamId,
+        stream_effects: Vec<Effect>,
+    ) -> Vec<Effect> {
+        if !self.pending_streams.contains(&stream_id) {
+            return stream_effects;
+        }
+
+        stream_effects
+            .into_iter()
+            .filter(|effect| !matches!(effect, Effect::EmitStreamEvent { .. }))
+            .collect()
+    }
 }
 
 // Session initialization constraints and thresholds.
@@ -1823,6 +2144,9 @@ pub(super) struct SessionParams {
     pub(super) initial_max_data: u64,
     pub(super) initial_max_streams_bidi: u64,
     pub(super) initial_max_streams_uni: u64,
+    pub(super) max_pending_capsules: u64,
+    pub(super) max_pending_datagrams: u64,
+    pub(super) max_pending_streams: u64,
     pub(super) max_stream_read_buffer_size: u64,
     pub(super) max_stream_write_buffer_size: u64,
     pub(super) peer_max_data: u64,

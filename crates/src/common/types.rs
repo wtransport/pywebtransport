@@ -47,6 +47,7 @@ pub(crate) enum EventType {
     SessionMaxDataUpdated,
     SessionMaxStreamsBidiUpdated,
     SessionMaxStreamsUniUpdated,
+    SessionPending,
     SessionReady,
     SessionRequest,
     SessionStreamsBlocked,

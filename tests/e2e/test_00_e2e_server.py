@@ -18,6 +18,7 @@ from pywebtransport import (
     SessionError,
     StreamError,
     WebTransportReceiveStream,
+    WebTransportServer,
     WebTransportSession,
     WebTransportStream,
 )
@@ -29,9 +30,10 @@ CERT_HOSTNAME: Final[str] = "localhost"
 CERT_PATH: Final[Path] = Path(f"{CERT_HOSTNAME}.crt")
 KEY_PATH: Final[Path] = Path(f"{CERT_HOSTNAME}.key")
 
-DEBUG_MODE: Final[bool] = "--debug" in sys.argv
 SERVER_HOST: Final[str] = "::"
 SERVER_PORT: Final[int] = 4433
+OPTIMISTIC_SERVER_PORT: Final[int] = 4434
+DEBUG_MODE: Final[bool] = "--debug" in sys.argv
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 if DEBUG_MODE:
@@ -284,6 +286,41 @@ async def handle_single_stream(*, stream: Any, session_id: int) -> None:
         pass
 
 
+async def run_optimistic_server(*, config: ServerConfig, port: int) -> None:
+    """Run a bare WebTransportServer that delays session acceptance."""
+    server = WebTransportServer(config=config)
+
+    async def _on_session_request(event: Event) -> None:
+        if not isinstance(event.data, dict):
+            return
+
+        session = event.data.get("session")
+        if not isinstance(session, WebTransportSession):
+            return
+
+        session_id = session.session_id
+        logger.info("Optimistic session %d awaiting acceptance", session_id)
+
+        datagram_task = asyncio.create_task(coro=handle_datagrams(session=session))
+        stream_task = asyncio.create_task(coro=handle_incoming_streams(session=session))
+
+        await asyncio.sleep(delay=1.0)
+        await session.accept()
+        logger.info("Optimistic session %d accepted", session_id)
+
+        try:
+            await asyncio.gather(datagram_task, stream_task, return_exceptions=True)
+        finally:
+            if not session.is_closed:
+                await session.close()
+
+    server.on(event_type=EventType.SESSION_REQUEST, handler=_on_session_request)
+
+    async with server:
+        await server.listen(host=config.bind_host, port=port)
+        await server.serve_forever()
+
+
 async def main() -> None:
     """Configure and start the WebTransport E2E test server."""
     logger.info("Starting WebTransport E2E Test Server...")
@@ -302,13 +339,15 @@ async def main() -> None:
     app = E2EServerApp(config=config)
 
     logger.info("Server binding to %s:%d", config.bind_host, config.bind_port)
+    logger.info("Optimistic server binding to %s:%d", SERVER_HOST, OPTIMISTIC_SERVER_PORT)
     if DEBUG_MODE:
         logger.info("Debug mode enabled - verbose logging active")
     logger.info("Ready for E2E tests!")
 
     try:
-        async with app:
-            await app.serve()
+        async with app, asyncio.TaskGroup() as tg:
+            tg.create_task(coro=app.serve())
+            tg.create_task(coro=run_optimistic_server(config=config, port=OPTIMISTIC_SERVER_PORT))
     except asyncio.CancelledError:
         pass
 

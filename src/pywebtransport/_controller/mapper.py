@@ -29,6 +29,14 @@ def pack_user_event(*, event: events.ProtocolEvent) -> tuple[int, tuple[Any, ...
                 event.headers,
                 event.wt_available_protocols,
             )
+        case events.UserCreateSessionOptimistic():
+            return abi.USER_CREATE_SESSION_OPTIMISTIC, (
+                event.request_id,
+                event.authority,
+                event.path,
+                event.headers,
+                event.wt_available_protocols,
+            )
         case events.UserCreateStream():
             return abi.USER_CREATE_STREAM, (event.request_id, event.session_id, event.is_unidirectional)
         case events.UserExportKeyingMaterial():

@@ -61,6 +61,7 @@ class EventType(StrEnum):
     SESSION_MAX_DATA_UPDATED = "session_max_data_updated"
     SESSION_MAX_STREAMS_BIDI_UPDATED = "session_max_streams_bidi_updated"
     SESSION_MAX_STREAMS_UNI_UPDATED = "session_max_streams_uni_updated"
+    SESSION_PENDING = "session_pending"
     SESSION_READY = "session_ready"
     SESSION_REQUEST = "session_request"
     SESSION_STREAMS_BLOCKED = "session_streams_blocked"

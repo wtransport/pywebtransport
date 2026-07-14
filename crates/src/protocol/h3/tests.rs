@@ -6,7 +6,7 @@ use rstest::*;
 use super::*;
 use crate::common::error::WebTransportError;
 use crate::common::types::Headers;
-use crate::protocol::connection::Connection;
+use crate::protocol::connection::{Connection, ConnectionParams};
 use crate::protocol::events::{Effect, ProtocolEvent};
 
 fn create_h3(is_client: bool) -> H3 {
@@ -1856,5 +1856,72 @@ fn test_validate_settings_missing_wt_enabled() {
             Some(ERR_WT_REQUIREMENTS_NOT_MET),
             _
         ))
+    ));
+}
+
+#[test]
+fn test_validate_settings_client_rejects_invalid_wt_enabled() {
+    let params = ConnectionParams {
+        early_event_ttl: 5.0,
+        flow_control_window: 4 * 1024 * 1024,
+        initial_max_data: 4 * 1024 * 1024,
+        initial_max_streams_bidi: 10,
+        initial_max_streams_uni: 10,
+        max_pending_capsules: 20,
+        max_pending_datagrams: 100,
+        max_pending_streams: 10,
+        max_session_pending_events: 100,
+        max_sessions: 10,
+        max_stream_read_buffer_size: 1024 * 1024,
+        max_stream_write_buffer_size: 1024 * 1024,
+        max_total_pending_events: 1000,
+    };
+    let conn = Connection::new(42, true, params);
+
+    let settings = H3Settings {
+        enable_connect_protocol: Some(1),
+        wt_enabled: Some(2),
+        ..Default::default()
+    };
+
+    let res = validate_settings(&settings, &conn);
+    assert!(matches!(
+        res,
+        Err(WebTransportError::Protocol(Some(ERR_H3_SETTINGS_ERROR), _))
+    ));
+}
+
+#[test]
+fn test_validate_settings_datagram_not_supported() {
+    let settings = H3Settings {
+        enable_connect_protocol: Some(1),
+        h3_datagram: Some(1),
+        wt_enabled: Some(1),
+        ..Default::default()
+    };
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    let res = validate_settings(&settings, mock.as_connection());
+    assert!(matches!(
+        res,
+        Err(WebTransportError::Protocol(Some(ERR_H3_SETTINGS_ERROR), _))
+    ));
+}
+
+#[test]
+fn test_validate_settings_enable_connect_protocol_invalid() {
+    let settings = H3Settings {
+        enable_connect_protocol: Some(0),
+        wt_enabled: Some(1),
+        ..Default::default()
+    };
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    let res = validate_settings(&settings, mock.as_connection());
+    assert!(matches!(
+        res,
+        Err(WebTransportError::Protocol(Some(ERR_H3_SETTINGS_ERROR), _))
     ));
 }

@@ -388,6 +388,25 @@ fn test_protocol_event_user_accept_session_success(
 }
 
 #[rstest]
+fn test_protocol_event_user_create_session_optimistic_success(
+    fixture_request_id: RequestId,
+    fixture_headers: Headers,
+) {
+    let event = ProtocolEvent::UserCreateSessionOptimistic {
+        request_id: fixture_request_id,
+        authority: "localhost".to_owned(),
+        path: "/path".to_owned(),
+        headers: fixture_headers,
+        wt_available_protocols: Some(vec!["p1".to_owned()]),
+    };
+
+    let debug_output = format!("{event:?}");
+    assert!(debug_output.contains("UserCreateSessionOptimistic"));
+    assert!(debug_output.contains("localhost"));
+    assert!(debug_output.contains("p1"));
+}
+
+#[rstest]
 fn test_protocol_event_user_create_session_success(
     fixture_request_id: RequestId,
     fixture_headers: Headers,

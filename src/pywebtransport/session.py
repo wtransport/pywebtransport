@@ -300,6 +300,22 @@ class WebTransportSession:
         diag_data["wt_available_protocols"] = self._wt_available_protocols
         return SessionDiagnostics(**diag_data)
 
+    async def ensure_ready(self) -> None:
+        """Wait until the session transitions out of the connecting state."""
+        if self._cached_state == SessionState.CONNECTING:
+            event = await self.events.wait_for(event_type=[EventType.SESSION_READY, EventType.SESSION_CLOSED])
+            if event.type == EventType.SESSION_CLOSED:
+                error_code = event.data.get("error_code") if isinstance(event.data, dict) else None
+                raise SessionError(
+                    message=f"wt_session open failed session_id={self.session_id}",
+                    session_id=self.session_id,
+                    error_code=error_code,
+                )
+        elif self._cached_state != SessionState.CONNECTED:
+            raise SessionError(
+                message=f"wt_session open failed session_id={self.session_id}", session_id=self.session_id
+            )
+
     async def export_keying_material(self, *, label: str, context: Buffer, length: int) -> bytes:
         """Export TLS keying material for this session."""
         connection = self._connection()

@@ -6,6 +6,7 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyString, PyTuple};
 use pyo3::{Borrowed, Bound, IntoPyObjectExt};
+use tracing::debug;
 
 use crate::common::types::Headers;
 use crate::ffi::abi;
@@ -222,9 +223,10 @@ impl<'py> IntoPyObject<'py> for Effect {
                 )?
                 .into_any())
             }
-            _ => Err(PyRuntimeError::new_err(format!(
-                "rt_event convert failed actual={self:?}"
-            ))),
+            _ => {
+                debug!("rt_event convert failed actual={self:?}");
+                Err(PyRuntimeError::new_err("rt_event convert failed"))
+            }
         }
     }
 }
@@ -280,6 +282,13 @@ impl<'a, 'py> FromPyObject<'a, 'py> for ProtocolEvent {
                     .map(Into::into),
             }),
             abi::USER_CREATE_SESSION => Ok(ProtocolEvent::UserCreateSession {
+                request_id: payload.get_item(0)?.extract()?,
+                authority: payload.get_item(1)?.extract()?,
+                path: payload.get_item(2)?.extract()?,
+                headers: extract_headers(&payload.get_item(3)?)?,
+                wt_available_protocols: payload.get_item(4)?.extract()?,
+            }),
+            abi::USER_CREATE_SESSION_OPTIMISTIC => Ok(ProtocolEvent::UserCreateSessionOptimistic {
                 request_id: payload.get_item(0)?.extract()?,
                 authority: payload.get_item(1)?.extract()?,
                 path: payload.get_item(2)?.extract()?,

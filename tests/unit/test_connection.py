@@ -16,6 +16,7 @@ from pywebtransport._protocol.events import (
     UserCloseConnection,
     UserCloseConnectionGracefully,
     UserCreateSession,
+    UserCreateSessionOptimistic,
     UserGetConnectionDiagnostics,
 )
 from pywebtransport.connection import ConnectionDiagnostics, WebTransportConnection
@@ -262,6 +263,35 @@ class TestWebTransportConnection:
             await connection.create_session(authority="localhost:443", path="/")
 
     @pytest.mark.asyncio
+    async def test_create_session_optimistic_success(
+        self, connection: WebTransportConnection, mock_controller: MagicMock, mocker: MockerFixture
+    ) -> None:
+        async def fake_execute(dispatcher: Any) -> int:
+            dispatcher(100)
+            return 1
+
+        mock_controller.execute_request.side_effect = fake_execute
+        session_mock = mocker.Mock(spec=WebTransportSession)
+        connection._session_handles[1] = session_mock
+
+        session = await connection.create_session_optimistic(
+            authority="localhost:443", path="/", headers={"a": "b"}, wt_available_protocols=["h3"]
+        )
+
+        assert session is session_mock
+        mock_controller.send_user_event.assert_called_once()
+        kwargs = mock_controller.send_user_event.call_args[1]
+
+        assert kwargs["handle"] == 42
+        event = kwargs["event"]
+        assert isinstance(event, UserCreateSessionOptimistic)
+        assert event.request_id == 100
+        assert event.authority == "localhost:443"
+        assert event.path == "/"
+        assert event.headers == {"a": "b"}
+        assert event.wt_available_protocols == ["h3"]
+
+    @pytest.mark.asyncio
     async def test_create_session_server_error(self, connection: WebTransportConnection) -> None:
         connection._is_client = False
 
@@ -464,12 +494,13 @@ class TestWebTransportConnection:
 
         spy_logger.warning.assert_any_call("wt_connection drain failed connection_handle=%d", 42)
 
-    def test_handle_session_event_client_ready(
-        self, connection: WebTransportConnection, mock_session_cls: MagicMock
+    @pytest.mark.parametrize(argnames="event_type", argvalues=[EventType.SESSION_PENDING, EventType.SESSION_READY])
+    def test_handle_session_event_client_creation(
+        self, connection: WebTransportConnection, mock_session_cls: MagicMock, event_type: EventType
     ) -> None:
         data = {"session_id": 1, "path": "/", "headers": {}, "wt_available_protocols": ["h3"], "wt_protocol": "h3"}
 
-        connection._notify_owner(event_type=EventType.SESSION_READY, data=data)
+        connection._notify_owner(event_type=event_type, data=data)
 
         assert 1 in connection._session_handles
         assert connection._session_handles[1] == mock_session_cls.return_value

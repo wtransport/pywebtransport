@@ -42,6 +42,12 @@ pub(crate) const DEFAULT_MAX_DATAGRAM_SIZE: u64 = 1350;
 pub(crate) const DEFAULT_MAX_EVENT_LISTENERS: u64 = 10;
 // Default maximum HTTP/3 field section size.
 pub(crate) const DEFAULT_MAX_FIELD_SECTION_SIZE: u64 = 65536;
+// Default maximum pending capsules.
+pub(crate) const DEFAULT_MAX_PENDING_CAPSULES: u64 = 20;
+// Default maximum pending datagrams.
+pub(crate) const DEFAULT_MAX_PENDING_DATAGRAMS: u64 = 100;
+// Default maximum pending streams.
+pub(crate) const DEFAULT_MAX_PENDING_STREAMS: u64 = 10;
 // Default maximum session pending events.
 pub(crate) const DEFAULT_MAX_SESSION_PENDING_EVENTS: u64 = 100;
 // Default maximum sessions.

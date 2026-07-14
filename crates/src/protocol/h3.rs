@@ -2011,6 +2011,14 @@ fn validate_settings(
         ));
     }
 
+    if connection.is_client() && settings.wt_enabled.is_some_and(|val| val > 1) {
+        debug!("h3_settings validate invalid expected=wt_enabled");
+        return Err(WebTransportError::Protocol(
+            Some(ERR_H3_SETTINGS_ERROR),
+            "h3_settings validate invalid".into(),
+        ));
+    }
+
     if settings.wt_enabled.unwrap_or(0) == 0 {
         debug!("h3_settings validate invalid expected=wt_enabled");
         return Err(WebTransportError::Protocol(

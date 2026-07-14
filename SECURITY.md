@@ -49,7 +49,7 @@ Security is a shared responsibility between the library maintainers and applicat
 
 ## Supply Chain Security
 
-PyWebTransport enforces a **minimal-dependency philosophy**. We actively monitor runtime dependencies for CVEs, ensuring upstream patches trigger an immediate release.
+PyWebTransport enforces a **minimal-dependency philosophy**. CI/CD pipelines automatically audit the supply chain, strictly blocking any commits that introduce known CVEs.
 
 ## Disclosure Policy
 

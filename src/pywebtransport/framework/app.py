@@ -172,7 +172,7 @@ class ServerApp:
 
         if route_result is None:
             _logger.warning("app_router validate invalid actual=%s session_id=%d", session.path, session.session_id)
-            await session.reject(status_code=http.HTTPStatus.NOT_FOUND)
+            await session.reject(status_code=http.HTTPStatus.METHOD_NOT_ALLOWED)
             return
 
         handler, params = route_result

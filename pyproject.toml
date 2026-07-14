@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "An async-native WebTransport stack for Python."
 readme = "README.md"
 license = "Apache-2.0"
-license-files = ["LICENSE", "NOTICE"]
+license-files = ["AUTHORS", "LICENSE", "NOTICE"]
 requires-python = ">=3.12"
 authors = [{ name = "The WTransport Authors", email = "admin@wtransport.org" }]
 keywords = [
@@ -46,13 +46,13 @@ dev = [
     "flake8>=7.3.0,<8.0.0",
     "isort>=8.0.1,<9.0.0",
     "maturin[patchelf]>=1.14.1,<2.0",
-    "mypy>=2.1.0,<3.0.0",
+    "mypy>=2.3.0,<3.0.0",
     "pywebtransport[test]",
 ]
 docs = [
     "mkdocs>=1.6.1,<2.0.0",
     "mkdocs-material>=9.7.6,<10.0.0",
-    "mkdocstrings[python]>=1.0.4,<2.0.0",
+    "mkdocstrings[python]>=1.0.6,<2.0.0",
 ]
 test = [
     "psutil>=7.2.2,<8.0.0",
@@ -112,7 +112,6 @@ module-name = "pywebtransport._pywebtransport"
 features = ["pyo3/extension-module"]
 manifest-path = "crates/Cargo.toml"
 python-source = "src"
-include = ["AUTHORS", "CHANGELOG.md"]
 
 [tool.mypy]
 mypy_path = "src"

@@ -41,6 +41,7 @@ impl<'py> IntoPyObject<'py> for EventType {
             Self::SessionMaxDataUpdated => "session_max_data_updated",
             Self::SessionMaxStreamsBidiUpdated => "session_max_streams_bidi_updated",
             Self::SessionMaxStreamsUniUpdated => "session_max_streams_uni_updated",
+            Self::SessionPending => "session_pending",
             Self::SessionReady => "session_ready",
             Self::SessionRequest => "session_request",
             Self::SessionStreamsBlocked => "session_streams_blocked",

@@ -63,6 +63,16 @@ class UserCreateSession(UserEvent[SessionId]):
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
+class UserCreateSessionOptimistic(UserEvent[SessionId]):
+    """User command to optimistically create a new WebTransport session."""
+
+    authority: str
+    path: str
+    headers: Headers
+    wt_available_protocols: list[str] | None = None
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
 class UserCreateStream(UserEvent[StreamId]):
     """User command to create a new stream."""
 

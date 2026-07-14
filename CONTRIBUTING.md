@@ -64,9 +64,13 @@ All contributions must adhere to the following style requirements:
 
 ## Testing
 
-Execute `pytest` to validate full-stack behavior including the underlying Rust engine, and `cargo test` for internal state machine correctness. Full matrix validation via `tox` is mandatory before submission.
+Execute `pytest` to validate full-stack behavior including the underlying Rust engine, and `cargo test` for internal state machine correctness. Ensure full matrix validation via `tox`.
 
 **Requirement**: New features must include positive, negative, and edge-case tests.
+
+## Auditing
+
+Execute `cargo-deny` and `pip-audit` to validate supply chain integrity. Passing the local audit is mandatory before submission.
 
 ## Commit & PR Process
 

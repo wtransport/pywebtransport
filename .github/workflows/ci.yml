@@ -30,15 +30,18 @@ jobs:
       image: python:3.14-slim-trixie
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
-          path: .cache/pip
-          key: ${{ runner.os }}-pip-lint-${{ hashFiles('dev-requirements.txt') }}
+          path: |
+            .cache/pip
+            .cargo/registry
+            crates/target/
+          key: ${{ runner.os }}-lint-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('dev-requirements.txt') }}
           restore-keys: |
-            ${{ runner.os }}-pip-lint-
+            ${{ runner.os }}-lint-
 
       - name: Install system dependencies
         run: |
@@ -47,7 +50,7 @@ jobs:
 
       - name: Install rust toolchain
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.1
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.96.1
           echo "$CARGO_HOME/bin" >> $GITHUB_PATH
 
       - name: Install python dependencies
@@ -64,8 +67,48 @@ jobs:
           mypy src tests
           cargo clippy --manifest-path crates/Cargo.toml -- -D warnings
 
-  test:
+  audit:
     needs: lint
+    runs-on: ubuntu-26.04
+    container:
+      image: python:3.14-slim-trixie
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            .cache/pip
+            .cargo/registry
+          key: ${{ runner.os }}-audit-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('dev-requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-audit-
+
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          apt-get install -y curl git
+
+      - name: Install rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.96.1
+          echo "$CARGO_HOME/bin" >> $GITHUB_PATH
+
+      - name: Install audit tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit
+          curl -fsSL https://github.com/EmbarkStudios/cargo-deny/releases/download/0.19.9/cargo-deny-0.19.9-x86_64-unknown-linux-musl.tar.gz | tar xz --wildcards --strip-components=1 -C /usr/local/bin '*/cargo-deny'
+
+      - name: Run audit
+        run: |
+          cargo deny --manifest-path crates/Cargo.toml check
+          pip-audit -r dev-requirements.txt
+
+  test:
+    needs: audit
     runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
@@ -75,18 +118,18 @@ jobs:
       image: python:${{ matrix.python-version }}-slim-trixie
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             .cache/pip
             .cargo/registry
             crates/target/
-          key: ${{ runner.os }}-cargo-test-${{ matrix.python-version }}-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('dev-requirements.txt') }}
+          key: ${{ runner.os }}-test-${{ matrix.python-version }}-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('dev-requirements.txt') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-test-${{ matrix.python-version }}-
+            ${{ runner.os }}-test-${{ matrix.python-version }}-
 
       - name: Install system dependencies
         run: |
@@ -95,7 +138,7 @@ jobs:
 
       - name: Install rust toolchain
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.1
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.96.1
           echo "$CARGO_HOME/bin" >> $GITHUB_PATH
 
       - name: Install python dependencies
@@ -124,7 +167,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download coverage
         uses: actions/download-artifact@v8
@@ -132,7 +175,7 @@ jobs:
           path: coverage-reports/
 
       - name: Publish coverage
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: wtransport/pywebtransport
@@ -144,7 +187,7 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Build sdist
         uses: PyO3/maturin-action@v1
@@ -178,7 +221,7 @@ jobs:
             target: x86_64-pc-windows-msvc
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Build wheels
         uses: PyO3/maturin-action@v1
@@ -199,7 +242,7 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Download wheels
         uses: actions/download-artifact@v8
