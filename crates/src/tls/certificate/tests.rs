@@ -17,12 +17,23 @@ use super::*;
 fn test_build_cert_params_hostname_acceptance_success(#[case] hostname: &str) {
     let res = build_cert_params(hostname, 1);
 
-    if let Err(e) = &res {
-        assert!(
-            res.is_ok(),
-            "Hostname '{hostname}' should be accepted but failed: {e}"
-        );
-    }
+    assert!(res.is_ok(), "should succeed");
+}
+
+#[test]
+fn test_build_cert_params_ip_address_hostname_success() {
+    let hostname = "127.0.0.1";
+
+    let res = build_cert_params(hostname, 1);
+
+    assert!(res.is_ok(), "should succeed");
+
+    let Ok(params) = res else { return };
+
+    assert!(matches!(
+        params.subject_alt_names.first(),
+        Some(SanType::IpAddress(_))
+    ));
 }
 
 #[test]
@@ -32,9 +43,7 @@ fn test_build_cert_params_logic_defaults_success() {
 
     let res = build_cert_params(hostname, validity_days);
 
-    if let Err(e) = &res {
-        assert!(res.is_ok(), "Failed to build params: {e}");
-    }
+    assert!(res.is_ok(), "should succeed");
 
     let Ok(params) = res else { return };
 
@@ -49,9 +58,7 @@ fn test_build_cert_params_utf8_hostname_rejection_failure() {
 
     let res = build_cert_params(hostname, 1);
 
-    if res.is_ok() {
-        assert!(res.is_err(), "UTF-8 hostname should be rejected");
-    }
+    assert!(res.is_err(), "should fail");
 
     if let Err(e) = res {
         assert_eq!(e.kind(), io::ErrorKind::InvalidInput);
@@ -66,9 +73,7 @@ fn test_generate_self_signed_cert_io_operations_success() {
 
     let res = generate_self_signed_cert(hostname, &temp_dir, 1);
 
-    if let Err(e) = &res {
-        assert!(res.is_ok(), "Generation failed: {e}");
-    }
+    assert!(res.is_ok(), "should succeed");
 
     let Ok((ca_path_str, cert_path_str, key_path_str)) = res else {
         return;
@@ -101,18 +106,14 @@ fn test_generate_self_signed_cert_key_permissions_unix_success() {
 
     let res = generate_self_signed_cert(hostname, &temp_dir, 1);
 
-    if let Err(e) = &res {
-        assert!(res.is_ok(), "Generation failed: {e}");
-    }
+    assert!(res.is_ok(), "should succeed");
 
     let Ok((_, _, key_path_str)) = res else {
         return;
     };
     let metadata_res = fs::metadata(key_path_str);
 
-    if let Err(e) = &metadata_res {
-        assert!(metadata_res.is_ok(), "Failed to read metadata: {e}");
-    }
+    assert!(metadata_res.is_ok(), "should succeed");
 
     let Ok(metadata) = metadata_res else { return };
     let mode = metadata.permissions().mode();
@@ -129,9 +130,31 @@ fn test_load_certs_fails_with_invalid_path() {
     let result = load_certs(path);
 
     let Err(_) = result else {
-        assert_eq!("err", "ok", "Expected err");
+        assert_eq!("err", "ok");
         unreachable!()
     };
+}
+
+#[test]
+fn test_load_certs_succeeds_with_valid_pem() {
+    let temp_dir = std::env::temp_dir().join("pywebtransport_load_certs_test");
+    drop(fs::remove_dir_all(&temp_dir));
+    let hostname = "load-certs-node";
+
+    let Ok((ca_path_str, _, _)) = generate_self_signed_cert(hostname, &temp_dir, 1) else {
+        assert_eq!("ok", "err");
+        unreachable!()
+    };
+
+    let result = load_certs(Path::new(&ca_path_str));
+
+    let Ok(certs) = result else {
+        assert_eq!("ok", "err");
+        unreachable!()
+    };
+    assert_eq!(certs.len(), 1);
+
+    drop(fs::remove_dir_all(&temp_dir));
 }
 
 #[rstest]
@@ -141,7 +164,28 @@ fn test_load_private_key_fails_with_invalid_path() {
     let result = load_private_key(path);
 
     let Err(_) = result else {
-        assert_eq!("err", "ok", "Expected err");
+        assert_eq!("err", "ok");
         unreachable!()
     };
+}
+
+#[test]
+fn test_no_certificate_verification_accepts_all() {
+    let verifier = NoCertificateVerification;
+    let cert = CertificateDer::from(vec![0x30, 0x03, 0x02, 0x01, 0x00]);
+    let Ok(server_name) = ServerName::try_from("localhost") else {
+        assert_eq!("ok", "err");
+        unreachable!()
+    };
+    let now = UnixTime::now();
+
+    let schemes = verifier.supported_verify_schemes();
+    match verifier.verify_server_cert(&cert, &[], &server_name, &[], now) {
+        Ok(_) => {}
+        Err(e) => {
+            assert_eq!(format!("{e:?}"), "");
+        }
+    }
+
+    assert!(!schemes.is_empty());
 }

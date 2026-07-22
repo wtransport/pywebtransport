@@ -26,7 +26,9 @@ logger = logging.getLogger(name="test_tls_export")
 
 async def test_e2e_symmetry() -> bool:
     """Test that client and server derive the exact same keying material."""
-    logger.info("--- Test 09A: E2E Symmetry ---")
+    logger.info("Test 09A: E2E Symmetry")
+    logger.info("-" * 50)
+
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
@@ -59,10 +61,10 @@ async def test_e2e_symmetry() -> bool:
                 return False
 
             if client_key == server_key:
-                logger.info("SUCCESS: Client and server derived identical keying material.")
+                logger.info("SUCCESS: Client and server derived identical keying material")
                 return True
             else:
-                logger.error("FAILURE: Keying material mismatch between client and server!")
+                logger.error("FAILURE: Keying material mismatch between client and server")
                 return False
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)
@@ -71,7 +73,9 @@ async def test_e2e_symmetry() -> bool:
 
 async def test_context_and_label_isolation() -> bool:
     """Test that different labels or contexts result in different keying material."""
-    logger.info("--- Test 09B: Context & Label Isolation ---")
+    logger.info("Test 09B: Context & Label Isolation")
+    logger.info("-" * 50)
+
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
@@ -94,14 +98,14 @@ async def test_context_and_label_isolation() -> bool:
             logger.info("Diff Context Key:   %s", key_diff_context.hex())
 
             if key_base == key_diff_label:
-                logger.error("FAILURE: Different labels produced the same key material.")
+                logger.error("FAILURE: Different labels produced the same key material")
                 return False
 
             if key_base == key_diff_context:
-                logger.error("FAILURE: Different contexts produced the same key material.")
+                logger.error("FAILURE: Different contexts produced the same key material")
                 return False
 
-            logger.info("SUCCESS: Key derivation isolation verified correctly.")
+            logger.info("SUCCESS: Key derivation isolation verified correctly")
             return True
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)
@@ -110,7 +114,9 @@ async def test_context_and_label_isolation() -> bool:
 
 async def test_error_handling() -> bool:
     """Test error handling for invalid states during key derivation."""
-    logger.info("--- Test 09C: Error Handling & Boundaries ---")
+    logger.info("Test 09C: Error Handling & Boundaries")
+    logger.info("-" * 50)
+
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
@@ -121,7 +127,7 @@ async def test_error_handling() -> bool:
 
             try:
                 await session.export_keying_material(label="invalid-state", context=b"test", length=16)
-                logger.error("FAILURE: Exporting keying material on a closed session did not raise an exception.")
+                logger.error("FAILURE: Exporting keying material on a closed session did not raise an exception")
                 return False
             except (ConnectionError, SessionError) as e:
                 logger.info("SUCCESS: Properly caught exception for closed session: %s", e)
@@ -134,7 +140,7 @@ async def test_error_handling() -> bool:
 
 async def main() -> int:
     """Run the main entry point for the TLS export test suite."""
-    logger.info("--- Starting Test 09: TLS Keying Material Export ---")
+    logger.info("Starting Test 09: TLS Keying Material Export")
 
     tests: list[tuple[str, Callable[[], Awaitable[bool]]]] = [
         ("E2E Symmetry", test_e2e_symmetry),
@@ -157,14 +163,14 @@ async def main() -> int:
         await asyncio.sleep(delay=1)
 
     logger.info("")
-    logger.info("=" * 60)
+    logger.info("=" * 50)
     logger.info("Test 09 Results: %d/%d passed", passed, total)
 
     if passed == total:
-        logger.info("TEST 09 PASSED: All TLS export tests successful!")
+        logger.info("TEST 09 PASSED: All tests successful")
         return 0
     else:
-        logger.error("TEST 09 FAILED: Some TLS export tests failed!")
+        logger.error("TEST 09 FAILED: Some tests failed")
         return 1
 
 
@@ -173,7 +179,7 @@ if __name__ == "__main__":
     try:
         exit_code = asyncio.run(main())
     except KeyboardInterrupt:
-        logger.warning("\nTest interrupted by user.")
+        logger.warning("\nTest interrupted by user")
         exit_code = 130
     except Exception as e:
         logger.critical("Test suite crashed with an unhandled exception: %s", e, exc_info=True)

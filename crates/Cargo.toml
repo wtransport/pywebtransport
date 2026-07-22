@@ -1,9 +1,9 @@
 [package]
 name = "pywebtransport-engine"
-version = "0.20.0"
+version = "0.20.1"
 edition = "2024"
 license = "Apache-2.0"
-rust-version = "1.96.1"
+rust-version = "1.97.1"
 publish = false
 build = "build.rs"
 

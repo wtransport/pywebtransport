@@ -301,7 +301,7 @@ class WebTransportSession:
         return SessionDiagnostics(**diag_data)
 
     async def ensure_ready(self) -> None:
-        """Wait until the session transitions out of the connecting state."""
+        """Ensure the session is ready."""
         if self._cached_state == SessionState.CONNECTING:
             event = await self.events.wait_for(event_type=[EventType.SESSION_READY, EventType.SESSION_CLOSED])
             if event.type == EventType.SESSION_CLOSED:

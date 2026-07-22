@@ -51,8 +51,7 @@ fn valid_settings_frame() -> Bytes {
     let payload = match encode_settings(&settings) {
         Ok(p) => p,
         Err(e) => {
-            let msg = format!("{e:?}");
-            assert_eq!(msg, "", "Failed to encode settings payload");
+            assert_eq!(format!("{e:?}"), "");
             unreachable!()
         }
     };
@@ -60,8 +59,7 @@ fn valid_settings_frame() -> Bytes {
     let header = match encode_frame_header(H3_FRAME_TYPE_SETTINGS, payload.len()) {
         Ok(h) => h,
         Err(e) => {
-            let msg = format!("{e:?}");
-            assert_eq!(msg, "", "Failed to encode SETTINGS header");
+            assert_eq!(format!("{e:?}"), "");
             unreachable!()
         }
     };
@@ -70,36 +68,6 @@ fn valid_settings_frame() -> Bytes {
     frame.put(header);
     frame.put(payload);
     frame.freeze()
-}
-
-#[test]
-fn test_recv_headers_dynamic_table_fails_with_zero_capacity() {
-    let mut h3 = create_h3(false);
-    let mock = MockConnectionLayout {
-        _padding: [0; 1024],
-    };
-    let stream_id = 0;
-    h3.settings_received = true;
-
-    let mut data = BytesMut::new();
-    data.put_u8(0x01);
-    assert!(matches!(write_varint(&mut data, 3), Ok(())));
-    data.extend_from_slice(&[0x02, 0x00, 0x80]);
-
-    let (_, effects) = h3.handle_transport_event(
-        &ProtocolEvent::TransportStreamDataReceived {
-            stream_id,
-            data: data.freeze(),
-            end_stream: false,
-        },
-        mock.as_connection(),
-    );
-
-    if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
-        assert_eq!(*error_code, ERR_QPACK_DECOMPRESSION_FAILED);
-    } else {
-        unreachable!("Expected CloseQuicConnection effect for QPACK decompression failure");
-    }
 }
 
 #[test]
@@ -140,11 +108,7 @@ fn test_client_rejects_server_initiated_non_wt_bidi_stream() {
     if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
         assert_eq!(*error_code, ERR_H3_STREAM_CREATION_ERROR);
     } else {
-        assert_eq!(
-            effects.len(),
-            0,
-            "Expected CloseQuicConnection for non-WT server-initiated bidi stream"
-        );
+        assert_eq!(effects.len(), 0);
     }
 }
 
@@ -157,8 +121,7 @@ fn test_encode_capsule_bidirectional_success() {
     match res {
         Ok(vec) => assert_eq!(vec.first().and_then(|b| b.first()), Some(&0x00)),
         Err(e) => {
-            let msg = format!("{e:?}");
-            assert_eq!(msg, "", "Failed to encode capsule");
+            assert_eq!(format!("{e:?}"), "");
         }
     }
 }
@@ -187,12 +150,11 @@ fn test_encode_datagram_success() {
             if let Some(header) = vec.first() {
                 assert_eq!(header.as_ref(), &[0x00]);
             } else {
-                assert_eq!(vec.len(), 0, "Encoded datagram vector is empty");
+                assert_eq!(vec.len(), 0);
             }
         }
         Err(e) => {
-            let msg = format!("{e:?}");
-            assert_eq!(msg, "", "Failed to encode datagram");
+            assert_eq!(format!("{e:?}"), "");
         }
     }
 }
@@ -216,8 +178,7 @@ fn test_encode_goaway_success() {
     match res {
         Ok(bytes) => assert_eq!(bytes.first(), Some(&0x07)),
         Err(e) => {
-            let msg = format!("{e:?}");
-            assert_eq!(msg, "", "Failed to encode GOAWAY");
+            assert_eq!(format!("{e:?}"), "");
         }
     }
 }
@@ -239,8 +200,7 @@ fn test_encode_headers_success() {
             );
         }
         Err(e) => {
-            let msg = format!("{e:?}");
-            assert_eq!(msg, "", "Failed to encode headers");
+            assert_eq!(format!("{e:?}"), "");
         }
     }
 }
@@ -283,7 +243,7 @@ fn test_handle_transport_event_datagram_malformed() {
     if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
         assert_eq!(*error_code, ERR_H3_DATAGRAM_ERROR);
     } else {
-        assert_eq!(effects.len(), 0, "Expected CloseQuicConnection effect");
+        assert_eq!(effects.len(), 0);
     }
 }
 
@@ -309,7 +269,7 @@ fn test_handle_transport_event_datagram_success() {
         assert_eq!(*stream_id, 0);
         assert_eq!(data.as_ref(), b"payload");
     } else {
-        assert_eq!(events.len(), 0, "Unexpected event type or empty events");
+        assert_eq!(events.len(), 0);
     }
 }
 
@@ -320,8 +280,7 @@ fn test_initialize_settings_success() {
     match res {
         Ok(bytes) => assert_eq!(bytes.first(), Some(&0x04)),
         Err(e) => {
-            let msg = format!("{e:?}");
-            assert_eq!(msg, "", "Failed to init settings");
+            assert_eq!(format!("{e:?}"), "");
         }
     }
 }
@@ -339,11 +298,76 @@ fn test_new_valid_config_success() {
 }
 
 #[test]
+fn test_parse_settings_all_named_and_unknown_fields() {
+    let settings = H3Settings {
+        enable_connect_protocol: Some(1),
+        h3_datagram: Some(1),
+        qpack_blocked_streams: Some(16),
+        wt_enabled: Some(1),
+        wt_initial_max_data: Some(4 * 1024 * 1024),
+        wt_initial_max_streams_bidi: Some(10),
+        wt_initial_max_streams_uni: Some(10),
+        unknown: vec![(0x1234, 42)],
+        ..Default::default()
+    };
+
+    let Ok(payload) = encode_settings(&settings) else {
+        return;
+    };
+
+    let parsed = match parse_settings(&payload) {
+        Ok(s) => s,
+        Err(e) => {
+            assert_eq!(format!("{e:?}"), "");
+            unreachable!()
+        }
+    };
+
+    assert_eq!(parsed.enable_connect_protocol, Some(1));
+    assert_eq!(parsed.h3_datagram, Some(1));
+    assert_eq!(parsed.qpack_blocked_streams, Some(16));
+    assert_eq!(parsed.wt_initial_max_data, Some(4 * 1024 * 1024));
+    assert_eq!(parsed.wt_initial_max_streams_bidi, Some(10));
+    assert_eq!(parsed.wt_initial_max_streams_uni, Some(10));
+    assert_eq!(parsed.unknown, vec![(0x1234, 42)]);
+}
+
+#[test]
 fn test_parse_settings_duplicate_id_failure() {
     let mut buf = BytesMut::new();
     buf.extend_from_slice(&[0x01, 0x01]);
     buf.extend_from_slice(&[0x01, 0x02]);
     let res = parse_settings(&buf.freeze());
+    assert!(matches!(
+        res,
+        Err(WebTransportError::Protocol(Some(ERR_H3_SETTINGS_ERROR), _))
+    ));
+}
+
+#[test]
+fn test_parse_settings_duplicate_unknown_id_failure() {
+    let mut buf = BytesMut::new();
+    buf.extend_from_slice(&[0x40, 0x30, 0x01]);
+    buf.extend_from_slice(&[0x40, 0x30, 0x02]);
+
+    let res = parse_settings(&buf.freeze());
+
+    assert!(matches!(
+        res,
+        Err(WebTransportError::Protocol(Some(ERR_H3_SETTINGS_ERROR), _))
+    ));
+}
+
+#[test]
+fn test_parse_settings_entries_limit_exceeded() {
+    let mut buf = BytesMut::new();
+    for id in 0x40u64..=0x80u64 {
+        buf.extend_from_slice(&[0x40, id.try_into().unwrap_or(0)]);
+        buf.extend_from_slice(&[0x01]);
+    }
+
+    let res = parse_settings(&buf.freeze());
+
     assert!(matches!(
         res,
         Err(WebTransportError::Protocol(Some(ERR_H3_SETTINGS_ERROR), _))
@@ -358,6 +382,30 @@ fn test_parse_settings_reserved_id_failure() {
     assert!(matches!(
         res,
         Err(WebTransportError::Protocol(Some(ERR_H3_SETTINGS_ERROR), _))
+    ));
+}
+
+#[test]
+fn test_parse_settings_truncated_id_failure() {
+    let buf = Bytes::from_static(&[0x40]);
+
+    let res = parse_settings(&buf);
+
+    assert!(matches!(
+        res,
+        Err(WebTransportError::Protocol(Some(ERR_H3_FRAME_ERROR), _))
+    ));
+}
+
+#[test]
+fn test_parse_settings_truncated_value_failure() {
+    let buf = Bytes::from_static(&[0x01, 0x40]);
+
+    let res = parse_settings(&buf);
+
+    assert!(matches!(
+        res,
+        Err(WebTransportError::Protocol(Some(ERR_H3_FRAME_ERROR), _))
     ));
 }
 
@@ -380,8 +428,7 @@ fn test_parse_settings_valid() {
             assert_eq!(s.max_field_section_size, Some(65536));
         }
         Err(e) => {
-            let msg = format!("{e:?}");
-            assert_eq!(msg, "", "Parse settings failed");
+            assert_eq!(format!("{e:?}"), "");
         }
     }
 }
@@ -437,7 +484,7 @@ fn test_recv_close_control_stream_error() {
     if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
         assert_eq!(*error_code, ERR_H3_CLOSED_CRITICAL_STREAM);
     } else {
-        assert_eq!(effects.len(), 0, "Expected error on closing control stream");
+        assert_eq!(effects.len(), 0);
     }
 }
 
@@ -515,11 +562,11 @@ fn test_recv_control_frame_too_large() {
         mock.as_connection(),
     );
 
-    if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
-        assert_eq!(*error_code, ERR_H3_FRAME_ERROR);
-    } else {
-        unreachable!("Expected CloseQuicConnection effect for large control frame");
-    }
+    let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() else {
+        assert_eq!("some", "none");
+        unreachable!()
+    };
+    assert_eq!(*error_code, ERR_H3_FRAME_ERROR);
 }
 
 #[test]
@@ -598,7 +645,7 @@ fn test_recv_control_headers_fails() {
     if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
         assert_eq!(*error_code, ERR_H3_FRAME_UNEXPECTED);
     } else {
-        assert_eq!(effects.len(), 0, "Expected error on headers in control");
+        assert_eq!(effects.len(), 0);
     }
 }
 
@@ -639,7 +686,7 @@ fn test_recv_control_settings_twice_fails() {
     if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
         assert_eq!(*error_code, ERR_H3_FRAME_UNEXPECTED);
     } else {
-        assert_eq!(effects.len(), 0, "Expected error on duplicate settings");
+        assert_eq!(effects.len(), 0);
     }
 }
 
@@ -687,11 +734,7 @@ fn test_recv_control_wt_stream_frame_fails() {
     if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
         assert_eq!(*error_code, ERR_H3_FRAME_ERROR);
     } else {
-        assert_eq!(
-            effects.len(),
-            0,
-            "Expected CloseQuicConnection for WT_STREAM frame on control stream"
-        );
+        assert_eq!(effects.len(), 0);
     }
 }
 
@@ -725,7 +768,7 @@ fn test_recv_data_on_closed_wt_stream() {
     if let Some(Effect::ResetQuicStream { error_code, .. }) = effects.first() {
         assert_eq!(*error_code, ERR_H3_MESSAGE_ERROR);
     } else {
-        assert_eq!(effects.len(), 0, "Expected ResetQuicStream effect");
+        assert_eq!(effects.len(), 0);
     }
 }
 
@@ -788,8 +831,38 @@ fn test_recv_double_headers_error() {
     if let Some(Effect::ResetQuicStream { error_code, .. }) = effects.first() {
         assert_eq!(*error_code, ERR_H3_FRAME_UNEXPECTED);
     } else {
-        assert_eq!(effects.len(), 0, "Expected error on double headers");
+        assert_eq!(effects.len(), 0);
     }
+}
+
+#[test]
+fn test_recv_headers_dynamic_table_fails_with_zero_capacity() {
+    let mut h3 = create_h3(false);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    let stream_id = 0;
+    h3.settings_received = true;
+
+    let mut data = BytesMut::new();
+    data.put_u8(0x01);
+    assert!(matches!(write_varint(&mut data, 3), Ok(())));
+    data.extend_from_slice(&[0x02, 0x00, 0x80]);
+
+    let (_, effects) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: data.freeze(),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() else {
+        assert_eq!("some", "none");
+        unreachable!()
+    };
+    assert_eq!(*error_code, ERR_QPACK_DECOMPRESSION_FAILED);
 }
 
 #[test]
@@ -831,8 +904,7 @@ fn test_recv_request_data_headers_frame_flow() {
     let headers = valid_req_headers();
     let mut sender_h3 = create_h3(true);
     if let Err(e) = sender_h3.set_local_stream_ids(2, 6, 10) {
-        let msg = format!("{e:?}");
-        assert_eq!(msg, "", "Set stream IDs failed");
+        assert_eq!(format!("{e:?}"), "");
     }
 
     let Ok(encoded_eff) = sender_h3.encode_headers(stream_id, &headers, false) else {
@@ -871,7 +943,7 @@ fn test_recv_request_data_headers_frame_flow() {
     );
 
     if frame_data.is_empty() {
-        assert_eq!(frame_data.len(), 0, "No frame data generated");
+        assert_eq!(frame_data.len(), 0);
     } else {
         let (events, _) = h3.handle_transport_event(
             &ProtocolEvent::TransportStreamDataReceived {
@@ -882,12 +954,39 @@ fn test_recv_request_data_headers_frame_flow() {
             mock.as_connection(),
         );
 
-        assert!(!events.is_empty(), "No events generated");
+        assert!(!events.is_empty());
         assert!(matches!(
             events.first(),
             Some(ProtocolEvent::H3HeadersReceived { .. })
         ));
     }
+}
+
+#[test]
+fn test_recv_request_data_headers_recovery_still_blocked() {
+    let mut h3 = create_h3(false);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    let stream_id = 0;
+
+    let mut p = PartialFrameInfo::new(stream_id);
+    p.headers_processed = false;
+    p.blocked = true;
+    h3.partial_frames.insert(stream_id, p);
+
+    let (events, effects) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: Bytes::from_static(b""),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    assert!(events.is_empty());
+    assert!(effects.is_empty());
+    assert!(h3.partial_frames.get(&stream_id).is_some_and(|p| p.blocked));
 }
 
 #[test]
@@ -915,11 +1014,11 @@ fn test_recv_request_data_headers_too_large() {
         mock.as_connection(),
     );
 
-    if let Some(Effect::ResetQuicStream { error_code, .. }) = effects.first() {
-        assert_eq!(*error_code, ERR_H3_MESSAGE_ERROR);
-    } else {
-        unreachable!("Expected ResetQuicStream due to oversized headers frame");
-    }
+    let Some(Effect::ResetQuicStream { error_code, .. }) = effects.first() else {
+        assert_eq!("some", "none");
+        unreachable!()
+    };
+    assert_eq!(*error_code, ERR_H3_MESSAGE_ERROR);
 }
 
 #[test]
@@ -978,12 +1077,65 @@ fn test_recv_request_data_push_promise_frame_fails() {
     if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
         assert_eq!(*error_code, ERR_H3_FRAME_UNEXPECTED);
     } else {
-        assert_eq!(
-            effects.len(),
-            0,
-            "Expected CloseQuicConnection effect for PUSH_PROMISE frame"
-        );
+        assert_eq!(effects.len(), 0);
     }
+}
+
+#[test]
+fn test_recv_request_data_session_stream_closure_via_fast_path() {
+    let mut h3 = create_h3(false);
+    let mut connection = Connection::new(
+        1,
+        false,
+        ConnectionParams {
+            early_event_ttl: 5.0,
+            flow_control_window: 4 * 1024 * 1024,
+            initial_max_data: 4 * 1024 * 1024,
+            initial_max_streams_bidi: 10,
+            initial_max_streams_uni: 10,
+            max_pending_capsules: 20,
+            max_pending_datagrams: 100,
+            max_pending_streams: 10,
+            max_session_pending_events: 100,
+            max_sessions: 10,
+            max_stream_read_buffer_size: 1024 * 1024,
+            max_stream_write_buffer_size: 1024 * 1024,
+            max_total_pending_events: 1000,
+        },
+    );
+    connection.handshake_completed(1.0);
+    let session_headers: Headers = vec![
+        (
+            Bytes::from_static(b":method"),
+            Bytes::from_static(b"CONNECT"),
+        ),
+        (Bytes::from_static(b":scheme"), Bytes::from_static(b"https")),
+        (
+            Bytes::from_static(b":authority"),
+            Bytes::from_static(b"localhost"),
+        ),
+        (Bytes::from_static(b":path"), Bytes::from_static(b"/")),
+        (
+            Bytes::from_static(b":protocol"),
+            Bytes::from_static(WT_UPGRADE_TOKEN),
+        ),
+    ];
+    connection.recv_headers(0, session_headers, false, 1.0);
+    assert!(connection.is_session_stream(0));
+
+    let (events, _effects) = match h3.recv_request_data(0, Bytes::new(), true, &connection) {
+        Ok(result) => result,
+        Err(e) => {
+            assert_eq!(format!("{e:?}"), "");
+            unreachable!()
+        }
+    };
+
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, ProtocolEvent::H3ConnectStreamClosed { stream_id: 0 }))
+    );
 }
 
 #[test]
@@ -1047,6 +1199,37 @@ fn test_recv_request_data_wt_fast_path() {
 }
 
 #[test]
+fn test_recv_request_data_wt_stream_preamble_detected() {
+    let mut h3 = create_h3(false);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    let stream_id = 4;
+
+    let (events, _) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: Bytes::from(vec![0x40, 0x41, 0x00]),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    assert_eq!(events.len(), 1);
+    assert!(matches!(
+        events.first(),
+        Some(ProtocolEvent::WebTransportStreamDataReceived {
+            session_id: 0,
+            stream_id: 4,
+            ..
+        })
+    ));
+    assert!(h3.partial_frames.get(&stream_id).is_some_and(|p| {
+        p.stream_type == Some(H3_STREAM_TYPE_WEBTRANSPORT) && p.control_stream_id == Some(0)
+    }));
+}
+
+#[test]
 fn test_recv_request_settings_frame_fails() {
     let mut h3 = create_h3(true);
     let mock = MockConnectionLayout {
@@ -1102,11 +1285,7 @@ fn test_recv_uni_stream_cancel_push_frame_fails() {
     if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
         assert_eq!(*error_code, ERR_H3_ID_ERROR);
     } else {
-        assert_eq!(
-            effects.len(),
-            0,
-            "Expected CloseQuicConnection effect for CANCEL_PUSH"
-        );
+        assert_eq!(effects.len(), 0);
     }
 }
 
@@ -1155,11 +1334,7 @@ fn test_recv_uni_stream_data_control_data_frame_fails() {
     if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
         assert_eq!(*error_code, ERR_H3_FRAME_UNEXPECTED);
     } else {
-        assert_eq!(
-            effects.len(),
-            0,
-            "Expected CloseQuicConnection for DATA frame on control stream"
-        );
+        assert_eq!(effects.len(), 0);
     }
 }
 
@@ -1191,7 +1366,7 @@ fn test_recv_uni_stream_data_control_missing_settings_failure() {
     if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
         assert_eq!(*error_code, ERR_H3_MISSING_SETTINGS);
     } else {
-        assert_eq!(effects.len(), 0, "Expected CloseQuicConnection effect");
+        assert_eq!(effects.len(), 0);
     }
 }
 
@@ -1305,17 +1480,17 @@ fn test_recv_uni_stream_data_wt_stream_parsing() {
     );
 
     assert_eq!(events.len(), 1);
-    if let Some(ProtocolEvent::WebTransportStreamDataReceived {
+    let Some(ProtocolEvent::WebTransportStreamDataReceived {
         stream_id: sid,
         data,
         ..
     }) = events.first()
-    {
-        assert_eq!(*sid, 7);
-        assert_eq!(data.as_ref(), b"abc");
-    } else {
-        unreachable!();
-    }
+    else {
+        assert_eq!("some", "none");
+        unreachable!()
+    };
+    assert_eq!(*sid, 7);
+    assert_eq!(data.as_ref(), b"abc");
 }
 
 #[test]
@@ -1340,11 +1515,11 @@ fn test_recv_uni_stream_data_wt_stream_unknown_session_ignored() {
         mock.as_connection(),
     );
 
-    if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
-        assert_eq!(*error_code, ERR_H3_ID_ERROR);
-    } else {
-        unreachable!("Expected CloseQuicConnection for invalid session ID");
-    }
+    let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() else {
+        assert_eq!("some", "none");
+        unreachable!()
+    };
+    assert_eq!(*error_code, ERR_H3_ID_ERROR);
 }
 
 #[test]
@@ -1375,11 +1550,7 @@ fn test_recv_uni_stream_duplicate_control_failure() {
     if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
         assert_eq!(*error_code, ERR_H3_STREAM_CREATION_ERROR);
     } else {
-        assert_eq!(
-            effects.len(),
-            0,
-            "Expected CloseQuicConnection for duplicate control stream"
-        );
+        assert_eq!(effects.len(), 0);
     }
 }
 
@@ -1416,11 +1587,7 @@ fn test_recv_uni_stream_max_push_id_frame_fails() {
     if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
         assert_eq!(*error_code, ERR_H3_FRAME_UNEXPECTED);
     } else {
-        assert_eq!(
-            effects.len(),
-            0,
-            "Expected CloseQuicConnection effect for MAX_PUSH_ID"
-        );
+        assert_eq!(effects.len(), 0);
     }
 }
 
@@ -1443,11 +1610,7 @@ fn test_recv_uni_stream_push_rejected() {
     if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
         assert_eq!(*error_code, ERR_H3_ID_ERROR);
     } else {
-        assert_eq!(
-            effects.len(),
-            0,
-            "Expected CloseQuicConnection for push stream"
-        );
+        assert_eq!(effects.len(), 0);
     }
 }
 
@@ -1470,6 +1633,34 @@ fn test_recv_uni_stream_qpack_decoder_feed() {
     let (_, effects) = h3.handle_transport_event(&event, mock.as_connection());
     assert!(effects.is_empty());
     assert_eq!(h3.peer_decoder_stream_id, Some(stream_id));
+}
+
+#[test]
+fn test_recv_uni_stream_qpack_encoder_malformed_instruction_fails() {
+    let mut h3 = create_h3(true);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    let stream_id = 11;
+
+    let mut payload = BytesMut::new();
+    payload.put_u8(0x02);
+    payload.put_slice(&[0x00, 0x01, 0x02]);
+
+    let (_, effects) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: payload.freeze(),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    if let Some(Effect::CloseQuicConnection { error_code, .. }) = effects.first() {
+        assert_eq!(*error_code, ERR_QPACK_ENCODER_STREAM_ERROR);
+    } else {
+        assert_eq!(effects.len(), 0);
+    }
 }
 
 #[test]
@@ -1507,8 +1698,7 @@ fn test_recv_wt_capsule_fragmented() {
     let events1 = match h3.parse_capsules(stream_id, &mut p) {
         Ok(evts) => evts,
         Err(e) => {
-            let msg = format!("{e:?}");
-            assert_eq!(msg, "", "parse_capsules failed");
+            assert_eq!(format!("{e:?}"), "");
             unreachable!()
         }
     };
@@ -1522,8 +1712,7 @@ fn test_recv_wt_capsule_fragmented() {
     let events2 = match h3.parse_capsules(stream_id, &mut p) {
         Ok(evts) => evts,
         Err(e) => {
-            let msg = format!("{e:?}");
-            assert_eq!(msg, "", "parse_capsules failed");
+            assert_eq!(format!("{e:?}"), "");
             unreachable!()
         }
     };
@@ -1532,7 +1721,7 @@ fn test_recv_wt_capsule_fragmented() {
     if let Some(ProtocolEvent::H3CapsuleReceived { capsule_data, .. }) = events2.first() {
         assert_eq!(capsule_data.as_ref(), b"ABC");
     } else {
-        assert_eq!(events2.len(), 0, "Expected CapsuleReceived event");
+        assert_eq!(events2.len(), 0);
     }
 }
 
@@ -1556,8 +1745,7 @@ fn test_recv_wt_control_stream_capsules() {
     let events = match h3.parse_capsules(stream_id, &mut p) {
         Ok(evts) => evts,
         Err(e) => {
-            let msg = format!("{e:?}");
-            assert_eq!(msg, "", "parse_capsules failed");
+            assert_eq!(format!("{e:?}"), "");
             unreachable!()
         }
     };
@@ -1572,8 +1760,84 @@ fn test_recv_wt_control_stream_capsules() {
         assert_eq!(*capsule_type, 0x00);
         assert_eq!(capsule_data.as_ref(), b"ABC");
     } else {
-        assert_eq!(events.len(), 0, "Expected CapsuleReceived event");
+        assert_eq!(events.len(), 0);
     }
+}
+
+#[test]
+fn test_recv_wt_control_stream_capsules_via_real_session() {
+    let mut h3 = create_h3(false);
+    let mut connection = Connection::new(
+        1,
+        false,
+        ConnectionParams {
+            early_event_ttl: 5.0,
+            flow_control_window: 4 * 1024 * 1024,
+            initial_max_data: 4 * 1024 * 1024,
+            initial_max_streams_bidi: 10,
+            initial_max_streams_uni: 10,
+            max_pending_capsules: 20,
+            max_pending_datagrams: 100,
+            max_pending_streams: 10,
+            max_session_pending_events: 100,
+            max_sessions: 10,
+            max_stream_read_buffer_size: 1024 * 1024,
+            max_stream_write_buffer_size: 1024 * 1024,
+            max_total_pending_events: 1000,
+        },
+    );
+    connection.handshake_completed(1.0);
+    let session_headers: Headers = vec![
+        (
+            Bytes::from_static(b":method"),
+            Bytes::from_static(b"CONNECT"),
+        ),
+        (Bytes::from_static(b":scheme"), Bytes::from_static(b"https")),
+        (
+            Bytes::from_static(b":authority"),
+            Bytes::from_static(b"localhost"),
+        ),
+        (Bytes::from_static(b":path"), Bytes::from_static(b"/")),
+        (
+            Bytes::from_static(b":protocol"),
+            Bytes::from_static(WT_UPGRADE_TOKEN),
+        ),
+    ];
+    connection.recv_headers(0, session_headers, false, 1.0);
+    assert!(connection.is_session_stream(0));
+
+    let mut p = PartialFrameInfo::new(0);
+    p.headers_processed = true;
+    p.is_webtransport_control = true;
+
+    let mut capsule = BytesMut::new();
+    capsule.put_u8(0x00);
+    capsule.put_u8(0x03);
+    capsule.put_slice(b"ABC");
+
+    let (events, _effects) = match h3.handle_request_frame(
+        0,
+        &mut p,
+        H3_FRAME_TYPE_DATA,
+        Some(capsule.freeze()),
+        false,
+        &connection,
+    ) {
+        Ok(result) => result,
+        Err(e) => {
+            assert_eq!(format!("{e:?}"), "");
+            unreachable!()
+        }
+    };
+
+    assert_eq!(events.len(), 1);
+    assert!(matches!(
+        events.first(),
+        Some(ProtocolEvent::H3CapsuleReceived {
+            capsule_type: 0x00,
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -1682,8 +1946,7 @@ fn test_set_local_stream_ids_success() {
     let mut h3 = create_h3(true);
     let res = h3.set_local_stream_ids(2, 6, 10);
     if let Err(e) = res {
-        let msg = format!("{e:?}");
-        assert_eq!(msg, "", "Failed to set local stream IDs");
+        assert_eq!(format!("{e:?}"), "");
     }
     assert_eq!(h3.local_control_stream_id(), Some(2));
 }
@@ -1720,13 +1983,7 @@ fn test_validate_header_syntax_cases(#[case] k: &[u8], #[case] v: &[u8], #[case]
     let res_v = validate_header_value(0, v);
 
     let is_valid = res_n.is_ok() && res_v.is_ok();
-    assert_eq!(
-        is_valid,
-        valid,
-        "Failed for {:?} : {:?}",
-        String::from_utf8_lossy(k),
-        String::from_utf8_lossy(v)
-    );
+    assert_eq!(is_valid, valid);
 }
 
 #[rstest]
@@ -1745,6 +2002,36 @@ fn test_validate_request_headers_duplicate_pseudo() {
     let headers = vec![
         (Bytes::from(":method"), Bytes::from("GET")),
         (Bytes::from(":method"), Bytes::from("POST")),
+    ];
+    let res = validate_request_headers(0, &headers);
+    assert!(matches!(
+        res,
+        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
+    ));
+}
+
+#[test]
+fn test_validate_request_headers_missing_authority_failure() {
+    let headers = vec![
+        (Bytes::from(":method"), Bytes::from("GET")),
+        (Bytes::from(":scheme"), Bytes::from("https")),
+        (Bytes::from(":authority"), Bytes::from("")),
+        (Bytes::from(":path"), Bytes::from("/")),
+    ];
+    let res = validate_request_headers(0, &headers);
+    assert!(matches!(
+        res,
+        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
+    ));
+}
+
+#[test]
+fn test_validate_request_headers_missing_path_failure() {
+    let headers = vec![
+        (Bytes::from(":method"), Bytes::from("GET")),
+        (Bytes::from(":scheme"), Bytes::from("https")),
+        (Bytes::from(":authority"), Bytes::from("localhost")),
+        (Bytes::from(":path"), Bytes::from("")),
     ];
     let res = validate_request_headers(0, &headers);
     assert!(matches!(
@@ -1824,6 +2111,16 @@ fn test_validate_response_headers_duplicate_status() {
 }
 
 #[test]
+fn test_validate_response_headers_invalid_pseudo_name_failure() {
+    let headers = vec![(Bytes::from(":method"), Bytes::from("GET"))];
+    let res = validate_response_headers(0, &headers);
+    assert!(matches!(
+        res,
+        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
+    ));
+}
+
+#[test]
 fn test_validate_response_headers_missing_status() {
     let headers = vec![(Bytes::from("server"), Bytes::from("nginx"))];
     let res = validate_response_headers(0, &headers);
@@ -1844,19 +2141,31 @@ fn test_validate_response_headers_missing_status_failure() {
 }
 
 #[test]
-fn test_validate_settings_missing_wt_enabled() {
-    let map = H3Settings::default();
-    let mock = MockConnectionLayout {
-        _padding: [0; 1024],
-    };
-    let res = validate_settings(&map, mock.as_connection());
+fn test_validate_response_headers_pseudo_after_regular_failure() {
+    let headers = vec![
+        (Bytes::from(":status"), Bytes::from("200")),
+        (Bytes::from("server"), Bytes::from("nginx")),
+        (Bytes::from(":status"), Bytes::from("200")),
+    ];
+    let res = validate_response_headers(0, &headers);
     assert!(matches!(
         res,
-        Err(WebTransportError::Protocol(
-            Some(ERR_WT_REQUIREMENTS_NOT_MET),
-            _
-        ))
+        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
     ));
+}
+
+#[test]
+fn test_validate_response_headers_valid_success() {
+    let headers = vec![
+        (Bytes::from(":status"), Bytes::from("200")),
+        (Bytes::from("server"), Bytes::from("nginx")),
+    ];
+    match validate_response_headers(0, &headers) {
+        Ok(()) => {}
+        Err(e) => {
+            assert_eq!(format!("{e:?}"), "");
+        }
+    }
 }
 
 #[test]
@@ -1923,5 +2232,20 @@ fn test_validate_settings_enable_connect_protocol_invalid() {
     assert!(matches!(
         res,
         Err(WebTransportError::Protocol(Some(ERR_H3_SETTINGS_ERROR), _))
+    ));
+}
+#[test]
+fn test_validate_settings_missing_wt_enabled() {
+    let map = H3Settings::default();
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    let res = validate_settings(&map, mock.as_connection());
+    assert!(matches!(
+        res,
+        Err(WebTransportError::Protocol(
+            Some(ERR_WT_REQUIREMENTS_NOT_MET),
+            _
+        ))
     ));
 }

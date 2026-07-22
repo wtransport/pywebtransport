@@ -65,7 +65,7 @@ class InteropServer(ServerApp):
         super().__init__(config=config)
         self.add_middleware(middleware=self._validate_baton_params)
         self._register_routes()
-        logger.info("InteropServer initialized (v%s)", LIB_VERSION)
+        logger.info("Interop Server initialized (v%s)", LIB_VERSION)
 
     async def handle_devious_baton(self, session: WebTransportSession, **kwargs: Any) -> None:
         """Handle the Devious Baton protocol."""
@@ -84,7 +84,7 @@ class InteropServer(ServerApp):
                     stream: WebTransportSendStream = await session.create_unidirectional_stream()
                 except (StreamError, TimeoutError):
                     logger.warning("Session %d: failed to create initial stream", session.session_id)
-                    await session.close(error_code=ERR_DA_YAMN, reason="Insufficient stream credit")
+                    await session.close(error_code=ERR_DA_YAMN, reason="insufficient stream credit")
                     return
 
                 self._attach_baton_handlers(session, stream)
@@ -95,18 +95,18 @@ class InteropServer(ServerApp):
                         await stream.write(data=payload)
                         await stream.close()
                 except asyncio.TimeoutError:
-                    await session.close(error_code=ERR_BORED, reason="Timeout sending initial baton")
+                    await session.close(error_code=ERR_BORED, reason="timeout sending initial baton")
                     return
 
         except Exception as e:
             logger.error("Server init loop failed: %s", e)
-            await session.close(error_code=ERR_DA_YAMN, reason="Insufficient credit or error")
+            await session.close(error_code=ERR_DA_YAMN, reason="insufficient credit or error")
             return
 
         async def on_datagram(event: Any) -> None:
             if isinstance(event.data, dict) and (data := event.data.get("data")):
                 if not self._validate_baton_datagram(data):
-                    await session.close(error_code=ERR_BRUH, reason="Malformed baton datagram")
+                    await session.close(error_code=ERR_BRUH, reason="malformed baton datagram")
 
         async def accept_bidi() -> None:
             try:
@@ -341,7 +341,7 @@ class InteropServer(ServerApp):
             padding_len, len_bytes = await self._baton_read_varint(stream)
 
             if padding_len > MAX_PADDING:
-                await session.close(error_code=ERR_SUS, reason="Padding too large")
+                await session.close(error_code=ERR_SUS, reason="padding too large")
                 return
 
             padding_data = b""
@@ -352,7 +352,7 @@ class InteropServer(ServerApp):
 
             baton_val = baton_bytes[0]
             if expected_val is not None and baton_val != expected_val:
-                await session.close(error_code=ERR_SUS, reason="Unexpected baton value")
+                await session.close(error_code=ERR_SUS, reason="unexpected baton value")
                 return
 
             if baton_val == 0:
@@ -376,10 +376,10 @@ class InteropServer(ServerApp):
                     try:
                         new_bidi_stream = await session.create_bidirectional_stream()
                     except TimeoutError:
-                        await session.close(error_code=ERR_BORED, reason="Timeout waiting for credit")
+                        await session.close(error_code=ERR_BORED, reason="timeout waiting for credit")
                         return
                     except Exception:
-                        await session.close(error_code=ERR_DA_YAMN, reason="Insufficient credit")
+                        await session.close(error_code=ERR_DA_YAMN, reason="insufficient credit")
                         return
 
                     self._attach_baton_handlers(session, new_bidi_stream)
@@ -389,7 +389,7 @@ class InteropServer(ServerApp):
                             await new_bidi_stream.write(data=out_msg)
                             await new_bidi_stream.write(data=b"", end_stream=True)
                     except asyncio.TimeoutError:
-                        await session.close(error_code=ERR_BORED, reason="Timeout writing")
+                        await session.close(error_code=ERR_BORED, reason="timeout writing")
                         return
 
                     asyncio.create_task(
@@ -405,17 +405,17 @@ class InteropServer(ServerApp):
                                 await stream.write(data=out_msg)
                                 await stream.write(data=b"", end_stream=True)
                         except asyncio.TimeoutError:
-                            await session.close(error_code=ERR_BORED, reason="Timeout writing")
+                            await session.close(error_code=ERR_BORED, reason="timeout writing")
                             return
 
                 case "bidi_self":
                     try:
                         new_uni_stream = await session.create_unidirectional_stream()
                     except TimeoutError:
-                        await session.close(error_code=ERR_BORED, reason="Timeout waiting for credit")
+                        await session.close(error_code=ERR_BORED, reason="timeout waiting for credit")
                         return
                     except Exception:
-                        await session.close(error_code=ERR_DA_YAMN, reason="Insufficient credit")
+                        await session.close(error_code=ERR_DA_YAMN, reason="insufficient credit")
                         return
 
                     self._attach_baton_handlers(session, new_uni_stream)
@@ -425,17 +425,17 @@ class InteropServer(ServerApp):
                             await new_uni_stream.write(data=out_msg)
                             await new_uni_stream.close()
                     except asyncio.TimeoutError:
-                        await session.close(error_code=ERR_BORED, reason="Timeout writing")
+                        await session.close(error_code=ERR_BORED, reason="timeout writing")
                         return
 
         except asyncio.IncompleteReadError:
-            await session.close(error_code=ERR_BRUH, reason="Malformed baton")
+            await session.close(error_code=ERR_BRUH, reason="malformed baton")
         except StreamError as e:
             if e.error_code == ERR_I_LIED:
                 return
-            await session.close(error_code=ERR_SUS, reason="Stream processing error")
+            await session.close(error_code=ERR_SUS, reason="stream processing error")
         except Exception:
-            await session.close(error_code=ERR_SUS, reason="Processing error")
+            await session.close(error_code=ERR_SUS, reason="processing error")
 
     def _register_routes(self) -> None:
         """Register request handlers."""

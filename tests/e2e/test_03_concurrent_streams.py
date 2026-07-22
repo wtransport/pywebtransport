@@ -33,7 +33,9 @@ logger = logging.getLogger(name="test_concurrent_streams")
 
 async def test_sequential_streams() -> bool:
     """Test creating and using multiple streams sequentially in one session."""
-    logger.info("--- Test 03A: Sequential Multiple Streams ---")
+    logger.info("Test 03A: Sequential Multiple Streams")
+    logger.info("-" * 50)
+
     num_streams = 3
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
@@ -52,11 +54,11 @@ async def test_sequential_streams() -> bool:
 
                 expected = b"ECHO: " + test_msg
                 if response != expected:
-                    logger.error("FAILURE: Stream %d echo failed.", stream_num)
+                    logger.error("FAILURE: Stream %d echo failed", stream_num)
                     return False
-                logger.info("Stream %d echo successful.", stream_num)
+                logger.info("Stream %d echo successful", stream_num)
 
-            logger.info("SUCCESS: All sequential streams worked correctly.")
+            logger.info("SUCCESS: All sequential streams worked correctly")
             return True
     except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Test failed due to connection or timeout issue: %s", e)
@@ -68,7 +70,9 @@ async def test_sequential_streams() -> bool:
 
 async def test_concurrent_streams() -> bool:
     """Test handling multiple streams concurrently using asyncio tasks."""
-    logger.info("--- Test 03B: Concurrent Streams ---")
+    logger.info("Test 03B: Concurrent Streams")
+    logger.info("-" * 50)
+
     num_streams = 10
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
@@ -83,10 +87,10 @@ async def test_concurrent_streams() -> bool:
 
             expected = b"ECHO: " + test_msg
             if response == expected:
-                logger.debug("Task %d: Echo successful.", task_id)
+                logger.debug("Task %d: Echo successful", task_id)
                 return True
             else:
-                logger.error("Task %d: Echo failed.", task_id)
+                logger.error("Task %d: Echo failed", task_id)
                 return False
         except Exception as e:
             logger.error("Task %d: Failed with an exception: %s", task_id, e)
@@ -101,14 +105,14 @@ async def test_concurrent_streams() -> bool:
             tasks = [asyncio.create_task(coro=stream_task(session=session, task_id=i + 1)) for i in range(num_streams)]
             results = await asyncio.gather(*tasks)
             duration = time.time() - start_time
-            logger.info("All tasks completed in %.2fs.", duration)
+            logger.info("All tasks completed in %.2fs", duration)
 
             success_count = sum(1 for result in results if result is True)
             if success_count == num_streams:
-                logger.info("SUCCESS: All concurrent streams completed successfully!")
+                logger.info("SUCCESS: All concurrent streams completed successfully")
                 return True
             else:
-                logger.error("FAILURE: %d/%d concurrent streams failed.", num_streams - success_count, num_streams)
+                logger.error("FAILURE: %d/%d concurrent streams failed", num_streams - success_count, num_streams)
                 return False
     except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Test failed due to connection or timeout issue: %s", e)
@@ -120,7 +124,9 @@ async def test_concurrent_streams() -> bool:
 
 async def test_stream_lifecycle() -> bool:
     """Test the full lifecycle management of a single stream."""
-    logger.info("--- Test 03C: Stream Lifecycle Management ---")
+    logger.info("Test 03C: Stream Lifecycle Management")
+    logger.info("-" * 50)
+
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
@@ -131,14 +137,14 @@ async def test_stream_lifecycle() -> bool:
 
             await stream.write_all(data=b"Lifecycle test", end_stream=True)
             await stream.read_all()
-            logger.info("Data exchanged.")
+            logger.info("Data exchanged")
 
             try:
                 await stream.write(data=b"This should fail")
-                logger.error("FAILURE: Write on a half-closed stream should not succeed.")
+                logger.error("FAILURE: Write on a half-closed stream should not succeed")
                 return False
             except StreamError:
-                logger.info("SUCCESS: Write on a half-closed stream correctly failed.")
+                logger.info("SUCCESS: Write on a half-closed stream correctly failed")
                 return True
             except Exception as e:
                 logger.error("FAILURE: Unexpected error on second write: %s", e)
@@ -150,7 +156,9 @@ async def test_stream_lifecycle() -> bool:
 
 async def test_stream_stress() -> bool:
     """Perform a stress test by rapidly creating and using streams."""
-    logger.info("--- Test 03D: Stream Stress Test ---")
+    logger.info("Test 03D: Stream Stress Test")
+    logger.info("-" * 50)
+
     num_iterations = 20
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
@@ -167,12 +175,12 @@ async def test_stream_stress() -> bool:
                 response = await stream.read_all()
                 expected = b"ECHO: " + test_msg
                 if response != expected:
-                    logger.error("FAILURE: Iteration %d echo mismatch.", i + 1)
+                    logger.error("FAILURE: Iteration %d echo mismatch", i + 1)
                     return False
 
             duration = time.time() - start_time
             rate = num_iterations / duration if duration > 0 else float("inf")
-            logger.info("SUCCESS: %d stream operations in %.2fs (%.1f ops/s).", num_iterations, duration, rate)
+            logger.info("SUCCESS: %d stream operations in %.2fs (%.1f ops/s)", num_iterations, duration, rate)
             return True
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)
@@ -181,7 +189,7 @@ async def test_stream_stress() -> bool:
 
 async def main() -> int:
     """Run the main entry point for the concurrent streams test."""
-    logger.info("--- Starting Test 03: Concurrent Streams ---")
+    logger.info("Starting Test 03: Concurrent Streams")
 
     tests: list[tuple[str, Callable[[], Awaitable[bool]]]] = [
         ("Sequential Multiple Streams", test_sequential_streams),
@@ -205,14 +213,14 @@ async def main() -> int:
         await asyncio.sleep(delay=1)
 
     logger.info("")
-    logger.info("=" * 60)
+    logger.info("=" * 50)
     logger.info("Test 03 Results: %d/%d passed", passed, total)
 
     if passed == total:
-        logger.info("TEST 03 PASSED: All concurrent stream tests successful!")
+        logger.info("TEST 03 PASSED: All tests successful")
         return 0
     else:
-        logger.error("TEST 03 FAILED: Some concurrent stream tests failed!")
+        logger.error("TEST 03 FAILED: Some tests failed")
         return 1
 
 
@@ -221,7 +229,7 @@ if __name__ == "__main__":
     try:
         exit_code = asyncio.run(main())
     except KeyboardInterrupt:
-        logger.warning("\nTest interrupted by user.")
+        logger.warning("\nTest interrupted by user")
         exit_code = 130
     except Exception as e:
         logger.critical("Test suite crashed with an unhandled exception: %s", e, exc_info=True)

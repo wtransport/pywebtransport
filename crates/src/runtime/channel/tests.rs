@@ -19,19 +19,19 @@ fn test_ipc_channels_creation_and_messaging() {
     let event = RuntimeEvent::ReactorShutDown;
 
     let Ok(()) = channels.command_tx.try_send(command) else {
-        assert_eq!("ok", "err", "Failed to send command");
+        assert_eq!("ok", "err");
         unreachable!()
     };
     let Ok(received_command) = channels.command_rx.try_recv() else {
-        assert_eq!("ok", "err", "Failed to receive command");
+        assert_eq!("ok", "err");
         unreachable!()
     };
     let Ok(()) = channels.event_tx.push(event) else {
-        assert_eq!("ok", "err", "Failed to push event");
+        assert_eq!("ok", "err");
         unreachable!()
     };
     let Some(received_event) = channels.event_rx.pop() else {
-        assert_eq!("some", "none", "Failed to pop event");
+        assert_eq!("some", "none");
         unreachable!()
     };
 

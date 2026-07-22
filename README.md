@@ -7,7 +7,7 @@
 
 # PyWebTransport
 
-_An async-native WebTransport stack for Python_
+_An async-native WebTransport stack_
 
   <br />
 

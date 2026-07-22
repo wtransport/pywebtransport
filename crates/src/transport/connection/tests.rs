@@ -63,7 +63,7 @@ fn create_dummy_quic_connection() -> QuinnConnection {
     let Ok(builder) =
         rustls::ClientConfig::builder_with_provider(provider).with_protocol_versions(&[&TLS13])
     else {
-        assert_eq!("ok", "err", "Failed to build rustls client config");
+        assert_eq!("ok", "err");
         unreachable!()
     };
     let root_store = RootCertStore::empty();
@@ -74,7 +74,7 @@ fn create_dummy_quic_connection() -> QuinnConnection {
         .dangerous()
         .set_certificate_verifier(Arc::new(DummyVerifier));
     let Ok(quic_crypto) = QuicClientConfig::try_from(crypto) else {
-        assert_eq!("ok", "err", "Failed to build QuicClientConfig");
+        assert_eq!("ok", "err");
         unreachable!()
     };
     let mut client_config = ClientConfig::new(Arc::new(quic_crypto));
@@ -84,7 +84,7 @@ fn create_dummy_quic_connection() -> QuinnConnection {
 
     let Ok((_, connection)) = endpoint.connect(Instant::now(), client_config, remote, "localhost")
     else {
-        assert_eq!("ok", "err", "Failed to connect quinn endpoint");
+        assert_eq!("ok", "err");
         unreachable!()
     };
 
@@ -143,7 +143,7 @@ fn test_handle_timeout_past_early_event_time_updates_next_ttl() {
     let interval = Duration::from_secs(2);
     connection.early_event_ttl = Some(interval);
     let Some(past_time) = now.checked_sub(Duration::from_secs(1)) else {
-        assert_eq!("valid", "underflow", "Time underflow");
+        assert_eq!("valid", "underflow");
         unreachable!()
     };
     connection.next_early_event_time = Some(past_time);
@@ -160,7 +160,7 @@ fn test_handle_timeout_past_gc_time_updates_next_gc_time() {
     let interval = Duration::from_secs(5);
     connection.gc_interval = Some(interval);
     let Some(past_time) = now.checked_sub(Duration::from_secs(1)) else {
-        assert_eq!("valid", "underflow", "Time underflow");
+        assert_eq!("valid", "underflow");
         unreachable!()
     };
     connection.next_gc_time = Some(past_time);
@@ -234,6 +234,21 @@ fn test_process_effects_close_quic_connection_processes_safely() {
     let effects = vec![Effect::CloseQuicConnection {
         error_code: 0,
         reason: None,
+    }];
+
+    connection.process_effects(effects, &mut event_queue, Instant::now());
+
+    assert!(connection.pending_effects.is_empty());
+    assert!(event_queue.is_empty());
+}
+
+#[test]
+fn test_process_effects_close_quic_connection_with_reason_processes_safely() {
+    let mut connection = create_test_connection();
+    let mut event_queue = VecDeque::new();
+    let effects = vec![Effect::CloseQuicConnection {
+        error_code: 0,
+        reason: Some(Cow::Borrowed("shutdown")),
     }];
 
     connection.process_effects(effects, &mut event_queue, Instant::now());
@@ -417,7 +432,7 @@ fn test_process_effects_send_quic_data_appends_to_send_buffer() {
     connection.process_effects(effects, &mut event_queue, Instant::now());
 
     let Some(buffer) = connection.send_buffers.get(&q_id) else {
-        assert_eq!("found", "missing", "SendBuffer should exist");
+        assert_eq!("found", "missing");
         unreachable!()
     };
     assert!(buffer.finished);

@@ -138,9 +138,9 @@ class TestWebTransportServer:
     ) -> None:
         mock_close = mocker.patch.object(target=server, attribute="close", new_callable=mocker.AsyncMock)
 
-        with pytest.raises(expected_exception=ValueError, match="Test exception"):
+        with pytest.raises(expected_exception=ValueError, match="test exception"):
             async with server:
-                raise ValueError("Test exception")
+                raise ValueError("test exception")
 
         mock_close.assert_awaited_once()
 
@@ -257,7 +257,7 @@ class TestWebTransportServer:
         mock_controller: Any,
     ) -> None:
         await server.listen()
-        mock_connection_manager.shutdown.side_effect = RuntimeError("Shutdown error")
+        mock_connection_manager.shutdown.side_effect = RuntimeError("shutdown error")
 
         try:
             await server.close()
@@ -360,7 +360,7 @@ class TestWebTransportServer:
         mock_webtransport_connection: Any,
         mocker: MockerFixture,
     ) -> None:
-        mock_connection_manager.add_connection.side_effect = ValueError("Add failed")
+        mock_connection_manager.add_connection.side_effect = ValueError("add failed")
 
         await server._initialize_and_register_connection(connection=mock_webtransport_connection)
 
@@ -376,7 +376,7 @@ class TestWebTransportServer:
         mock_webtransport_connection: Any,
         mocker: MockerFixture,
     ) -> None:
-        mock_connection_manager.add_connection.side_effect = ValueError("Add failed")
+        mock_connection_manager.add_connection.side_effect = ValueError("add failed")
         type(mock_webtransport_connection).is_closed = mocker.PropertyMock(return_value=True)
 
         await server._initialize_and_register_connection(connection=mock_webtransport_connection)
@@ -417,7 +417,7 @@ class TestWebTransportServer:
         mocker: MockerFixture,
     ) -> None:
         mock_logger = mocker.patch(target="pywebtransport.server._logger.warning")
-        mock_session_manager.add_session.side_effect = ValueError("Session limit reached")
+        mock_session_manager.add_session.side_effect = ValueError("session limit reached")
 
         await server._initialize_and_register_connection(connection=mock_webtransport_connection)
 
@@ -437,7 +437,7 @@ class TestWebTransportServer:
     async def test_listen_cert_file_not_found(
         self, server: WebTransportServer, mock_endpoint_controller_class: Any, mocker: MockerFixture
     ) -> None:
-        mock_endpoint_controller_class.side_effect = FileNotFoundError("Cert missing")
+        mock_endpoint_controller_class.side_effect = FileNotFoundError("cert missing")
 
         with pytest.raises(expected_exception=ServerError, match="sys_file open failed"):
             await server.listen()
@@ -446,7 +446,7 @@ class TestWebTransportServer:
     async def test_listen_generic_exception(
         self, server: WebTransportServer, mock_endpoint_controller_class: Any, mocker: MockerFixture
     ) -> None:
-        mock_endpoint_controller_class.side_effect = Exception("Generic error")
+        mock_endpoint_controller_class.side_effect = Exception("generic error")
 
         with pytest.raises(expected_exception=ServerError, match="app_server open failed"):
             await server.listen()
@@ -585,7 +585,7 @@ class TestWebTransportServer:
 
         assert server._shutdown_event is not None
 
-        mocker.patch.object(target=server._shutdown_event, attribute="wait", side_effect=ValueError("Wait error"))
+        mocker.patch.object(target=server._shutdown_event, attribute="wait", side_effect=ValueError("wait error"))
 
         with pytest.raises(expected_exception=ServerError, match="rt_event resolve failed"):
             await server.serve_forever()
@@ -601,7 +601,7 @@ class TestWebTransportServer:
         mock_logger = mocker.patch(target="pywebtransport.server._logger.warning")
         mocker.patch(
             target="pywebtransport.server.WebTransportConnection.accept",
-            side_effect=ValueError("Factory failed"),
+            side_effect=ValueError("factory failed"),
         )
 
         server._spawn_connection_callback(handle=1)

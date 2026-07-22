@@ -157,21 +157,21 @@ impl TransportEndpoint {
             Some(DatagramEvent::ConnectionEvent(handle, event)) => {
                 let mut is_drained = false;
 
-                let effects = if let Some(conn) = self.connections.get_mut(&handle) {
-                    conn.handle_connection_event(event, now, now_instant);
-
-                    while let Some(endpoint_event) = conn.poll_endpoint_events() {
-                        if endpoint_event.is_drained() {
-                            is_drained = true;
-                        }
-
-                        self.endpoint.handle_event(handle, endpoint_event);
-                    }
-
-                    Self::collect_effects(conn)
-                } else {
+                let Some(conn) = self.connections.get_mut(&handle) else {
                     return TransportEvent::Consumed;
                 };
+
+                conn.handle_connection_event(event, now, now_instant);
+
+                while let Some(endpoint_event) = conn.poll_endpoint_events() {
+                    if endpoint_event.is_drained() {
+                        is_drained = true;
+                    }
+
+                    self.endpoint.handle_event(handle, endpoint_event);
+                }
+
+                let effects = Self::collect_effects(conn);
 
                 if is_drained {
                     self.connections.remove(&handle);
@@ -259,24 +259,26 @@ impl TransportEndpoint {
         self.handles_workspace.sort_unstable();
 
         for handle in &self.handles_workspace {
-            if let Some(conn) = self.connections.get_mut(handle) {
-                if conn.timeout().is_some_and(|t| now_instant >= t) {
-                    conn.handle_timeout(now, now_instant);
+            let Some(conn) = self.connections.get_mut(handle) else {
+                continue;
+            };
 
-                    let effects = Self::collect_effects(conn);
+            if conn.timeout().is_some_and(|t| now_instant >= t) {
+                conn.handle_timeout(now, now_instant);
 
-                    if !effects.is_empty() {
-                        results.push((*handle, effects));
-                    }
+                let effects = Self::collect_effects(conn);
+
+                if !effects.is_empty() {
+                    results.push((*handle, effects));
+                }
+            }
+
+            while let Some(endpoint_event) = conn.poll_endpoint_events() {
+                if endpoint_event.is_drained() {
+                    drained_handles.push(*handle);
                 }
 
-                while let Some(endpoint_event) = conn.poll_endpoint_events() {
-                    if endpoint_event.is_drained() {
-                        drained_handles.push(*handle);
-                    }
-
-                    self.endpoint.handle_event(*handle, endpoint_event);
-                }
+                self.endpoint.handle_event(*handle, endpoint_event);
             }
         }
 
@@ -297,21 +299,19 @@ impl TransportEndpoint {
     ) -> Option<TransportEvent> {
         let mut is_drained = false;
 
-        let effects = if let Some(conn) = self.connections.get_mut(&handle) {
-            conn.handle_user_event(event, now, now_instant);
+        let conn = self.connections.get_mut(&handle)?;
 
-            while let Some(endpoint_event) = conn.poll_endpoint_events() {
-                if endpoint_event.is_drained() {
-                    is_drained = true;
-                }
+        conn.handle_user_event(event, now, now_instant);
 
-                self.endpoint.handle_event(handle, endpoint_event);
+        while let Some(endpoint_event) = conn.poll_endpoint_events() {
+            if endpoint_event.is_drained() {
+                is_drained = true;
             }
 
-            Self::collect_effects(conn)
-        } else {
-            return None;
-        };
+            self.endpoint.handle_event(handle, endpoint_event);
+        }
+
+        let effects = Self::collect_effects(conn);
 
         if is_drained {
             self.connections.remove(&handle);

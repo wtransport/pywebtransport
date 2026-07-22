@@ -205,7 +205,7 @@ fn test_effect_notify_request_failed_structure_success(
         request_id: fixture_request_id,
         source: fixture_error_source,
         error_code: Some(fixture_error_code),
-        reason: Cow::Borrowed("Failed"),
+        reason: Cow::Borrowed("failed"),
     };
 
     assert!(matches!(effect, Effect::NotifyRequestFailed { .. }));
@@ -335,7 +335,7 @@ fn test_protocol_event_internal_bind_quic_stream_debug_formatting_success(
 fn test_protocol_event_transport_connection_terminated_properties_success(
     fixture_error_code: ErrorCode,
 ) {
-    let reason: Cow<'static, str> = Cow::Owned("Connection timeout".to_owned());
+    let reason: Cow<'static, str> = Cow::Owned("connection timeout".to_owned());
     let event = ProtocolEvent::TransportConnectionTerminated {
         error_code: fixture_error_code,
         reason: reason.clone(),

@@ -93,7 +93,7 @@ class TestBaseResourceManager:
     ) -> None:
         resource = MockResource(resource_id="r1")
         resource.events = mocker.MagicMock(spec=EventEmitter)
-        cast(MagicMock, resource.events.off).side_effect = ValueError("Handler not found")
+        cast(MagicMock, resource.events.off).side_effect = ValueError("handler not found")
 
         mocker.patch.object(target=manager, attribute="_check_is_closed", return_value=True)
 
@@ -219,7 +219,7 @@ class TestBaseResourceManager:
     ) -> None:
         resource = MockResource(resource_id="r1")
         resource.events = mocker.MagicMock(spec=EventEmitter)
-        cast(MagicMock, resource.events.off).side_effect = ValueError("Cleanup error")
+        cast(MagicMock, resource.events.off).side_effect = ValueError("cleanup error")
 
         async with manager:
             await manager.add_resource(resource=resource)
@@ -340,8 +340,8 @@ class TestBaseResourceManager:
     ) -> None:
         r1 = MockResource(resource_id="r1")
         r2 = MockResource(resource_id="r2")
-        mocker.patch.object(target=r1, attribute="close", side_effect=ValueError("Fail 1"))
-        mocker.patch.object(target=r2, attribute="close", side_effect=RuntimeError("Fail 2"))
+        mocker.patch.object(target=r1, attribute="close", side_effect=ValueError("fail 1"))
+        mocker.patch.object(target=r2, attribute="close", side_effect=RuntimeError("fail 2"))
 
         try:
             async with manager:
@@ -351,7 +351,7 @@ class TestBaseResourceManager:
             pass
 
         assert "app_manager close failed component=test_item err=" in caplog.text
-        assert "Fail 1" in caplog.text or "Fail 2" in caplog.text
+        assert "fail 1" in caplog.text or "fail 2" in caplog.text
         assert len(manager) == 0
 
     async def test_shutdown_idempotent(self, manager: ConcreteResourceManager) -> None:

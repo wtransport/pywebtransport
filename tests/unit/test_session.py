@@ -445,7 +445,7 @@ class TestWebTransportSession:
 
     @pytest.mark.asyncio
     async def test_diagnostics_connection_error(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
-        mock_connection.execute_request.side_effect = ConnectionError(message="Closed")
+        mock_connection.execute_request.side_effect = ConnectionError(message="closed")
 
         with pytest.raises(expected_exception=ConnectionError):
             await session.diagnostics()

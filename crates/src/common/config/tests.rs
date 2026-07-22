@@ -17,22 +17,13 @@ fn test_config_structs_are_thread_safe() {
 #[test]
 fn test_config_memory_footprint() {
     let base_size = size_of::<RustBaseConfig>();
-    assert!(
-        base_size <= 384,
-        "RustBaseConfig is too large ({base_size} bytes). Consider boxing large fields."
-    );
+    assert!(base_size <= 384);
 
     let client_size = size_of::<RustClientConfig>();
-    assert!(
-        client_size <= 512,
-        "RustClientConfig is too large ({client_size} bytes)."
-    );
+    assert!(client_size <= 512);
 
     let server_size = size_of::<RustServerConfig>();
-    assert!(
-        server_size <= 512,
-        "RustServerConfig is too large ({server_size} bytes)."
-    );
+    assert!(server_size <= 512);
 }
 
 #[test]

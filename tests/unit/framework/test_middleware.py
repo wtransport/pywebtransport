@@ -47,7 +47,7 @@ class TestMiddlewareFactories:
 
     @pytest.mark.asyncio
     async def test_create_auth_middleware_handler_exception(self, mock_session: Any, mocker: MockerFixture) -> None:
-        auth_handler = mocker.AsyncMock(side_effect=ValueError("Auth error"))
+        auth_handler = mocker.AsyncMock(side_effect=ValueError("auth error"))
         auth_middleware = create_auth_middleware(auth_handler=auth_handler)
 
         with pytest.raises(expected_exception=MiddlewareRejected) as exc_info:
@@ -150,7 +150,7 @@ class TestMiddlewareManager:
 
     async def test_process_request_exception(self, mock_session: Any, mocker: MockerFixture) -> None:
         manager = MiddlewareManager()
-        middleware1 = mocker.AsyncMock(side_effect=ValueError("Middleware error"))
+        middleware1 = mocker.AsyncMock(side_effect=ValueError("middleware error"))
         manager.add_middleware(middleware=middleware1)
 
         with pytest.raises(expected_exception=MiddlewareRejected) as exc_info:
@@ -309,13 +309,13 @@ class TestRateLimiter:
             assert rate_limiter._lock is not None
 
             mock_lock = mocker.MagicMock()
-            mock_lock.__aenter__.side_effect = ValueError("Cleanup error")
+            mock_lock.__aenter__.side_effect = ValueError("cleanup error")
             rate_limiter._lock = mock_lock
 
             with pytest.raises(expected_exception=asyncio.CancelledError):
                 await rate_limiter._periodic_cleanup()
 
-        assert "rt_task failed err=Cleanup error" in caplog.text
+        assert "rt_task failed err=cleanup error" in caplog.text
 
     async def test_rate_limiter_call_not_activated(self, mock_session: Any) -> None:
         limiter = RateLimiter()
@@ -422,15 +422,15 @@ def test_find_header_str_from_dict() -> None:
     headers: Headers = {"content-type": "application/json"}
 
     assert _find_header_str(headers=headers, key="content-type") == "application/json"
-    assert _find_header_str(headers=headers, key="Unknown") is None
-    assert _find_header_str(headers=headers, key="Unknown", default="default") == "default"
+    assert _find_header_str(headers=headers, key="unknown") is None
+    assert _find_header_str(headers=headers, key="unknown", default="default") == "default"
 
 
 def test_find_header_str_from_list() -> None:
     headers: Headers = [("Content-Type", "application/json")]
 
     assert _find_header_str(headers=headers, key="content-type") == "application/json"
-    assert _find_header_str(headers=headers, key="Unknown") is None
+    assert _find_header_str(headers=headers, key="unknown") is None
 
 
 def test_find_header_str_invalid_utf8() -> None:

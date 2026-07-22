@@ -26,7 +26,9 @@ logger = logging.getLogger(name="test_protocol_negotiation")
 
 async def test_exact_match() -> bool:
     """Test successful negotiation when exact matching protocols are provided."""
-    logger.info("--- Test 08A: Exact Match ---")
+    logger.info("Test 08A: Exact Match")
+    logger.info("-" * 50)
+
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
@@ -47,7 +49,9 @@ async def test_exact_match() -> bool:
 
 async def test_fallback_downgrade() -> bool:
     """Test successful negotiation utilizing fallback/downgrade to a lower protocol version."""
-    logger.info("--- Test 08B: Fallback Downgrade ---")
+    logger.info("Test 08B: Fallback Downgrade")
+    logger.info("-" * 50)
+
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
@@ -68,48 +72,54 @@ async def test_fallback_downgrade() -> bool:
 
 async def test_mismatch_rejection() -> bool:
     """Test that connection is correctly rejected when no protocols match."""
-    logger.info("--- Test 08C: Mismatch Rejection ---")
+    logger.info("Test 08C: Mismatch Rejection")
+    logger.info("-" * 50)
+
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
             await client.connect(url=TEST_URL, wt_available_protocols=["unknown-proto"])
-            logger.error("FAILURE: Connection succeeded but should have been rejected.")
+            logger.error("FAILURE: Connection succeeded but should have been rejected")
             return False
     except Exception as e:
-        logger.info("SUCCESS: Connection rejected successfully due to mismatch. (%s)", e)
+        logger.info("SUCCESS: Connection rejected successfully due to mismatch: %s", e)
         return True
 
 
 async def test_missing_required() -> bool:
     """Test that connection is correctly rejected when no protocols are offered but are required."""
-    logger.info("--- Test 08D: Missing Required Protocol ---")
+    logger.info("Test 08D: Missing Required Protocol")
+    logger.info("-" * 50)
+
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
             await client.connect(url=TEST_URL, wt_available_protocols=None)
-            logger.error("FAILURE: Connection succeeded but should have been rejected.")
+            logger.error("FAILURE: Connection succeeded but should have been rejected")
             return False
     except Exception as e:
-        logger.info("SUCCESS: Connection rejected successfully due to missing protocols. (%s)", e)
+        logger.info("SUCCESS: Connection rejected successfully due to missing protocols: %s", e)
         return True
 
 
 async def test_rogue_missing() -> bool:
     """Test that client aborts with WT_ALPN_ERROR when server fails to send a required protocol."""
-    logger.info("--- Test 08E: Rogue Server Missing Protocol ---")
+    logger.info("Test 08E: Rogue Server Missing Protocol")
+    logger.info("-" * 50)
+
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
             await client.connect(url=TEST_URL, wt_available_protocols=["trigger-missing"])
-            logger.error("FAILURE: Connection succeeded but should have been aborted by client.")
+            logger.error("FAILURE: Connection succeeded but should have been aborted by client")
             return False
     except Exception as e:
         error_msg = str(e).lower()
         if "0x817b3dd" in error_msg or "protocol" in error_msg:
-            logger.info("SUCCESS: Client aborted connection correctly due to missing protocol. (%s)", e)
+            logger.info("SUCCESS: Client aborted connection correctly due to missing protocol: %s", e)
             return True
         else:
             logger.error("FAILURE: Connection rejected, but unexpected error: %s", e)
@@ -118,18 +128,20 @@ async def test_rogue_missing() -> bool:
 
 async def test_rogue_mismatch() -> bool:
     """Test that client aborts with WT_ALPN_ERROR when server negotiates an unrequested protocol."""
-    logger.info("--- Test 08F: Rogue Server Mismatched Protocol ---")
+    logger.info("Test 08F: Rogue Server Mismatched Protocol")
+    logger.info("-" * 50)
+
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
             await client.connect(url=TEST_URL, wt_available_protocols=["trigger-mismatch"])
-            logger.error("FAILURE: Connection succeeded but should have been aborted by client.")
+            logger.error("FAILURE: Connection succeeded but should have been aborted by client")
             return False
     except Exception as e:
         error_msg = str(e).lower()
         if "0x817b3dd" in error_msg or "alien-proto" in error_msg or "protocol" in error_msg:
-            logger.info("SUCCESS: Client aborted connection correctly due to mismatched protocol. (%s)", e)
+            logger.info("SUCCESS: Client aborted connection correctly due to mismatched protocol: %s", e)
             return True
         else:
             logger.error("FAILURE: Connection rejected, but unexpected error: %s", e)
@@ -138,7 +150,7 @@ async def test_rogue_mismatch() -> bool:
 
 async def main() -> int:
     """Run the main entry point for the protocol negotiation test suite."""
-    logger.info("--- Starting Test 08: Application-Layer Protocol Negotiation ---")
+    logger.info("Starting Test 08: Application-Layer Protocol Negotiation")
 
     tests: list[tuple[str, Callable[[], Awaitable[bool]]]] = [
         ("Exact Match", test_exact_match),
@@ -164,14 +176,14 @@ async def main() -> int:
         await asyncio.sleep(delay=1)
 
     logger.info("")
-    logger.info("=" * 60)
+    logger.info("=" * 50)
     logger.info("Test 08 Results: %d/%d passed", passed, total)
 
     if passed == total:
-        logger.info("TEST 08 PASSED: All protocol negotiation tests successful!")
+        logger.info("TEST 08 PASSED: All tests successful")
         return 0
     else:
-        logger.error("TEST 08 FAILED: Some protocol negotiation tests failed!")
+        logger.error("TEST 08 FAILED: Some tests failed")
         return 1
 
 
@@ -180,7 +192,7 @@ if __name__ == "__main__":
     try:
         exit_code = asyncio.run(main())
     except KeyboardInterrupt:
-        logger.warning("\nTest interrupted by user.")
+        logger.warning("\nTest interrupted by user")
         exit_code = 130
     except Exception as e:
         logger.critical("Test suite crashed with an unhandled exception: %s", e, exc_info=True)

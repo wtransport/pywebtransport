@@ -161,7 +161,7 @@ class TestWebTransportConnection:
     async def test_close_connection_error_warning(
         self, connection: WebTransportConnection, mock_controller: MagicMock, mocker: MockerFixture
     ) -> None:
-        mock_controller.execute_request.side_effect = ConnectionError(message="Something failed")
+        mock_controller.execute_request.side_effect = ConnectionError(message="something failed")
         spy_logger = mocker.patch(target="pywebtransport.connection._logger")
 
         await connection.close()
@@ -172,7 +172,7 @@ class TestWebTransportConnection:
     async def test_close_generic_exception(
         self, connection: WebTransportConnection, mock_controller: MagicMock, mocker: MockerFixture
     ) -> None:
-        mock_controller.execute_request.side_effect = ValueError("Unexpected")
+        mock_controller.execute_request.side_effect = ValueError("unexpected")
         spy_logger = mocker.patch(target="pywebtransport.connection._logger")
 
         await connection.close()
@@ -239,7 +239,7 @@ class TestWebTransportConnection:
     async def test_create_session_connection_error_propagates(
         self, connection: WebTransportConnection, mock_controller: MagicMock
     ) -> None:
-        mock_controller.execute_request.side_effect = ConnectionError(message="Fail")
+        mock_controller.execute_request.side_effect = ConnectionError(message="fail")
 
         with pytest.raises(expected_exception=ConnectionError):
             await connection.create_session(authority="localhost:443", path="/")
@@ -248,7 +248,7 @@ class TestWebTransportConnection:
     async def test_create_session_generic_error(
         self, connection: WebTransportConnection, mock_controller: MagicMock
     ) -> None:
-        mock_controller.execute_request.side_effect = ValueError("Fail")
+        mock_controller.execute_request.side_effect = ValueError("fail")
 
         with pytest.raises(expected_exception=SessionError, match="wt_session create failed connection_handle=42"):
             await connection.create_session(authority="localhost:443", path="/")
@@ -347,7 +347,7 @@ class TestWebTransportConnection:
     async def test_diagnostics_connection_error_propagates(
         self, connection: WebTransportConnection, mock_controller: MagicMock
     ) -> None:
-        mock_controller.execute_request.side_effect = ConnectionError(message="Fail")
+        mock_controller.execute_request.side_effect = ConnectionError(message="fail")
 
         with pytest.raises(expected_exception=ConnectionError):
             await connection.diagnostics()
@@ -356,7 +356,7 @@ class TestWebTransportConnection:
     async def test_diagnostics_generic_error(
         self, connection: WebTransportConnection, mock_controller: MagicMock
     ) -> None:
-        mock_controller.execute_request.side_effect = ValueError("Fail")
+        mock_controller.execute_request.side_effect = ValueError("fail")
 
         with pytest.raises(expected_exception=ConnectionError, match="wt_connection resolve failed"):
             await connection.diagnostics()
@@ -443,7 +443,7 @@ class TestWebTransportConnection:
     async def test_graceful_shutdown_connection_error_warning(
         self, connection: WebTransportConnection, mock_controller: MagicMock, mocker: MockerFixture
     ) -> None:
-        mock_controller.execute_request.side_effect = ConnectionError(message="Fail")
+        mock_controller.execute_request.side_effect = ConnectionError(message="fail")
         spy_logger = mocker.patch(target="pywebtransport.connection._logger")
 
         await connection.graceful_shutdown()
@@ -454,7 +454,7 @@ class TestWebTransportConnection:
     async def test_graceful_shutdown_generic_error(
         self, connection: WebTransportConnection, mock_controller: MagicMock, mocker: MockerFixture
     ) -> None:
-        mock_controller.execute_request.side_effect = ValueError("Error")
+        mock_controller.execute_request.side_effect = ValueError("error")
         spy_logger = mocker.patch(target="pywebtransport.connection._logger")
 
         await connection.graceful_shutdown()
@@ -720,7 +720,7 @@ class TestWebTransportConnection:
         assert data["connection_handle"] == connection.handle
 
     def test_notify_owner_exception_handler(self, connection: WebTransportConnection, mocker: MockerFixture) -> None:
-        cast(MagicMock, connection.events.emit_nowait).side_effect = ValueError("Boom")
+        cast(MagicMock, connection.events.emit_nowait).side_effect = ValueError("boom")
 
         with pytest.raises(expected_exception=ConnectionError, match="wt_connection receive failed"):
             connection._notify_owner(event_type=EventType.CONNECTION_ESTABLISHED, data={})

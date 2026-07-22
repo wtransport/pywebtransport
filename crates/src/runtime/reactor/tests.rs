@@ -68,7 +68,7 @@ fn create_dummy_client_config() -> ClientConfig {
     let Ok(builder) =
         rustls::ClientConfig::builder_with_provider(provider).with_protocol_versions(&[&TLS13])
     else {
-        assert_eq!("ok", "err", "Failed to build rustls client config");
+        assert_eq!("ok", "err");
         unreachable!()
     };
     let root_store = RootCertStore::empty();
@@ -79,7 +79,7 @@ fn create_dummy_client_config() -> ClientConfig {
         .dangerous()
         .set_certificate_verifier(Arc::new(DummyVerifier));
     let Ok(quic_crypto) = QuicClientConfig::try_from(crypto) else {
-        assert_eq!("ok", "err", "Failed to build QuicClientConfig");
+        assert_eq!("ok", "err");
         unreachable!()
     };
     let mut client_config = ClientConfig::new(Arc::new(quic_crypto));
@@ -95,14 +95,14 @@ fn create_dummy_endpoint(is_server: bool) -> TransportEndpoint {
     if is_server {
         let s_cfg = create_dummy_rust_server_config();
         let Ok(ep) = TransportEndpoint::new_server(quinn_ep, b_cfg, s_cfg) else {
-            assert_eq!("ok", "err", "Failed to create TransportEndpoint server");
+            assert_eq!("ok", "err");
             unreachable!()
         };
         ep
     } else {
         let c_cfg = create_dummy_client_config();
         let Ok(ep) = TransportEndpoint::new_client(quinn_ep, b_cfg, c_cfg) else {
-            assert_eq!("ok", "err", "Failed to create TransportEndpoint client");
+            assert_eq!("ok", "err");
             unreachable!()
         };
         ep
@@ -141,7 +141,7 @@ async fn create_client_reactor(
         waker_called_clone.store(true, Ordering::SeqCst);
     });
     let Ok(socket) = UdpSocket::bind("127.0.0.1:0").await else {
-        assert_eq!("ok", "err", "Failed to bind UDP socket");
+        assert_eq!("ok", "err");
         unreachable!()
     };
     let endpoint = create_dummy_endpoint(false);
@@ -166,7 +166,7 @@ async fn create_test_reactor(
         waker_called_clone.store(true, Ordering::SeqCst);
     });
     let Ok(socket) = UdpSocket::bind("127.0.0.1:0").await else {
-        assert_eq!("ok", "err", "Failed to bind UDP socket");
+        assert_eq!("ok", "err");
         unreachable!()
     };
     let endpoint = create_dummy_endpoint(true);
@@ -207,6 +207,22 @@ fn mock_base_config() -> RustBaseConfig {
 }
 
 #[tokio::test]
+async fn test_flush_transmits_after_connect_sends_data() {
+    let (mut reactor, _, _, _) = create_client_reactor(10).await;
+    let remote = create_dummy_socket_addr();
+    let now = Instant::now();
+
+    let Ok(_) = reactor.endpoint.connect(remote, "localhost", now) else {
+        assert_eq!("ok", "err");
+        unreachable!()
+    };
+
+    reactor.flush_transmits().await;
+
+    assert!(!reactor.events_emitted);
+}
+
+#[tokio::test]
 async fn test_flush_transmits_empty() {
     let (mut reactor, _, _, _) = create_test_reactor(10).await;
 
@@ -227,7 +243,7 @@ async fn test_handle_command_create_connection_failure_emits_event() {
     let continue_loop = reactor.handle_command(cmd).await;
 
     let Some(event) = event_tx.pop() else {
-        assert_eq!("some", "none", "Expected event in queue");
+        assert_eq!("some", "none");
         unreachable!()
     };
     assert!(continue_loop);
@@ -244,7 +260,7 @@ async fn test_handle_command_create_connection_queue_full_drops_event() {
         server_name: "localhost".to_owned(),
     };
     let Ok(()) = event_tx.push(RuntimeEvent::ReactorShutDown) else {
-        assert_eq!("ok", "err", "Failed to push event");
+        assert_eq!("ok", "err");
         unreachable!()
     };
 
@@ -256,15 +272,22 @@ async fn test_handle_command_create_connection_queue_full_drops_event() {
 
 #[tokio::test]
 async fn test_handle_command_protocol_dispatches_event() {
-    let (mut reactor, _, _, _) = create_test_reactor(10).await;
+    let (mut reactor, _, _, _) = create_client_reactor(10).await;
+    let remote = create_dummy_socket_addr();
+    let now = Instant::now();
+    let Ok((handle, _)) = reactor.endpoint.connect(remote, "localhost", now) else {
+        assert_eq!("ok", "err");
+        unreachable!()
+    };
     let cmd = RuntimeCommand::Protocol {
-        handle: ConnectionHandle(0),
-        event: ProtocolEvent::InternalCleanupResources,
+        handle,
+        event: ProtocolEvent::UserGetConnectionDiagnostics { request_id: 100 },
     };
 
     let continue_loop = reactor.handle_command(cmd).await;
 
     assert!(continue_loop);
+    assert!(reactor.events_emitted);
 }
 
 #[tokio::test]
@@ -304,7 +327,7 @@ async fn test_notify_shutdown_emits_event() {
     reactor.notify_shutdown();
 
     let Some(event) = event_tx.pop() else {
-        assert_eq!("some", "none", "Expected event in queue");
+        assert_eq!("some", "none");
         unreachable!()
     };
     assert!(waker_called.load(Ordering::SeqCst));
@@ -315,7 +338,7 @@ async fn test_notify_shutdown_emits_event() {
 async fn test_notify_shutdown_queue_full_drops_event() {
     let (reactor, _, event_tx, waker_called) = create_test_reactor(1).await;
     let Ok(()) = event_tx.push(RuntimeEvent::ReactorShutDown) else {
-        assert_eq!("ok", "err", "Failed to push event");
+        assert_eq!("ok", "err");
         unreachable!()
     };
 
@@ -345,7 +368,7 @@ async fn test_process_transport_event_connection_effects_emits_event() {
     reactor.process_transport_event(event).await;
 
     let Some(emitted) = event_tx.pop() else {
-        assert_eq!("some", "none", "Expected event in queue");
+        assert_eq!("some", "none");
         unreachable!()
     };
     assert!(reactor.events_emitted);
@@ -360,7 +383,7 @@ async fn test_process_transport_event_connection_effects_queue_full_drops_event(
         effects: vec![Effect::SendH3Goaway],
     };
     let Ok(()) = event_tx.push(RuntimeEvent::ReactorShutDown) else {
-        assert_eq!("ok", "err", "Failed to push event");
+        assert_eq!("ok", "err");
         unreachable!()
     };
 
@@ -381,7 +404,7 @@ async fn test_process_transport_event_connection_spawned_emits_event() {
     reactor.process_transport_event(event).await;
 
     let Some(emitted) = event_tx.pop() else {
-        assert_eq!("some", "none", "Expected event in queue");
+        assert_eq!("some", "none");
         unreachable!()
     };
     assert!(reactor.events_emitted);
@@ -397,7 +420,7 @@ async fn test_process_transport_event_connection_spawned_queue_full_drops_event(
         remote_address: create_dummy_socket_addr(),
     };
     let Ok(()) = event_tx.push(RuntimeEvent::ReactorShutDown) else {
-        assert_eq!("ok", "err", "Failed to push event");
+        assert_eq!("ok", "err");
         unreachable!()
     };
 
@@ -429,7 +452,7 @@ async fn test_reactor_initialization_succeeds() {
     let event_tx = Arc::new(ArrayQueue::new(10));
     let waker: WakerCallback = Arc::new(|| {});
     let Ok(socket) = UdpSocket::bind("127.0.0.1:0").await else {
-        assert_eq!("ok", "err", "Failed to bind socket");
+        assert_eq!("ok", "err");
         unreachable!()
     };
     let endpoint = create_dummy_endpoint(true);
@@ -454,23 +477,23 @@ async fn test_reactor_run_loop_full_tick_and_waker() {
         .run_until(async move {
             let handle = tokio::task::spawn_local(reactor.run());
             let Ok(()) = cmd_tx.send(cmd_create).await else {
-                assert_eq!("ok", "err", "Failed to send command to reactor loop");
+                assert_eq!("ok", "err");
                 unreachable!()
             };
             tokio::time::sleep(Duration::from_millis(50)).await;
             let Ok(()) = cmd_tx.send(cmd_shutdown).await else {
-                assert_eq!("ok", "err", "Failed to send shutdown command");
+                assert_eq!("ok", "err");
                 unreachable!()
             };
             let Ok(()) = handle.await else {
-                assert_eq!("ok", "err", "Reactor task panicked");
+                assert_eq!("ok", "err");
                 unreachable!()
             };
         })
         .await;
 
     let Some(event) = event_tx.pop() else {
-        assert_eq!("some", "none", "Expected event emitted by loop");
+        assert_eq!("some", "none");
         unreachable!()
     };
     assert!(waker_called.load(Ordering::SeqCst));
@@ -482,21 +505,21 @@ async fn test_reactor_run_loop_processes_multiple_datagrams() {
     let (reactor, cmd_tx, event_tx, _) = create_test_reactor(10).await;
     let local = tokio::task::LocalSet::new();
     let Some(bound_socket) = reactor.sockets.first() else {
-        assert_eq!("some", "none", "Expected socket in reactor");
+        assert_eq!("some", "none");
         unreachable!()
     };
     let Ok(addr) = bound_socket.socket.local_addr() else {
-        assert_eq!("ok", "err", "Failed to read local socket address");
+        assert_eq!("ok", "err");
         unreachable!()
     };
     let Ok(sender) = UdpSocket::bind("127.0.0.1:0").await else {
-        assert_eq!("ok", "err", "Failed to bind sender socket");
+        assert_eq!("ok", "err");
         unreachable!()
     };
 
     for _ in 0..3 {
         let Ok(_) = sender.send_to(b"test", addr).await else {
-            assert_eq!("ok", "err", "Failed to send datagram");
+            assert_eq!("ok", "err");
             unreachable!()
         };
     }
@@ -507,18 +530,18 @@ async fn test_reactor_run_loop_processes_multiple_datagrams() {
         .run_until(async move {
             let handle = tokio::task::spawn_local(reactor.run());
             let Ok(()) = cmd_tx.send(RuntimeCommand::Shutdown).await else {
-                assert_eq!("ok", "err", "Failed to send shutdown command");
+                assert_eq!("ok", "err");
                 unreachable!()
             };
             let Ok(()) = handle.await else {
-                assert_eq!("ok", "err", "Reactor task panicked");
+                assert_eq!("ok", "err");
                 unreachable!()
             };
         })
         .await;
 
     let Some(event) = event_tx.pop() else {
-        assert_eq!("some", "none", "Expected shutdown event in queue");
+        assert_eq!("some", "none");
         unreachable!()
     };
     assert!(matches!(event, RuntimeEvent::ReactorShutDown));
@@ -534,18 +557,18 @@ async fn test_reactor_run_loop_terminates_on_shutdown() {
         .run_until(async move {
             let handle = tokio::task::spawn_local(reactor.run());
             let Ok(()) = cmd_tx.send(cmd_shutdown).await else {
-                assert_eq!("ok", "err", "Failed to send shutdown command");
+                assert_eq!("ok", "err");
                 unreachable!()
             };
             let Ok(()) = handle.await else {
-                assert_eq!("ok", "err", "Reactor task panicked");
+                assert_eq!("ok", "err");
                 unreachable!()
             };
         })
         .await;
 
     let Some(event) = event_tx.pop() else {
-        assert_eq!("some", "none", "Expected shutdown event in queue");
+        assert_eq!("some", "none");
         unreachable!()
     };
     assert!(matches!(event, RuntimeEvent::ReactorShutDown));
@@ -556,28 +579,28 @@ async fn test_reactor_udp_receive_loop_forwards_datagrams() {
     let (mut reactor, _, _, _) = create_test_reactor(10).await;
     let payload = b"hello_world";
     let Some(bound_socket) = reactor.sockets.first() else {
-        assert_eq!("some", "none", "Expected socket in reactor");
+        assert_eq!("some", "none");
         unreachable!()
     };
     let Ok(addr) = bound_socket.socket.local_addr() else {
-        assert_eq!("ok", "err", "Failed to read local socket address");
+        assert_eq!("ok", "err");
         unreachable!()
     };
     let Ok(sender) = UdpSocket::bind("127.0.0.1:0").await else {
-        assert_eq!("ok", "err", "Failed to bind sender socket");
+        assert_eq!("ok", "err");
         unreachable!()
     };
     let Ok(sender_addr) = sender.local_addr() else {
-        assert_eq!("ok", "err", "Failed to get sender address");
+        assert_eq!("ok", "err");
         unreachable!()
     };
 
     let Ok(size) = sender.send_to(payload, addr).await else {
-        assert_eq!("ok", "err", "Failed to transmit datagram");
+        assert_eq!("ok", "err");
         unreachable!()
     };
     let Some((remote, local, data)) = reactor.datagram_rx.recv().await else {
-        assert_eq!("some", "none", "Reactor failed to receive datagram");
+        assert_eq!("some", "none");
         unreachable!()
     };
 
@@ -593,21 +616,21 @@ async fn test_reactor_udp_slab_reallocation_is_triggered() {
     let payload = vec![0u8; 1200];
     let mut count = 0;
     let Some(bound_socket) = reactor.sockets.first() else {
-        assert_eq!("some", "none", "Expected socket in reactor");
+        assert_eq!("some", "none");
         unreachable!()
     };
     let Ok(addr) = bound_socket.socket.local_addr() else {
-        assert_eq!("ok", "err", "Failed to read local socket address");
+        assert_eq!("ok", "err");
         unreachable!()
     };
     let Ok(sender) = UdpSocket::bind("127.0.0.1:0").await else {
-        assert_eq!("ok", "err", "Failed to bind sender socket");
+        assert_eq!("ok", "err");
         unreachable!()
     };
 
     for _ in 0..60 {
         let Ok(size) = sender.send_to(&payload, addr).await else {
-            assert_eq!("ok", "err", "Failed to transmit datagram");
+            assert_eq!("ok", "err");
             unreachable!()
         };
         assert_eq!(size, 1200);
@@ -651,11 +674,11 @@ async fn test_send_transmit_segments_data_safely() {
     let now = Instant::now();
 
     let Ok(_) = reactor.endpoint.connect(remote, "localhost", now) else {
-        assert_eq!("ok", "err", "Failed to connect endpoint");
+        assert_eq!("ok", "err");
         unreachable!()
     };
     let Some(mut transmit) = reactor.endpoint.poll_transmit(now) else {
-        assert_eq!("some", "none", "Expected transmit after connect");
+        assert_eq!("some", "none");
         unreachable!()
     };
 

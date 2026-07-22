@@ -32,7 +32,9 @@ def generate_test_data(*, size: int) -> bytes:
 
 async def test_small_data() -> bool:
     """Test small data transfers (< 1KB)."""
-    logger.info("--- Test 04A: Small Data Transfer ---")
+    logger.info("Test 04A: Small Data Transfer")
+    logger.info("-" * 50)
+
     test_sizes = [10, 100, 500, 1000]
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
@@ -49,11 +51,11 @@ async def test_small_data() -> bool:
 
                 expected = b"ECHO: " + test_data
                 if response != expected:
-                    logger.error("FAILURE: Data mismatch for %d bytes.", size)
+                    logger.error("FAILURE: Data mismatch for %d bytes", size)
                     return False
                 logger.info("   - %d bytes: OK", size)
 
-            logger.info("SUCCESS: All small data transfers completed successfully.")
+            logger.info("SUCCESS: All small data transfers completed successfully")
             return True
     except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Test failed due to connection or timeout issue: %s", e)
@@ -65,7 +67,9 @@ async def test_small_data() -> bool:
 
 async def test_medium_data() -> bool:
     """Test medium data transfers (1KB - 64KB)."""
-    logger.info("--- Test 04B: Medium Data Transfer ---")
+    logger.info("Test 04B: Medium Data Transfer")
+    logger.info("-" * 50)
+
     test_sizes = [1024, 4096, 16384, 65536]
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
@@ -83,11 +87,11 @@ async def test_medium_data() -> bool:
 
                 expected = b"ECHO: " + test_data
                 if response_data != expected:
-                    logger.error("FAILURE: Data mismatch for %.1f KB.", size_kb)
+                    logger.error("FAILURE: Data mismatch for %.1f KB", size_kb)
                     return False
                 logger.info("   - %.1f KB: OK", size_kb)
 
-            logger.info("SUCCESS: All medium data transfers completed successfully.")
+            logger.info("SUCCESS: All medium data transfers completed successfully")
             return True
     except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Test failed due to connection or timeout issue: %s", e)
@@ -99,7 +103,9 @@ async def test_medium_data() -> bool:
 
 async def test_chunked_transfer() -> bool:
     """Test transferring data in multiple chunks using stream.write()."""
-    logger.info("--- Test 04C: Chunked Transfer ---")
+    logger.info("Test 04C: Chunked Transfer")
+    logger.info("-" * 50)
+
     total_size = 32768
     chunk_size = 4096
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
@@ -117,15 +123,15 @@ async def test_chunked_transfer() -> bool:
                 is_last_chunk = (i + chunk_size) >= total_size
                 await stream.write(data=chunk, end_stream=is_last_chunk)
                 bytes_sent += len(chunk)
-            logger.info("All %d bytes sent.", bytes_sent)
+            logger.info("All %d bytes sent", bytes_sent)
 
             response_data = await stream.read_all()
             expected = b"ECHO: " + test_data
             if response_data != expected:
-                logger.error("FAILURE: Chunked data transfer response mismatch.")
+                logger.error("FAILURE: Chunked data transfer response mismatch")
                 return False
 
-            logger.info("SUCCESS: Chunked transfer completed successfully.")
+            logger.info("SUCCESS: Chunked transfer completed successfully")
             return True
     except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Test failed due to connection or timeout issue: %s", e)
@@ -137,14 +143,16 @@ async def test_chunked_transfer() -> bool:
 
 async def test_binary_data() -> bool:
     """Test the transfer of raw binary data to ensure no corruption."""
-    logger.info("--- Test 04D: Binary Data Transfer ---")
+    logger.info("Test 04D: Binary Data Transfer")
+    logger.info("-" * 50)
+
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
             session = await client.connect(url=SERVER_URL)
             binary_data = bytes(range(256)) * 100
-            logger.info("Testing transfer of %d raw binary bytes.", len(binary_data))
+            logger.info("Testing transfer of %d raw binary bytes", len(binary_data))
             stream = await session.create_bidirectional_stream()
 
             await stream.write_all(data=binary_data, end_stream=True)
@@ -152,10 +160,10 @@ async def test_binary_data() -> bool:
 
             expected = b"ECHO: " + binary_data
             if response_data != expected:
-                logger.error("FAILURE: Binary data was corrupted during transfer.")
+                logger.error("FAILURE: Binary data was corrupted during transfer")
                 return False
 
-            logger.info("SUCCESS: Binary data transfer completed without corruption.")
+            logger.info("SUCCESS: Binary data transfer completed without corruption")
             return True
     except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Test failed due to connection or timeout issue: %s", e)
@@ -167,7 +175,9 @@ async def test_binary_data() -> bool:
 
 async def test_performance_benchmark() -> bool:
     """Perform a simple performance benchmark with a 1MB payload."""
-    logger.info("--- Test 04E: Performance Benchmark (1MB) ---")
+    logger.info("Test 04E: Performance Benchmark (1MB)")
+    logger.info("-" * 50)
+
     test_size = 1024 * 1024
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
@@ -185,12 +195,12 @@ async def test_performance_benchmark() -> bool:
 
             expected = b"ECHO: " + test_data
             if response_data != expected:
-                logger.error("FAILURE: Performance test data corrupted.")
+                logger.error("FAILURE: Performance test data corrupted")
                 return False
 
             total_mb = (len(test_data) + len(response_data)) / (1024 * 1024)
             throughput = total_mb / duration if duration > 0 else float("inf")
-            logger.info("SUCCESS: Benchmark completed.")
+            logger.info("SUCCESS: Benchmark completed")
             logger.info("   - Total round-trip time: %.3fs", duration)
             logger.info("   - Aggregate throughput: %.2f MB/s", throughput)
             return True
@@ -204,7 +214,7 @@ async def test_performance_benchmark() -> bool:
 
 async def main() -> int:
     """Run the main entry point for the data transfer tests."""
-    logger.info("--- Starting Test 04: Data Transfer ---")
+    logger.info("Starting Test 04: Data Transfer")
 
     tests: list[tuple[str, Callable[[], Awaitable[bool]]]] = [
         ("Small Data Transfer", test_small_data),
@@ -229,14 +239,14 @@ async def main() -> int:
         await asyncio.sleep(delay=1)
 
     logger.info("")
-    logger.info("=" * 60)
+    logger.info("=" * 50)
     logger.info("Test 04 Results: %d/%d passed", passed, total)
 
     if passed == total:
-        logger.info("TEST 04 PASSED: All data transfer tests successful!")
+        logger.info("TEST 04 PASSED: All tests successful")
         return 0
     else:
-        logger.error("TEST 04 FAILED: Some data transfer tests failed!")
+        logger.error("TEST 04 FAILED: Some tests failed")
         return 1
 
 
@@ -245,7 +255,7 @@ if __name__ == "__main__":
     try:
         exit_code = asyncio.run(main())
     except KeyboardInterrupt:
-        logger.warning("\nTest interrupted by user.")
+        logger.warning("\nTest interrupted by user")
         exit_code = 130
     except Exception as e:
         logger.critical("Test suite crashed with an unhandled exception: %s", e, exc_info=True)

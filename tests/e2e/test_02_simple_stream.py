@@ -26,7 +26,7 @@ logger = logging.getLogger(name="test_simple_stream")
 async def test_stream_creation() -> bool:
     """Test the ability to create and inspect a bidirectional stream."""
     logger.info("Test 02A: Stream Creation")
-    logger.info("-" * 30)
+    logger.info("-" * 50)
 
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
@@ -39,11 +39,12 @@ async def test_stream_creation() -> bool:
             logger.info("Creating bidirectional stream...")
             stream = await session.create_bidirectional_stream()
 
-            logger.info("Stream created successfully!")
+            logger.info("Stream created successfully")
             logger.info("   - Stream ID: %d", stream.stream_id)
 
             await stream.close()
-            logger.info("Stream closed.")
+            logger.info("Stream closed")
+            logger.info("SUCCESS: Stream creation succeeded")
             return True
     except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Connection failed: %s", e)
@@ -59,7 +60,7 @@ async def test_stream_creation() -> bool:
 async def test_simple_echo() -> bool:
     """Test sending data and receiving an echo on a single stream."""
     logger.info("Test 02B: Simple Echo")
-    logger.info("-" * 30)
+    logger.info("-" * 50)
 
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
@@ -67,7 +68,7 @@ async def test_simple_echo() -> bool:
         async with WebTransportClient(config=config) as client:
             session = await client.connect(url=SERVER_URL)
             stream = await session.create_bidirectional_stream()
-            logger.info("Stream %d created for echo test.", stream.stream_id)
+            logger.info("Stream %d created for echo test", stream.stream_id)
 
             test_message = b"Hello, WebTransport!"
             logger.info("Sending: %r", test_message)
@@ -79,10 +80,10 @@ async def test_simple_echo() -> bool:
 
             expected_response = b"ECHO: " + test_message
             if response_data == expected_response:
-                logger.info("SUCCESS: Echo response matches expected content.")
+                logger.info("SUCCESS: Echo response matches expected content")
                 return True
             else:
-                logger.error("FAILURE: Echo response mismatch!")
+                logger.error("FAILURE: Echo response mismatch")
                 logger.error("   - Expected: %r", expected_response)
                 logger.error("   - Received: %r", response_data)
                 return False
@@ -97,7 +98,7 @@ async def test_simple_echo() -> bool:
 async def test_multiple_messages() -> bool:
     """Test sending multiple messages, each on a separate stream, within one session."""
     logger.info("Test 02C: Multiple Messages")
-    logger.info("-" * 30)
+    logger.info("-" * 50)
 
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
@@ -115,18 +116,18 @@ async def test_multiple_messages() -> bool:
                     response_data = await stream.read_all()
                     expected = b"ECHO: " + message
                     if response_data == expected:
-                        logger.info("   - Echo for message %d successful.", i + 1)
+                        logger.info("   - Echo for message %d successful", i + 1)
                         success_count += 1
                     else:
-                        logger.error("   - FAILURE: Echo for message %d mismatch!", i + 1)
+                        logger.error("   - FAILURE: Echo for message %d mismatch", i + 1)
                 finally:
                     await stream.close()
 
             if success_count == len(messages):
-                logger.info("SUCCESS: All %d messages echoed correctly!", len(messages))
+                logger.info("SUCCESS: All %d messages echoed correctly", len(messages))
                 return True
             else:
-                logger.error("FAILURE: Only %d/%d messages were successful.", success_count, len(messages))
+                logger.error("FAILURE: Only %d/%d messages were successful", success_count, len(messages))
                 return False
     except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Test failed due to connection or timeout issue: %s", e)
@@ -165,10 +166,10 @@ async def main() -> int:
     logger.info("Test 02 Results: %d/%d passed", passed, total)
 
     if passed == total:
-        logger.info("TEST 02 PASSED: All stream operations successful!")
+        logger.info("TEST 02 PASSED: All tests successful")
         return 0
     else:
-        logger.error("TEST 02 FAILED: Some stream operations failed!")
+        logger.error("TEST 02 FAILED: Some tests failed")
         return 1
 
 
@@ -177,7 +178,7 @@ if __name__ == "__main__":
     try:
         exit_code = asyncio.run(main())
     except KeyboardInterrupt:
-        logger.warning("\nTest interrupted by user.")
+        logger.warning("\nTest interrupted by user")
         exit_code = 130
     except Exception as e:
         logger.critical("Test suite crashed with an unhandled exception: %s", e, exc_info=True)

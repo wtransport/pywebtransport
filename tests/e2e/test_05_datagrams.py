@@ -26,13 +26,16 @@ logger = logging.getLogger(name="test_datagrams")
 
 
 async def test_basic_datagram() -> bool:
-    logger.info("--- Test 05A: Basic Datagram Echo ---")
+    """Test sending a single datagram and receiving its echo."""
+    logger.info("Test 05A: Basic Datagram Echo")
+    logger.info("-" * 50)
+
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
             session = await client.connect(url=SERVER_URL)
-            logger.info("Session ready for datagrams.")
+            logger.info("Session ready for datagrams")
 
             test_message = b"Hello, Datagram!"
             expected_response = b"ECHO: " + test_message
@@ -53,7 +56,7 @@ async def test_basic_datagram() -> bool:
                 response = event.data.get("data")
 
             if response == expected_response:
-                logger.info("SUCCESS: Received correct datagram echo.")
+                logger.info("SUCCESS: Received correct datagram echo")
                 return True
             else:
                 logger.error("FAILURE: Datagram echo mismatch. Got: %r", response)
@@ -67,7 +70,10 @@ async def test_basic_datagram() -> bool:
 
 
 async def test_multiple_datagrams() -> bool:
-    logger.info("--- Test 05B: Multiple Datagrams ---")
+    """Test sending multiple datagrams and receiving all echoes."""
+    logger.info("Test 05B: Multiple Datagrams")
+    logger.info("-" * 50)
+
     num_datagrams = 10
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
@@ -98,13 +104,13 @@ async def test_multiple_datagrams() -> bool:
                 async with asyncio.timeout(delay=5.0):
                     await receiver_done.wait()
             except asyncio.TimeoutError:
-                logger.warning("Receiver timed out.")
+                logger.warning("Receiver timed out")
             finally:
                 session.events.off(event_type=EventType.DATAGRAM_RECEIVED, handler=datagram_handler)
 
             if len(received_events) != num_datagrams:
                 logger.error(
-                    "FAILURE: Expected %d datagrams, but received %d.",
+                    "FAILURE: Expected %d datagrams, but received %d",
                     num_datagrams,
                     len(received_events),
                 )
@@ -116,7 +122,7 @@ async def test_multiple_datagrams() -> bool:
                     logger.error("FAILURE: Datagram %d mismatch. Got: %r", i + 1, data)
                     return False
 
-            logger.info("SUCCESS: Received %d correct datagram echoes.", num_datagrams)
+            logger.info("SUCCESS: Received %d correct datagram echoes", num_datagrams)
             return True
 
     except Exception as e:
@@ -125,7 +131,10 @@ async def test_multiple_datagrams() -> bool:
 
 
 async def test_datagram_sizes() -> bool:
-    logger.info("--- Test 05C: Datagram Size Limits ---")
+    """Test that sending an oversized datagram raises DatagramError."""
+    logger.info("Test 05C: Datagram Size Limits")
+    logger.info("-" * 50)
+
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
@@ -134,7 +143,7 @@ async def test_datagram_sizes() -> bool:
 
             connection = session._connection()
             if not connection:
-                logger.error("FAILURE: Connection lost unexpectedly.")
+                logger.error("FAILURE: Connection lost unexpectedly")
                 return False
 
             diags = await connection.diagnostics()
@@ -143,7 +152,7 @@ async def test_datagram_sizes() -> bool:
 
             if remote_max is None:
                 logger.error(
-                    "FAILURE: Remote max datagram size is None (not negotiated), cannot test oversized datagram."
+                    "FAILURE: Remote max datagram size is None (not negotiated), cannot test oversized datagram"
                 )
                 return False
 
@@ -151,7 +160,7 @@ async def test_datagram_sizes() -> bool:
             try:
                 oversized_data = b"X" * (remote_max + 1)
                 await session.send_datagram(data=oversized_data)
-                logger.error("FAILURE: Sending oversized datagram should have raised an exception.")
+                logger.error("FAILURE: Sending oversized datagram should have raised an exception")
                 return False
             except DatagramError as e:
                 logger.info("SUCCESS: Oversized datagram correctly raised DatagramError: %s", e)
@@ -165,7 +174,10 @@ async def test_datagram_sizes() -> bool:
 
 
 async def test_datagram_burst() -> bool:
-    logger.info("--- Test 05D: Datagram Burst ---")
+    """Test sending a burst of datagrams in rapid succession."""
+    logger.info("Test 05D: Datagram Burst")
+    logger.info("-" * 50)
+
     burst_size = 50
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
@@ -180,7 +192,7 @@ async def test_datagram_burst() -> bool:
             duration = time.time() - start_time
             rate = burst_size / duration if duration > 0 else float("inf")
 
-            logger.info("SUCCESS: Sent %d datagrams in %.3fs (%.1f dgrams/s).", burst_size, duration, rate)
+            logger.info("SUCCESS: Sent %d datagrams in %.3fs (%.1f dgrams/s)", burst_size, duration, rate)
             return True
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)
@@ -188,7 +200,8 @@ async def test_datagram_burst() -> bool:
 
 
 async def main() -> int:
-    logger.info("--- Starting Test 05: Datagrams ---")
+    """Run the main entry point for the datagram tests."""
+    logger.info("Starting Test 05: Datagrams")
 
     tests: list[tuple[str, Callable[[], Awaitable[bool]]]] = [
         ("Basic Datagram Echo", test_basic_datagram),
@@ -213,14 +226,14 @@ async def main() -> int:
         await asyncio.sleep(delay=1)
 
     logger.info("")
-    logger.info("=" * 60)
+    logger.info("=" * 50)
     logger.info("Test 05 Results: %d/%d passed", passed, total)
 
     if passed == total:
-        logger.info("TEST 05 PASSED: All datagram tests successful!")
+        logger.info("TEST 05 PASSED: All tests successful")
         return 0
     else:
-        logger.error("TEST 05 FAILED: Some datagram tests failed!")
+        logger.error("TEST 05 FAILED: Some tests failed")
         return 1
 
 
@@ -229,7 +242,7 @@ if __name__ == "__main__":
     try:
         exit_code = asyncio.run(main())
     except KeyboardInterrupt:
-        logger.warning("\nTest interrupted by user.")
+        logger.warning("\nTest interrupted by user")
         exit_code = 130
     except Exception as e:
         logger.critical("Test suite crashed with an unhandled exception: %s", e, exc_info=True)

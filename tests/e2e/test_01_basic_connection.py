@@ -34,10 +34,10 @@ async def test_server_reachability() -> bool:
         sock.settimeout(2.0)
         try:
             sock.sendto(b"ping", (SERVER_HOST, SERVER_PORT))
-            logger.info("Server port %d (UDP) is reachable.", SERVER_PORT)
+            logger.info("Server port %d (UDP) is reachable", SERVER_PORT)
             return True
         except socket.error as e:
-            logger.warning("UDP probe failed: %s. This might be normal.", e)
+            logger.warning("UDP probe failed: %s", e)
             return True
         finally:
             sock.close()
@@ -49,7 +49,7 @@ async def test_server_reachability() -> bool:
 async def test_basic_connection() -> bool:
     """Test the establishment of a basic WebTransport connection."""
     logger.info("Test 01: Basic WebTransport Connection")
-    logger.info("=" * 50)
+    logger.info("-" * 50)
 
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
     logger.info("Target server: %s", SERVER_URL)
@@ -62,30 +62,30 @@ async def test_basic_connection() -> bool:
             session = await client.connect(url=SERVER_URL)
             connect_time = time.time() - start_time
 
-            logger.info("Connection established!")
+            logger.info("Connection established")
             logger.info("   - Connection time: %.3fs", connect_time)
             logger.info("   - Session ID: %d", session.session_id)
             logger.info("   - Session state: %s", session.state.value)
 
             if session.state != SessionState.CONNECTED:
-                logger.error("FAILED: Session not in CONNECTED state")
+                logger.error("FAILURE: Session not in CONNECTED state")
                 return False
 
-            logger.info("SUCCESS: Session is in CONNECTED state!")
+            logger.info("SUCCESS: Session is in CONNECTED state")
 
             logger.info("Closing session...")
             await session.close()
             logger.info("Session closed successfully")
             return True
     except (ConnectionError, TimeoutError) as e:
-        logger.error("FAILED: Connection error - %s", e)
+        logger.error("FAILURE: Connection error: %s", e)
         logger.error("Possible issues:")
         logger.error("   - Server not running")
         logger.error("   - Wrong server address/port")
         logger.error("   - Network connectivity problems")
         return False
     except Exception as e:
-        logger.error("FAILED: Unexpected error - %s", e, exc_info=True)
+        logger.error("FAILURE: Unexpected error: %s", e, exc_info=True)
         logger.error("This might be a bug in the WebTransport implementation")
         return False
 
@@ -96,7 +96,7 @@ async def main() -> int:
     logger.info("")
 
     if not await test_server_reachability():
-        logger.error("Pre-check failed. Please start the server first:")
+        logger.error("Please start the server first:")
         logger.error("   python tests/e2e/test_00_e2e_server.py")
         return 1
 
@@ -106,10 +106,10 @@ async def main() -> int:
     logger.info("=" * 50)
 
     if success:
-        logger.info("TEST 01 PASSED: Basic connection successful!")
+        logger.info("TEST 01 PASSED: All tests successful")
         return 0
     else:
-        logger.error("TEST 01 FAILED: Basic connection failed!")
+        logger.error("TEST 01 FAILED: Some tests failed")
         return 1
 
 
@@ -118,7 +118,7 @@ if __name__ == "__main__":
     try:
         exit_code = asyncio.run(main())
     except KeyboardInterrupt:
-        logger.warning("\nTest interrupted by user.")
+        logger.warning("\nTest interrupted by user")
         exit_code = 130
     except Exception as e:
         logger.critical("Test suite crashed with an unhandled exception: %s", e, exc_info=True)

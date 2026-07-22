@@ -159,7 +159,7 @@ class TestSessionManager:
     async def test_remove_session_handler_error(
         self, manager: SessionManager, mock_session: MagicMock, mocker: MockerFixture
     ) -> None:
-        cast(MagicMock, mock_session.events.off).side_effect = ValueError("Handler not found")
+        cast(MagicMock, mock_session.events.off).side_effect = ValueError("handler not found")
 
         async with manager:
             await manager.add_session(session=mock_session)

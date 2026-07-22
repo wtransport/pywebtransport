@@ -171,7 +171,7 @@ fn test_diagnose_snapshot_generation_success(fixture_stream: Stream) {
 
 #[rstest]
 fn test_diagnose_with_close_reason(mut fixture_stream: Stream) {
-    fixture_stream.close_reason = Some("Application Error".to_owned());
+    fixture_stream.close_reason = Some("application error".to_owned());
 
     let effects = fixture_stream.diagnose(1);
 
@@ -190,8 +190,35 @@ fn test_diagnose_with_close_reason(mut fixture_stream: Stream) {
         },
     ] = effects.as_slice()
     {
-        assert_eq!(diag.close_reason.as_deref(), Some("Application Error"));
+        assert_eq!(diag.close_reason.as_deref(), Some("application error"));
     }
+}
+
+#[rstest]
+fn test_flush_writes_fin_on_non_transitioning_state_no_op_success(mut fixture_stream: Stream) {
+    fixture_stream.state = StreamState::HalfClosedLocal;
+    fixture_stream
+        .write_buffer
+        .push_back((Bytes::from_static(b"data"), 1, true));
+    fixture_stream.write_buffer_size = 4;
+
+    let (effects, sent) = fixture_stream.flush_writes(100, 1.0);
+
+    assert_eq!(sent, 4);
+    assert_eq!(fixture_stream.state, StreamState::HalfClosedLocal);
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            Effect::SendQuicData {
+                end_stream: true,
+                ..
+            },
+            Effect::NotifyRequestDone {
+                result: RequestResult::None,
+                ..
+            }
+        ]
+    ));
 }
 
 #[rstest]
@@ -488,6 +515,49 @@ fn test_recv_data_fills_buffer_success(mut fixture_stream: Stream) {
 }
 
 #[rstest]
+fn test_recv_data_fin_drains_remaining_pending_reads_success(mut fixture_stream: Stream) {
+    fixture_stream.read(1, 100);
+    fixture_stream.read(2, 100);
+
+    let (effects, consumed) = fixture_stream.recv_data(Bytes::new(), true, 1.0);
+
+    assert_eq!(consumed, 0);
+    assert_eq!(fixture_stream.state, StreamState::HalfClosedRemote);
+    assert!(fixture_stream.pending_read_requests.is_empty());
+
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            Effect::NotifyRequestDone {
+                request_id: 1,
+                result: RequestResult::ReadData(_),
+                ..
+            },
+            Effect::NotifyRequestDone {
+                request_id: 2,
+                result: RequestResult::ReadData(_),
+                ..
+            }
+        ]
+    ));
+
+    if let [
+        Effect::NotifyRequestDone {
+            result: RequestResult::ReadData(d1),
+            ..
+        },
+        Effect::NotifyRequestDone {
+            result: RequestResult::ReadData(d2),
+            ..
+        },
+    ] = effects.as_slice()
+    {
+        assert!(d1.is_empty());
+        assert!(d2.is_empty());
+    }
+}
+
+#[rstest]
 fn test_recv_data_fin_on_reset_sent_transitions_to_closed(mut fixture_stream: Stream) {
     fixture_stream.state = StreamState::ResetSent;
 
@@ -663,19 +733,35 @@ fn test_recv_reset_remote_success(mut fixture_stream: Stream) {
 #[rstest]
 fn test_recv_reset_transitions_half_closed_local_to_closed_success(mut fixture_stream: Stream) {
     fixture_stream.state = StreamState::HalfClosedLocal;
+    fixture_stream
+        .write_buffer
+        .push_back((Bytes::from_static(b"queued"), 9, false));
+    fixture_stream.write_buffer_size = 6;
 
     let network_code = wt_to_http_error(0x100);
     let effects = fixture_stream.recv_reset(network_code, 1.0);
 
     assert_eq!(fixture_stream.state, StreamState::Closed);
     assert_eq!(fixture_stream.close_code, Some(0x100));
+    assert_eq!(fixture_stream.write_buffer_size, 0);
 
     assert!(matches!(
-        effects.last(),
-        Some(Effect::EmitStreamEvent {
-            event_type: EventType::StreamClosed,
-            ..
-        })
+        effects.as_slice(),
+        [
+            Effect::EmitStreamEvent {
+                event_type: EventType::StreamResetReceived,
+                ..
+            },
+            Effect::NotifyRequestFailed {
+                request_id: 9,
+                source: ErrorSource::Stream,
+                ..
+            },
+            Effect::EmitStreamEvent {
+                event_type: EventType::StreamClosed,
+                ..
+            }
+        ]
     ));
 }
 
@@ -761,6 +847,8 @@ fn test_reset_local_command_on_closed_stream_idempotency_success(mut fixture_str
 
 #[rstest]
 fn test_reset_local_command_success(mut fixture_stream: Stream) {
+    fixture_stream.write(9, Bytes::from_static(b"queued"), false, 0, 1.0);
+
     let req_id = 1;
     let error_code = 404;
 
@@ -768,10 +856,23 @@ fn test_reset_local_command_success(mut fixture_stream: Stream) {
 
     assert_eq!(fixture_stream.state, StreamState::ResetSent);
     assert_eq!(fixture_stream.close_code, Some(404));
+    assert_eq!(fixture_stream.write_buffer_size, 0);
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::ResetQuicStream { .. }, ..]
+        [
+            Effect::ResetQuicStream { .. },
+            Effect::NotifyRequestFailed {
+                request_id: 9,
+                source: ErrorSource::Stream,
+                ..
+            },
+            Effect::NotifyRequestDone {
+                request_id: 1,
+                result: RequestResult::None,
+                ..
+            }
+        ]
     ));
 
     if let [
@@ -886,16 +987,31 @@ fn test_stop_local_command_on_closed_stream_idempotency_success(mut fixture_stre
 
 #[rstest]
 fn test_stop_local_command_success(mut fixture_stream: Stream) {
+    fixture_stream.read(9, 100);
+
     let req_id = 1;
     let error_code = 500;
 
     let effects = fixture_stream.stop(req_id, error_code, 1.0);
 
     assert_eq!(fixture_stream.state, StreamState::ResetReceived);
+    assert!(fixture_stream.pending_read_requests.is_empty());
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::StopQuicStream { .. }, ..]
+        [
+            Effect::StopQuicStream { .. },
+            Effect::NotifyRequestFailed {
+                request_id: 9,
+                source: ErrorSource::Stream,
+                ..
+            },
+            Effect::NotifyRequestDone {
+                request_id: 1,
+                result: RequestResult::None,
+                ..
+            }
+        ]
     ));
 
     if let [
@@ -1008,6 +1124,15 @@ fn test_stop_send_only_fails() {
 }
 
 #[rstest]
+fn test_take_data_buffer_underrun_breaks_loop_success(mut fixture_stream: Stream) {
+    fixture_stream.read_buffer_size = 100;
+
+    let result = fixture_stream.take_data(100);
+
+    assert!(result.is_empty());
+}
+
+#[rstest]
 fn test_take_data_exact_chunk_match(mut fixture_stream: Stream) {
     let chunk = Bytes::from(vec![0u8; 50]);
     fixture_stream.recv_data(chunk, false, 1.0);
@@ -1110,6 +1235,16 @@ fn test_take_data_slicing_optimization_success(mut fixture_stream: Stream) {
 }
 
 #[rstest]
+fn test_take_data_zero_max_bytes_returns_empty_success(mut fixture_stream: Stream) {
+    fixture_stream.recv_data(Bytes::from_static(b"data"), false, 1.0);
+
+    let result = fixture_stream.take_data(0);
+
+    assert!(result.is_empty());
+    assert_eq!(fixture_stream.read_buffer_size, 4);
+}
+
+#[rstest]
 fn test_write_appends_to_existing_buffer_success(mut fixture_stream: Stream) {
     fixture_stream.write(1, Bytes::from_static(b"chunk1"), false, 0, 1.0);
     assert_eq!(fixture_stream.write_buffer.len(), 1);
@@ -1196,6 +1331,37 @@ fn test_write_empty_fin_success(mut fixture_stream: Stream) {
                 ..
             },
             Effect::NotifyRequestDone { .. }
+        ]
+    ));
+}
+
+#[rstest]
+fn test_write_fin_immediate_send_from_half_closed_remote_closes_stream_success(
+    mut fixture_stream: Stream,
+) {
+    fixture_stream.state = StreamState::HalfClosedRemote;
+
+    let (effects, sent) = fixture_stream.write(1, Bytes::from_static(b"data"), true, 100, 1.0);
+
+    assert_eq!(sent, 4);
+    assert_eq!(fixture_stream.state, StreamState::Closed);
+    assert!(fixture_stream.closed_at.is_some());
+
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            Effect::SendQuicData {
+                end_stream: true,
+                ..
+            },
+            Effect::NotifyRequestDone {
+                result: RequestResult::None,
+                ..
+            },
+            Effect::EmitStreamEvent {
+                event_type: EventType::StreamClosed,
+                ..
+            }
         ]
     ));
 }

@@ -8,7 +8,7 @@ use rstest::rstest;
 
 use super::*;
 use crate::common::constants::{
-    ERR_H3_FRAME_ERROR, ERR_LIB_INTERNAL_ERROR, ERR_WT_APPLICATION_ERROR_FIRST, QUIC_VARINT_LIMIT,
+    ERR_H3_FRAME_ERROR, ERR_LIB_INTERNAL_ERROR, ERR_WT_APPLICATION_ERROR_FIRST,
 };
 use crate::common::types::{ErrorCode, StreamDirection};
 
@@ -267,6 +267,13 @@ fn test_parse_wt_protocol_list_invalid() {
 }
 
 #[test]
+fn test_parse_wt_protocol_list_invalid_escape_target() {
+    let bad_escape_target = b"\"h3\\n\"";
+
+    assert_eq!(parse_wt_protocol_list(bad_escape_target), None);
+}
+
+#[test]
 fn test_parse_wt_protocol_list_valid() {
     let single = b"\"h3\"";
     let multiple = b"\"h3\", \"p1\"";
@@ -319,12 +326,6 @@ fn test_read_varint_valid_decoding(#[case] input: &[u8], #[case] expected: u64) 
 
     assert_eq!(result, Ok(expected));
     assert_eq!(cursor.remaining(), 0);
-}
-
-#[test]
-#[should_panic(expected = "quic_stream validate exceeded")]
-fn test_stream_dir_from_id_panic_on_invalid() {
-    let _ = stream_dir_from_id(QUIC_VARINT_LIMIT + 1, true);
 }
 
 #[rstest]

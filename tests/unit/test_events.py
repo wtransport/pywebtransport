@@ -251,7 +251,7 @@ class TestEventEmitter:
     async def test_handler_raises_exception(
         self, emitter: EventEmitter, mocker: MockerFixture, mock_logger: Any
     ) -> None:
-        handler1 = mocker.AsyncMock(side_effect=ValueError("Handler failed"))
+        handler1 = mocker.AsyncMock(side_effect=ValueError("handler failed"))
         handler2 = mocker.AsyncMock()
         emitter.on(event_type=EventType.SESSION_READY, handler=handler1)
         emitter.on(event_type=EventType.SESSION_READY, handler=handler2)
@@ -571,7 +571,7 @@ class TestEventEmitter:
             pass
 
         def faulty_condition(event: Event) -> bool:
-            raise ConditionError("Condition failed")
+            raise ConditionError("condition failed")
 
         wait_task = asyncio.create_task(
             coro=emitter.wait_for(event_type=EventType.SESSION_READY, condition=faulty_condition)
@@ -620,7 +620,7 @@ class TestEventEmitter:
             pass
 
         def faulty_condition(event: Event) -> bool:
-            raise RaceError("Failed")
+            raise RaceError("failed")
 
         emitter.pause()
         wait_task = asyncio.create_task(

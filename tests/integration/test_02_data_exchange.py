@@ -171,7 +171,7 @@ async def test_datagram_echo(server: tuple[str, int], client: WebTransportClient
             except TimeoutError:
                 continue
         else:
-            pytest.fail(reason="Datagram echo timed out")
+            pytest.fail(reason="datagram echo timed out")
 
     async with asyncio.timeout(delay=2.0):
         await server_handler_finished.wait()

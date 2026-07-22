@@ -245,11 +245,7 @@ fn test_webtransport_frame_types_distinctness() {
     let total_count = frames.len();
     let unique_set: HashSet<u64> = frames.into_iter().collect();
 
-    assert_eq!(
-        unique_set.len(),
-        total_count,
-        "Duplicate WebTransport frame types detected"
-    );
+    assert_eq!(unique_set.len(), total_count);
 }
 
 #[rstest]

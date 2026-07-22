@@ -1,7 +1,7 @@
 # PyWebTransport MkDocs Configuration
 
 site_name: PyWebTransport
-site_description: An async-native WebTransport stack for Python.
+site_description: An async-native WebTransport stack.
 site_url: https://python.wtransport.org
 repo_url: https://github.com/wtransport/pywebtransport
 repo_name: wtransport/pywebtransport

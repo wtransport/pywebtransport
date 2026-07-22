@@ -726,9 +726,8 @@ impl Session {
         ids_to_remove.sort_unstable();
 
         for stream_id in ids_to_remove {
+            effects.extend(self.handle_closed(stream_id));
             self.streams.remove(&stream_id);
-            self.active_streams.remove(&stream_id);
-            self.blocked_streams.remove(&stream_id);
             effects.push(Effect::CleanupH3Stream { stream_id });
         }
 
@@ -926,41 +925,41 @@ impl Session {
                 });
             }
             WT_CAPSULE_TYPE_MAX_DATA => {
-                if let Ok(new_max) = read_varint(&mut cur) {
-                    if new_max > self.peer_max_data {
-                        self.peer_max_data = new_max;
-                        effects.push(Effect::EmitSessionEvent {
-                            session_id: self.id,
-                            event_type: EventType::SessionMaxDataUpdated,
-                            path: None,
-                            headers: None,
-                            wt_available_protocols: None,
-                            wt_protocol: None,
-                            data: None,
-                            is_unidirectional: None,
-                            max_data: Some(new_max),
-                            max_streams: None,
-                            ready_at: None,
-                            error_code: None,
-                            reason: None,
-                        });
-                        effects.extend(self.flush_blocked_writes(now));
-                    } else {
-                        debug!(
-                            "wt_session validate failed actual={new_max} session_id={}",
-                            self.id
-                        );
-                        return self.abort(
-                            ERR_WT_FLOW_CONTROL_ERROR,
-                            "wt_session validate failed".into(),
-                            now,
-                        );
-                    }
-                } else {
+                let Ok(new_max) = read_varint(&mut cur) else {
                     debug!("varint decode invalid session_id={}", self.id);
                     return self.abort(
                         ERR_H3_GENERAL_PROTOCOL_ERROR,
                         "varint decode invalid".into(),
+                        now,
+                    );
+                };
+
+                if new_max > self.peer_max_data {
+                    self.peer_max_data = new_max;
+                    effects.push(Effect::EmitSessionEvent {
+                        session_id: self.id,
+                        event_type: EventType::SessionMaxDataUpdated,
+                        path: None,
+                        headers: None,
+                        wt_available_protocols: None,
+                        wt_protocol: None,
+                        data: None,
+                        is_unidirectional: None,
+                        max_data: Some(new_max),
+                        max_streams: None,
+                        ready_at: None,
+                        error_code: None,
+                        reason: None,
+                    });
+                    effects.extend(self.flush_blocked_writes(now));
+                } else {
+                    debug!(
+                        "wt_session validate failed actual={new_max} session_id={}",
+                        self.id
+                    );
+                    return self.abort(
+                        ERR_WT_FLOW_CONTROL_ERROR,
+                        "wt_session validate failed".into(),
                         now,
                     );
                 }
@@ -977,127 +976,127 @@ impl Session {
                 );
             }
             WT_CAPSULE_TYPE_MAX_STREAMS_BIDI => {
-                if let Ok(new_max) = read_varint(&mut cur) {
-                    if new_max > WT_STREAMS_LIMIT {
-                        debug!(
-                            "wt_session validate exceeded actual={new_max} expected=wt_streams_limit session_id={}",
-                            self.id
-                        );
-                        return self.abort(
-                            ERR_WT_FLOW_CONTROL_ERROR,
-                            "wt_session validate exceeded".into(),
-                            now,
-                        );
-                    }
-                    if new_max > self.peer_max_streams_bidi {
-                        self.peer_max_streams_bidi = new_max;
-                        effects.push(Effect::EmitSessionEvent {
-                            session_id: self.id,
-                            event_type: EventType::SessionMaxStreamsBidiUpdated,
-                            path: None,
-                            headers: None,
-                            wt_available_protocols: None,
-                            wt_protocol: None,
-                            data: None,
-                            is_unidirectional: None,
-                            max_data: None,
-                            max_streams: Some(new_max),
-                            ready_at: None,
-                            error_code: None,
-                            reason: None,
-                        });
-
-                        while self.local_streams_bidi_opened < self.peer_max_streams_bidi
-                            && !self.pending_bidi_stream_requests.is_empty()
-                        {
-                            if let Some(req_id) = self.pending_bidi_stream_requests.pop_front() {
-                                self.local_streams_bidi_opened += 1;
-                                effects.push(Effect::CreateQuicStream {
-                                    request_id: req_id,
-                                    session_id: self.id,
-                                    is_unidirectional: false,
-                                });
-                            }
-                        }
-                    } else {
-                        debug!(
-                            "wt_session validate failed actual={new_max} session_id={}",
-                            self.id
-                        );
-                        return self.abort(
-                            ERR_WT_FLOW_CONTROL_ERROR,
-                            "wt_session validate failed".into(),
-                            now,
-                        );
-                    }
-                } else {
+                let Ok(new_max) = read_varint(&mut cur) else {
                     debug!("varint decode invalid session_id={}", self.id);
                     return self.abort(
                         ERR_H3_GENERAL_PROTOCOL_ERROR,
                         "varint decode invalid".into(),
                         now,
                     );
+                };
+
+                if new_max > WT_STREAMS_LIMIT {
+                    debug!(
+                        "wt_session validate exceeded actual={new_max} expected=wt_streams_limit session_id={}",
+                        self.id
+                    );
+                    return self.abort(
+                        ERR_WT_FLOW_CONTROL_ERROR,
+                        "wt_session validate exceeded".into(),
+                        now,
+                    );
+                }
+                if new_max > self.peer_max_streams_bidi {
+                    self.peer_max_streams_bidi = new_max;
+                    effects.push(Effect::EmitSessionEvent {
+                        session_id: self.id,
+                        event_type: EventType::SessionMaxStreamsBidiUpdated,
+                        path: None,
+                        headers: None,
+                        wt_available_protocols: None,
+                        wt_protocol: None,
+                        data: None,
+                        is_unidirectional: None,
+                        max_data: None,
+                        max_streams: Some(new_max),
+                        ready_at: None,
+                        error_code: None,
+                        reason: None,
+                    });
+
+                    while self.local_streams_bidi_opened < self.peer_max_streams_bidi
+                        && !self.pending_bidi_stream_requests.is_empty()
+                    {
+                        if let Some(req_id) = self.pending_bidi_stream_requests.pop_front() {
+                            self.local_streams_bidi_opened += 1;
+                            effects.push(Effect::CreateQuicStream {
+                                request_id: req_id,
+                                session_id: self.id,
+                                is_unidirectional: false,
+                            });
+                        }
+                    }
+                } else {
+                    debug!(
+                        "wt_session validate failed actual={new_max} session_id={}",
+                        self.id
+                    );
+                    return self.abort(
+                        ERR_WT_FLOW_CONTROL_ERROR,
+                        "wt_session validate failed".into(),
+                        now,
+                    );
                 }
             }
             WT_CAPSULE_TYPE_MAX_STREAMS_UNI => {
-                if let Ok(new_max) = read_varint(&mut cur) {
-                    if new_max > WT_STREAMS_LIMIT {
-                        debug!(
-                            "wt_session validate exceeded actual={new_max} expected=wt_streams_limit session_id={}",
-                            self.id
-                        );
-                        return self.abort(
-                            ERR_WT_FLOW_CONTROL_ERROR,
-                            "wt_session validate exceeded".into(),
-                            now,
-                        );
-                    }
-                    if new_max > self.peer_max_streams_uni {
-                        self.peer_max_streams_uni = new_max;
-                        effects.push(Effect::EmitSessionEvent {
-                            session_id: self.id,
-                            event_type: EventType::SessionMaxStreamsUniUpdated,
-                            path: None,
-                            headers: None,
-                            wt_available_protocols: None,
-                            wt_protocol: None,
-                            data: None,
-                            is_unidirectional: None,
-                            max_data: None,
-                            max_streams: Some(new_max),
-                            ready_at: None,
-                            error_code: None,
-                            reason: None,
-                        });
-
-                        while self.local_streams_uni_opened < self.peer_max_streams_uni
-                            && !self.pending_uni_stream_requests.is_empty()
-                        {
-                            if let Some(req_id) = self.pending_uni_stream_requests.pop_front() {
-                                self.local_streams_uni_opened += 1;
-                                effects.push(Effect::CreateQuicStream {
-                                    request_id: req_id,
-                                    session_id: self.id,
-                                    is_unidirectional: true,
-                                });
-                            }
-                        }
-                    } else {
-                        debug!(
-                            "wt_session validate failed actual={new_max} session_id={}",
-                            self.id
-                        );
-                        return self.abort(
-                            ERR_WT_FLOW_CONTROL_ERROR,
-                            "wt_session validate failed".into(),
-                            now,
-                        );
-                    }
-                } else {
+                let Ok(new_max) = read_varint(&mut cur) else {
                     debug!("varint decode invalid session_id={}", self.id);
                     return self.abort(
                         ERR_H3_GENERAL_PROTOCOL_ERROR,
                         "varint decode invalid".into(),
+                        now,
+                    );
+                };
+
+                if new_max > WT_STREAMS_LIMIT {
+                    debug!(
+                        "wt_session validate exceeded actual={new_max} expected=wt_streams_limit session_id={}",
+                        self.id
+                    );
+                    return self.abort(
+                        ERR_WT_FLOW_CONTROL_ERROR,
+                        "wt_session validate exceeded".into(),
+                        now,
+                    );
+                }
+                if new_max > self.peer_max_streams_uni {
+                    self.peer_max_streams_uni = new_max;
+                    effects.push(Effect::EmitSessionEvent {
+                        session_id: self.id,
+                        event_type: EventType::SessionMaxStreamsUniUpdated,
+                        path: None,
+                        headers: None,
+                        wt_available_protocols: None,
+                        wt_protocol: None,
+                        data: None,
+                        is_unidirectional: None,
+                        max_data: None,
+                        max_streams: Some(new_max),
+                        ready_at: None,
+                        error_code: None,
+                        reason: None,
+                    });
+
+                    while self.local_streams_uni_opened < self.peer_max_streams_uni
+                        && !self.pending_uni_stream_requests.is_empty()
+                    {
+                        if let Some(req_id) = self.pending_uni_stream_requests.pop_front() {
+                            self.local_streams_uni_opened += 1;
+                            effects.push(Effect::CreateQuicStream {
+                                request_id: req_id,
+                                session_id: self.id,
+                                is_unidirectional: true,
+                            });
+                        }
+                    }
+                } else {
+                    debug!(
+                        "wt_session validate failed actual={new_max} session_id={}",
+                        self.id
+                    );
+                    return self.abort(
+                        ERR_WT_FLOW_CONTROL_ERROR,
+                        "wt_session validate failed".into(),
                         now,
                     );
                 }
@@ -1105,23 +1104,23 @@ impl Session {
             WT_CAPSULE_TYPE_STREAMS_BLOCKED_BIDI | WT_CAPSULE_TYPE_STREAMS_BLOCKED_UNI => {
                 let is_uni = capsule_type == WT_CAPSULE_TYPE_STREAMS_BLOCKED_UNI;
 
-                if let Ok(peer_reported_limit) = read_varint(&mut cur) {
-                    if peer_reported_limit > WT_STREAMS_LIMIT {
-                        debug!(
-                            "wt_session validate exceeded actual={peer_reported_limit} expected=wt_streams_limit session_id={}",
-                            self.id
-                        );
-                        return self.abort(
-                            ERR_WT_FLOW_CONTROL_ERROR,
-                            "wt_session validate exceeded".into(),
-                            now,
-                        );
-                    }
-                } else {
+                let Ok(peer_reported_limit) = read_varint(&mut cur) else {
                     debug!("varint decode invalid session_id={}", self.id);
                     return self.abort(
                         ERR_H3_GENERAL_PROTOCOL_ERROR,
                         "varint decode invalid".into(),
+                        now,
+                    );
+                };
+
+                if peer_reported_limit > WT_STREAMS_LIMIT {
+                    debug!(
+                        "wt_session validate exceeded actual={peer_reported_limit} expected=wt_streams_limit session_id={}",
+                        self.id
+                    );
+                    return self.abort(
+                        ERR_WT_FLOW_CONTROL_ERROR,
+                        "wt_session validate exceeded".into(),
                         now,
                     );
                 }
@@ -1952,6 +1951,7 @@ impl Session {
 
             let (stream_effects, consumed) = stream.flush_writes(session_credit, now);
             let has_more = stream.has_pending_writes();
+            let is_closed = stream.is_closed();
 
             effects.extend(stream_effects);
             self.local_data_sent += consumed;
@@ -1959,6 +1959,10 @@ impl Session {
             if has_more {
                 self.blocked_streams_queue.push_back(stream_id);
                 self.blocked_streams.insert(stream_id);
+            }
+
+            if is_closed {
+                effects.extend(self.handle_closed(stream_id));
             }
         }
 

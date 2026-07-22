@@ -1,4 +1,4 @@
-"""An async-native WebTransport stack for Python."""
+"""An async-native WebTransport stack."""
 
 from .client import WebTransportClient
 from .config import ClientConfig, ServerConfig

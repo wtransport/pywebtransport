@@ -169,20 +169,19 @@ fn test_client_immediate_actions_when_connected(mut fixture_engine_client: WebTr
 #[rstest]
 fn test_client_receives_settings_via_raw_data(mut fixture_engine_client: WebTransportEngine) {
     if let Err(e) = fixture_engine_client.initialize_h3_transport(2, 6, 10) {
-        let msg = format!("{e:?}");
-        assert_eq!(msg, "", "H3 init failed");
+        assert_eq!(format!("{e:?}"), "");
         return;
     }
 
     let mut data = BytesMut::new();
     if let Err(e) = write_varint(&mut data, H3_STREAM_TYPE_CONTROL) {
-        assert_eq!(format!("{e:?}"), "", "Failed to write control stream type");
+        assert_eq!(format!("{e:?}"), "");
     }
     if let Err(e) = write_varint(&mut data, 4) {
-        assert_eq!(format!("{e:?}"), "", "Failed to write settings type");
+        assert_eq!(format!("{e:?}"), "");
     }
     if let Err(e) = write_varint(&mut data, 0) {
-        assert_eq!(format!("{e:?}"), "", "Failed to write settings length");
+        assert_eq!(format!("{e:?}"), "");
     }
 
     let event = ProtocolEvent::TransportStreamDataReceived {
@@ -198,6 +197,33 @@ fn test_client_receives_settings_via_raw_data(mut fixture_engine_client: WebTran
             .iter()
             .any(|e| matches!(e, Effect::EmitConnectionEvent { .. }))
     );
+}
+
+#[rstest]
+fn test_client_settings_before_handshake_replays_pending_actions(
+    mut fixture_engine_client: WebTransportEngine,
+) {
+    let create_stream_event = ProtocolEvent::UserCreateStream {
+        request_id: 1,
+        session_id: 0,
+        is_unidirectional: true,
+    };
+    fixture_engine_client.handle_event(create_stream_event, 0.0);
+    assert_eq!(fixture_engine_client.pending_user_actions.len(), 1);
+
+    fixture_engine_client.handle_event(
+        ProtocolEvent::H3SettingsReceived {
+            settings: Default::default(),
+        },
+        0.0,
+    );
+    assert_eq!(fixture_engine_client.pending_user_actions.len(), 1);
+
+    let effects =
+        fixture_engine_client.handle_event(ProtocolEvent::TransportHandshakeCompleted, 1.0);
+
+    assert!(fixture_engine_client.pending_user_actions.is_empty());
+    assert!(!effects.is_empty());
 }
 
 #[rstest]
@@ -270,8 +296,7 @@ fn test_encode_capsule() {
     let effects = match res {
         Ok(e) => e,
         Err(e) => {
-            let msg = format!("{e:?}");
-            assert_eq!(msg, "", "Encode capsule failed");
+            assert_eq!(format!("{e:?}"), "");
             return;
         }
     };
@@ -292,8 +317,7 @@ fn test_encode_datagram() {
     let effects = match res {
         Ok(e) => e,
         Err(e) => {
-            let msg = format!("{e:?}");
-            assert_eq!(msg, "", "Encode datagram failed");
+            assert_eq!(format!("{e:?}"), "");
             return;
         }
     };
@@ -307,8 +331,7 @@ fn test_encode_datagram() {
 #[rstest]
 fn test_encode_goaway(mut fixture_engine_server: WebTransportEngine) {
     if let Err(e) = fixture_engine_server.initialize_h3_transport(3, 7, 11) {
-        let msg = format!("{e:?}");
-        assert_eq!(msg, "", "Setup failed");
+        assert_eq!(format!("{e:?}"), "");
         return;
     }
 
@@ -328,8 +351,7 @@ fn test_encode_goaway_no_control_stream(mut fixture_engine_server: WebTransportE
 #[rstest]
 fn test_encode_headers(mut fixture_engine_server: WebTransportEngine) {
     if let Err(e) = fixture_engine_server.initialize_h3_transport(3, 7, 11) {
-        let msg = format!("{e:?}");
-        assert_eq!(msg, "", "Failed to set local stream IDs");
+        assert_eq!(format!("{e:?}"), "");
         return;
     }
 
@@ -339,8 +361,7 @@ fn test_encode_headers(mut fixture_engine_server: WebTransportEngine) {
     let effects = match res {
         Ok(e) => e,
         Err(e) => {
-            let msg = format!("{e:?}");
-            assert_eq!(msg, "", "Encode headers failed");
+            assert_eq!(format!("{e:?}"), "");
             return;
         }
     };
@@ -369,8 +390,7 @@ fn test_encode_session_request(mut fixture_engine_client: WebTransportEngine) {
     let effects = match res {
         Ok(e) => e,
         Err(e) => {
-            let msg = format!("{e:?}");
-            assert_eq!(msg, "", "Encode session request failed");
+            assert_eq!(format!("{e:?}"), "");
             return;
         }
     };
@@ -503,10 +523,7 @@ fn test_handle_transport_delegation_coverage(mut fixture_engine_server: WebTrans
         data: Bytes::from_static(b"raw"),
     };
     let effects = fixture_engine_server.handle_event(transport_dgram, 0.0);
-    assert!(
-        effects.is_empty(),
-        "Transport events handled by H3 might yield empty effects if not fully configured"
-    );
+    assert!(effects.is_empty());
 }
 
 #[rstest]
@@ -638,13 +655,50 @@ fn test_initialization(fixture_engine_client: WebTransportEngine) {
 }
 
 #[rstest]
+fn test_initialize_h3_transport_settings_encode_failure() {
+    let params = EngineParams {
+        early_event_ttl: 5.0,
+        flow_control_window: 4 * 1024 * 1024,
+        initial_max_data: 4 * 1024 * 1024,
+        initial_max_streams_bidi: 10,
+        initial_max_streams_uni: 10,
+        max_capsule_size: 65536,
+        max_field_section_size: u64::MAX,
+        max_pending_capsules: 20,
+        max_pending_datagrams: 100,
+        max_pending_streams: 10,
+        max_session_pending_events: 100,
+        max_sessions: 10,
+        max_stream_read_buffer_size: 1024 * 1024,
+        max_stream_write_buffer_size: 1024 * 1024,
+        max_total_pending_events: 1000,
+    };
+    let mut engine = WebTransportEngine::new(42, false, params);
+
+    let result = engine.initialize_h3_transport(2, 6, 10);
+
+    let effects = match result {
+        Ok(e) => e,
+        Err(e) => {
+            assert_eq!(format!("{e:?}"), "");
+            return;
+        }
+    };
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CloseQuicConnection { .. }]
+    ));
+}
+
+#[rstest]
 fn test_initialize_h3_transport_success(mut fixture_engine_client: WebTransportEngine) {
     let res = fixture_engine_client.initialize_h3_transport(2, 6, 10);
 
     let effects = match res {
         Ok(e) => e,
         Err(e) => {
-            assert_eq!(format!("{e:?}"), "", "H3 init failed");
+            assert_eq!(format!("{e:?}"), "");
             return;
         }
     };
@@ -784,7 +838,7 @@ fn test_user_stream_actions_not_found(
             } if *ec == ERR_LIB_STREAM_STATE_ERROR
         )
     });
-    assert!(has_fail, "Expected NotifyRequestFailed for missing stream");
+    assert!(has_fail);
 }
 
 #[rstest]
@@ -874,10 +928,7 @@ fn test_user_stream_operations_success(mut fixture_engine_server: WebTransportEn
             )
         });
 
-        assert!(
-            !stream_error,
-            "Stream operation failed with StreamStateError. Effects: {effects:?}"
-        );
+        assert!(!stream_error);
 
         if is_read_op {
             assert!(effects.is_empty());

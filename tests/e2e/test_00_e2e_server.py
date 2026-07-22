@@ -53,7 +53,7 @@ class E2EServerApp(ServerApp):
         self.server.on(event_type=EventType.SESSION_REQUEST, handler=self._on_session_request)
         self._register_middleware()
         self._register_handlers()
-        logger.info("E2E Server initialized with full test support")
+        logger.info("E2E Server initialized")
 
     def _register_middleware(self) -> None:
         """Register custom middleware for testing specific features."""
@@ -92,7 +92,7 @@ class E2EServerApp(ServerApp):
             await stream.write(data=stats_json, end_stream=True)
             logger.info("Sent diagnostics: %d bytes", len(stats_json))
         except asyncio.TimeoutError:
-            logger.error("Diagnostics handler: Client connected but never opened a stream.")
+            logger.error("Client connected but never opened a stream")
         except SessionClosedError:
             pass
         except Exception as e:
@@ -117,7 +117,7 @@ class E2EServerApp(ServerApp):
             server_key = await session.export_keying_material(label=label, context=context, length=length)
 
             await stream.write_all(data=server_key, end_stream=True)
-            logger.info("Successfully exported and sent %d bytes of keying material.", len(server_key))
+            logger.info("Successfully exported and sent %d bytes of keying material", len(server_key))
         except Exception as e:
             logger.error("TLS Export handler error: %s", e, exc_info=True)
         finally:
@@ -162,10 +162,10 @@ class E2EServerApp(ServerApp):
     def _register_handlers(self) -> None:
         """Centralize registration for all server routes."""
         self.route(path="/")(echo_handler)
-        self.route(path="/echo")(echo_handler)
-        self.route(path="/health")(self._health_handler)
         self.route(path="/diagnostics")(self._diagnostics_handler)
+        self.route(path="/echo")(echo_handler)
         self.route(path="/export-keying-material")(self._export_keying_handler)
+        self.route(path="/health")(self._health_handler)
         self.route(path="/protocol-negotiation")(echo_handler)
 
 
@@ -341,8 +341,8 @@ async def main() -> None:
     logger.info("Server binding to %s:%d", config.bind_host, config.bind_port)
     logger.info("Optimistic server binding to %s:%d", SERVER_HOST, OPTIMISTIC_SERVER_PORT)
     if DEBUG_MODE:
-        logger.info("Debug mode enabled - verbose logging active")
-    logger.info("Ready for E2E tests!")
+        logger.info("Debug mode enabled")
+    logger.info("Ready for E2E tests")
 
     try:
         async with app, asyncio.TaskGroup() as tg:
@@ -356,7 +356,7 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("Server stopped gracefully by user.")
+        logger.info("Server stopped gracefully by user")
     except Exception as e:
         logger.critical("Server crashed unexpectedly: %s", e, exc_info=True)
         sys.exit(1)

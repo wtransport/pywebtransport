@@ -9,7 +9,7 @@ hide:
     <img src="assets/favicon.svg" alt="PyWebTransport" width="120" />
   </h1>
   <p>
-    <em>An async-native WebTransport stack for Python</em>
+    <em>An async-native WebTransport stack</em>
   </p>
 </div>
 

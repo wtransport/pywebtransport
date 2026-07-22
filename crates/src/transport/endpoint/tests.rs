@@ -94,7 +94,7 @@ fn create_dummy_client_config() -> ClientConfig {
     let Ok(builder) =
         rustls::ClientConfig::builder_with_provider(provider).with_protocol_versions(&[&TLS13])
     else {
-        assert_eq!("ok", "err", "Failed to build rustls client config");
+        assert_eq!("ok", "err");
         unreachable!()
     };
     let root_store = RootCertStore::empty();
@@ -105,7 +105,7 @@ fn create_dummy_client_config() -> ClientConfig {
         .dangerous()
         .set_certificate_verifier(Arc::new(DummyVerifier));
     let Ok(quic_crypto) = QuicClientConfig::try_from(crypto) else {
-        assert_eq!("ok", "err", "Failed to build QuicClientConfig");
+        assert_eq!("ok", "err");
         unreachable!()
     };
     let mut client_config = ClientConfig::new(Arc::new(quic_crypto));
@@ -132,7 +132,7 @@ fn create_test_client_endpoint() -> TransportEndpoint {
     let c_cfg = create_dummy_client_config();
 
     let Ok(ep) = TransportEndpoint::new_client(quinn_ep, b_cfg, c_cfg) else {
-        assert_eq!("ok", "err", "Failed to create TransportEndpoint");
+        assert_eq!("ok", "err");
         unreachable!()
     };
 
@@ -145,7 +145,7 @@ fn create_test_server_endpoint() -> TransportEndpoint {
     let s_cfg = create_dummy_rust_server_config();
 
     let Ok(ep) = TransportEndpoint::new_server(quinn_ep, b_cfg, s_cfg) else {
-        assert_eq!("ok", "err", "Failed to create TransportEndpoint server");
+        assert_eq!("ok", "err");
         unreachable!()
     };
 
@@ -231,7 +231,7 @@ fn test_connect_creates_connection_and_routes_correctly(#[case] host: &str, #[ca
     let now = Instant::now();
 
     let Ok((_, addr)) = endpoint.connect(remote, host, now) else {
-        assert_eq!("ok", "err", "Failed to connect endpoint");
+        assert_eq!("ok", "err");
         unreachable!()
     };
 
@@ -261,7 +261,7 @@ fn test_routing_with_active_connection() {
     let remote = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 443);
     let now = Instant::now();
     let Ok((handle, _)) = endpoint.connect(remote, "localhost", now) else {
-        assert_eq!("ok", "err", "Failed to connect endpoint");
+        assert_eq!("ok", "err");
         unreachable!()
     };
     let event = ProtocolEvent::InternalCleanupResources;
@@ -288,10 +288,7 @@ fn test_connect_with_zero_timers_sets_none_boundaries() {
 
     let result = endpoint.connect(remote, "localhost", now);
 
-    assert!(
-        result.is_ok(),
-        "Expected connect to succeed with zero timers"
-    );
+    assert!(result.is_ok(), "should succeed");
 }
 
 #[test]
@@ -317,7 +314,7 @@ fn test_handle_user_event_yielding_effects_collects_properly() {
     let remote = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 443);
     let now = Instant::now();
     let Ok((handle, _)) = endpoint.connect(remote, "localhost", now) else {
-        assert_eq!("ok", "err", "Failed to connect endpoint");
+        assert_eq!("ok", "err");
         unreachable!()
     };
     let event = ProtocolEvent::UserGetConnectionDiagnostics { request_id: 100 };
@@ -337,11 +334,11 @@ fn test_timeout_with_multiple_connections_returns_minimum() {
     let remote2 = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 444);
     let now = Instant::now();
     let Ok(_) = endpoint.connect(remote1, "localhost", now) else {
-        assert_eq!("ok", "err", "Failed to connect endpoint 1");
+        assert_eq!("ok", "err");
         unreachable!()
     };
     let Ok(_) = endpoint.connect(remote2, "localhost", now) else {
-        assert_eq!("ok", "err", "Failed to connect endpoint 2");
+        assert_eq!("ok", "err");
         unreachable!()
     };
 

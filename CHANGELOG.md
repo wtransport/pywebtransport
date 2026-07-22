@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(No planned changes for the next release yet.)_
 
+## [0.20.1] - 2026-07-22
+
+This release resolves a peer stream credit leak in the flow control state machine and synchronizes the Rust toolchain to avoid a known upstream miscompilation.
+
+### Changed
+
+- **Toolchain Synchronization**: Upgraded the global Rust compiler toolchain to 1.97.1 across CI workflows, Read the Docs configuration, and local development environments to avoid a known LLVM miscompilation present in 1.97.0.
+- **CI Test Matrix**: Extended Python version testing to include the 3.15 pre-release ahead of its general availability.
+- **CI/CD Infrastructure**: Migrated inter-step version propagation in the image publishing workflow from environment variables to scoped step outputs.
+- **Code Style**: Refactored early-return guards in the transport and protocol layers to use `let-else`, and removed a redundant debug-only assertion in stream direction resolution.
+- **Test Suite**: Standardized assertion failure messaging, test-data string casing, and log message formatting across the Rust and Python test suites.
+- **Documentation**: Standardized the project tagline across the codebase to omit the "for Python" qualifier.
+
+### Fixed
+
+- **Stream Credit Leak**: Resolved a peer stream credit leak where `flush_blocked_writes` failed to detect streams closed during a flush and `prune_closed_streams` bypassed the centralized closed-stream handler, both skipping the replenishment notification owed to the peer.
+
 ## [0.20.0] - 2026-07-14
 
 This release marks the definitive alignment of the implementation with the `draft-ietf-webtrans-http3-16` specification, introducing optimistic session establishment with bounded pending-queue buffering and migrating flow control, settings, and termination semantics to the updated normative requirements. It additionally hardens the software supply chain across build and CI environments.
@@ -1033,7 +1050,8 @@ This is a major release focused on enhancing runtime safety and modernizing the 
 - cryptography (>=45.0.4,<46.0.0) for SSL/TLS operations
 - typing-extensions (>=4.14.0,<5.0.0) for Python <3.10 support
 
-[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.20.0...HEAD
+[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.20.1...HEAD
+[0.20.1]: https://github.com/wtransport/pywebtransport/compare/v0.20.0...v0.20.1
 [0.20.0]: https://github.com/wtransport/pywebtransport/compare/v0.19.1...v0.20.0
 [0.19.1]: https://github.com/wtransport/pywebtransport/compare/v0.19.0...v0.19.1
 [0.19.0]: https://github.com/wtransport/pywebtransport/compare/v0.18.1...v0.19.0

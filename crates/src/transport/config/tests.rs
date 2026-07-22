@@ -81,7 +81,50 @@ fn test_build_client_config_fails_with_invalid_paths(
     let result = build_client_config(&config);
 
     let Err(_) = result else {
-        assert_eq!("err", "ok", "Expected err");
+        assert_eq!("err", "ok");
+        unreachable!()
+    };
+}
+
+#[rstest]
+fn test_build_client_config_with_client_auth_cert_succeeds() {
+    let output_dir = std::env::temp_dir().join("pywebtransport_test_client_auth");
+    let Ok((_ca_path, cert_path, key_path)) =
+        crate::tls::certificate::generate_self_signed_cert("localhost", &output_dir, 1)
+    else {
+        assert_eq!("ok", "err");
+        unreachable!()
+    };
+
+    let mut config = mock_client_config();
+    config.certfile = Some(PathBuf::from(cert_path));
+    config.keyfile = Some(PathBuf::from(key_path));
+
+    let result = build_client_config(&config);
+
+    let Ok(_) = result else {
+        assert_eq!("ok", "err");
+        unreachable!()
+    };
+}
+
+#[rstest]
+fn test_build_client_config_with_custom_ca_succeeds() {
+    let output_dir = std::env::temp_dir().join("pywebtransport_test_client_ca");
+    let Ok((ca_path, _cert_path, _key_path)) =
+        crate::tls::certificate::generate_self_signed_cert("localhost", &output_dir, 1)
+    else {
+        assert_eq!("ok", "err");
+        unreachable!()
+    };
+
+    let mut config = mock_client_config();
+    config.ca_certs = Some(PathBuf::from(ca_path));
+
+    let result = build_client_config(&config);
+
+    let Ok(_) = result else {
+        assert_eq!("ok", "err");
         unreachable!()
     };
 }
@@ -94,7 +137,7 @@ fn test_build_client_config_with_verify_server_certificate_succeeds() {
     let result = build_client_config(&config);
 
     let Ok(_) = result else {
-        assert_eq!("ok", "err", "Expected ok");
+        assert_eq!("ok", "err");
         unreachable!()
     };
 }
@@ -107,7 +150,7 @@ fn test_build_client_config_without_certs_succeeds() {
     let result = build_client_config(&config);
 
     let Ok(_) = result else {
-        assert_eq!("ok", "err", "Expected ok");
+        assert_eq!("ok", "err");
         unreachable!()
     };
 }
@@ -140,7 +183,54 @@ fn test_build_server_config_fails_with_invalid_cert_paths(
     let result = build_server_config(&config);
 
     let Err(_) = result else {
-        assert_eq!("err", "ok", "Expected err");
+        assert_eq!("err", "ok");
+        unreachable!()
+    };
+}
+
+#[rstest]
+fn test_build_server_config_with_client_auth_succeeds() {
+    let output_dir = std::env::temp_dir().join("pywebtransport_test_server_client_auth");
+    let Ok((ca_path, cert_path, key_path)) =
+        crate::tls::certificate::generate_self_signed_cert("localhost", &output_dir, 1)
+    else {
+        assert_eq!("ok", "err");
+        unreachable!()
+    };
+
+    let mut config = mock_server_config();
+    config.certfile = PathBuf::from(cert_path);
+    config.keyfile = PathBuf::from(key_path);
+    config.require_client_auth = true;
+    config.ca_certs = Some(PathBuf::from(ca_path));
+
+    let result = build_server_config(&config);
+
+    let Ok(_) = result else {
+        assert_eq!("ok", "err");
+        unreachable!()
+    };
+}
+
+#[rstest]
+fn test_build_server_config_with_valid_certs_succeeds() {
+    let output_dir = std::env::temp_dir().join("pywebtransport_test_server_valid");
+    let Ok((_ca_path, cert_path, key_path)) =
+        crate::tls::certificate::generate_self_signed_cert("localhost", &output_dir, 1)
+    else {
+        assert_eq!("ok", "err");
+        unreachable!()
+    };
+
+    let mut config = mock_server_config();
+    config.certfile = PathBuf::from(cert_path);
+    config.keyfile = PathBuf::from(key_path);
+    config.require_client_auth = false;
+
+    let result = build_server_config(&config);
+
+    let Ok(_) = result else {
+        assert_eq!("ok", "err");
         unreachable!()
     };
 }
@@ -153,7 +243,7 @@ fn test_build_transport_config_fails_with_invalid_bidi_streams() {
     let result = build_transport_config(&config);
 
     let Err(_) = result else {
-        assert_eq!("err", "ok", "Expected err");
+        assert_eq!("err", "ok");
         unreachable!()
     };
 }
@@ -166,7 +256,7 @@ fn test_build_transport_config_fails_with_invalid_idle_timeout() {
     let result = build_transport_config(&config);
 
     let Err(_) = result else {
-        assert_eq!("err", "ok", "Expected err");
+        assert_eq!("err", "ok");
         unreachable!()
     };
 }
@@ -179,7 +269,7 @@ fn test_build_transport_config_fails_with_invalid_receive_window() {
     let result = build_transport_config(&config);
 
     let Err(_) = result else {
-        assert_eq!("err", "ok", "Expected err");
+        assert_eq!("err", "ok");
         unreachable!()
     };
 }
@@ -192,7 +282,7 @@ fn test_build_transport_config_fails_with_invalid_stream_receive_window() {
     let result = build_transport_config(&config);
 
     let Err(_) = result else {
-        assert_eq!("err", "ok", "Expected err");
+        assert_eq!("err", "ok");
         unreachable!()
     };
 }
@@ -205,7 +295,7 @@ fn test_build_transport_config_fails_with_invalid_uni_streams() {
     let result = build_transport_config(&config);
 
     let Err(_) = result else {
-        assert_eq!("err", "ok", "Expected err");
+        assert_eq!("err", "ok");
         unreachable!()
     };
 }
@@ -217,7 +307,7 @@ fn test_build_transport_config_with_default_succeeds() {
     let result = build_transport_config(&config);
 
     let Ok(_) = result else {
-        assert_eq!("ok", "err", "Expected ok");
+        assert_eq!("ok", "err");
         unreachable!()
     };
 }
@@ -230,7 +320,7 @@ fn test_build_transport_config_with_invalid_congestion_control_fails() {
     let result = build_transport_config(&config);
 
     let Err(_) = result else {
-        assert_eq!("err", "ok", "Expected err");
+        assert_eq!("err", "ok");
         unreachable!()
     };
 }
@@ -246,7 +336,7 @@ fn test_build_transport_config_with_valid_congestion_control(#[case] algo: &str)
     let result = build_transport_config(&config);
 
     let Ok(_) = result else {
-        assert_eq!("ok", "err", "Expected ok");
+        assert_eq!("ok", "err");
         unreachable!()
     };
 }
@@ -259,7 +349,7 @@ fn test_build_transport_config_with_zero_max_datagram_size() {
     let result = build_transport_config(&config);
 
     let Ok(_) = result else {
-        assert_eq!("ok", "err", "Expected ok");
+        assert_eq!("ok", "err");
         unreachable!()
     };
 }

@@ -41,7 +41,7 @@ from .test_07_advanced_features import test_performance_monitoring as run_07_per
 from .test_07_advanced_features import test_server_diagnostics as run_07_server_diagnostics
 from .test_07_advanced_features import test_session_lifecycle_events as run_07_session_lifecycle_events
 from .test_07_advanced_features import test_session_statistics as run_07_session_statistics
-from .test_07_advanced_features import test_stream_management_diagnostics as run_07_stream_management_diagnostics
+from .test_07_advanced_features import test_stream_statistics as run_07_stream_statistics
 from .test_08_protocol_negotiation import test_exact_match as run_08_exact_match
 from .test_08_protocol_negotiation import test_fallback_downgrade as run_08_fallback_downgrade
 from .test_08_protocol_negotiation import test_mismatch_rejection as run_08_mismatch_rejection
@@ -195,8 +195,8 @@ class TestE2eSuite:
     async def test_07_client_statistics(self) -> None:
         assert await run_07_client_statistics() is True, "Client statistics retrieval failed"
 
-    async def test_07_stream_management_diagnostics(self) -> None:
-        assert await run_07_stream_management_diagnostics() is True, "Stream management diagnostics test failed"
+    async def test_07_stream_statistics(self) -> None:
+        assert await run_07_stream_statistics() is True, "Stream statistics test failed"
 
     async def test_07_datagram_statistics(self) -> None:
         assert await run_07_datagram_statistics() is True, "Datagram statistics retrieval failed"

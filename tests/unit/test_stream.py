@@ -65,7 +65,7 @@ class TestBaseStream:
 
     @pytest.mark.asyncio
     async def test_diagnostics_connection_closed_error(self, stream: _BaseStream, mock_connection: MagicMock) -> None:
-        mock_connection.execute_request.side_effect = ConnectionError(message="Closed")
+        mock_connection.execute_request.side_effect = ConnectionError(message="closed")
 
         with pytest.raises(expected_exception=ConnectionError):
             await stream.diagnostics()
@@ -79,7 +79,7 @@ class TestBaseStream:
 
     @pytest.mark.asyncio
     async def test_diagnostics_generic_error(self, stream: _BaseStream, mock_connection: MagicMock) -> None:
-        mock_connection.execute_request.side_effect = ValueError("Fail")
+        mock_connection.execute_request.side_effect = ValueError("fail")
 
         with pytest.raises(expected_exception=StreamError, match="wt_stream resolve failed"):
             await stream.diagnostics()
@@ -299,7 +299,7 @@ class TestWebTransportReceiveStream(TestBaseStream):
 
     @pytest.mark.asyncio
     async def test_read_connection_error(self, stream: WebTransportReceiveStream, mock_connection: MagicMock) -> None:
-        mock_connection.execute_request.side_effect = ConnectionError(message="Fail")
+        mock_connection.execute_request.side_effect = ConnectionError(message="fail")
 
         with pytest.raises(expected_exception=ConnectionError):
             await stream.read()
@@ -320,7 +320,7 @@ class TestWebTransportReceiveStream(TestBaseStream):
 
     @pytest.mark.asyncio
     async def test_read_generic_error(self, stream: WebTransportReceiveStream, mock_connection: MagicMock) -> None:
-        mock_connection.execute_request.side_effect = ValueError("Fail")
+        mock_connection.execute_request.side_effect = ValueError("fail")
 
         with pytest.raises(expected_exception=StreamError, match="wt_stream receive failed"):
             await stream.read()
@@ -335,7 +335,7 @@ class TestWebTransportReceiveStream(TestBaseStream):
     @pytest.mark.asyncio
     async def test_read_stream_error(self, stream: WebTransportReceiveStream, mock_connection: MagicMock) -> None:
         mock_connection.execute_request.side_effect = StreamError(
-            message="State", error_code=ErrorCodes.LIB_STREAM_STATE_ERROR
+            message="state", error_code=ErrorCodes.LIB_STREAM_STATE_ERROR
         )
 
         assert await stream.read() == b""
@@ -349,9 +349,9 @@ class TestWebTransportReceiveStream(TestBaseStream):
     async def test_read_stream_error_reraise(
         self, stream: WebTransportReceiveStream, mock_connection: MagicMock
     ) -> None:
-        mock_connection.execute_request.side_effect = StreamError(message="Other", error_code=ErrorCodes.H3_FRAME_ERROR)
+        mock_connection.execute_request.side_effect = StreamError(message="other", error_code=ErrorCodes.H3_FRAME_ERROR)
 
-        with pytest.raises(expected_exception=StreamError, match="Other"):
+        with pytest.raises(expected_exception=StreamError, match="other"):
             await stream.read()
 
     @pytest.mark.asyncio
@@ -497,7 +497,7 @@ class TestWebTransportReceiveStream(TestBaseStream):
     async def test_stop_receiving_connection_error(
         self, stream: WebTransportReceiveStream, mock_connection: MagicMock
     ) -> None:
-        mock_connection.execute_request.side_effect = ConnectionError(message="Fail")
+        mock_connection.execute_request.side_effect = ConnectionError(message="fail")
 
         with pytest.raises(expected_exception=ConnectionError):
             await stream.stop_receiving()
@@ -514,7 +514,7 @@ class TestWebTransportReceiveStream(TestBaseStream):
     async def test_stop_receiving_generic_error(
         self, stream: WebTransportReceiveStream, mock_connection: MagicMock
     ) -> None:
-        mock_connection.execute_request.side_effect = ValueError("Fail")
+        mock_connection.execute_request.side_effect = ValueError("fail")
 
         with pytest.raises(expected_exception=StreamError, match="wt_stream abort failed"):
             await stream.stop_receiving()
@@ -532,7 +532,7 @@ class TestWebTransportReceiveStream(TestBaseStream):
         self, stream: WebTransportReceiveStream, mock_connection: MagicMock
     ) -> None:
         mock_connection.execute_request.side_effect = StreamError(
-            message="State", error_code=ErrorCodes.LIB_STREAM_STATE_ERROR
+            message="state", error_code=ErrorCodes.LIB_STREAM_STATE_ERROR
         )
 
         await stream.stop_receiving()
@@ -541,7 +541,7 @@ class TestWebTransportReceiveStream(TestBaseStream):
     async def test_stop_receiving_stream_error_reraised(
         self, stream: WebTransportReceiveStream, mock_connection: MagicMock
     ) -> None:
-        mock_connection.execute_request.side_effect = StreamError(message="Other", error_code=ErrorCodes.H3_FRAME_ERROR)
+        mock_connection.execute_request.side_effect = StreamError(message="other", error_code=ErrorCodes.H3_FRAME_ERROR)
 
         with pytest.raises(expected_exception=StreamError):
             await stream.stop_receiving()
@@ -563,7 +563,7 @@ class TestWebTransportSendStream(TestBaseStream):
 
     @pytest.mark.asyncio
     async def test_close_generic_error(self, stream: WebTransportSendStream, mocker: MockerFixture) -> None:
-        mocker.patch.object(target=WebTransportSendStream, attribute="write", side_effect=ValueError("Boom"))
+        mocker.patch.object(target=WebTransportSendStream, attribute="write", side_effect=ValueError("boom"))
 
         with pytest.raises(expected_exception=StreamError, match="wt_stream close failed"):
             await stream.close()
@@ -571,7 +571,7 @@ class TestWebTransportSendStream(TestBaseStream):
     @pytest.mark.asyncio
     async def test_close_stream_error_ignored(self, stream: WebTransportSendStream, mocker: MockerFixture) -> None:
         mocker.patch.object(
-            target=WebTransportSendStream, attribute="write", side_effect=StreamError(message="Expected")
+            target=WebTransportSendStream, attribute="write", side_effect=StreamError(message="expected")
         )
 
         await stream.close()
@@ -615,7 +615,7 @@ class TestWebTransportSendStream(TestBaseStream):
 
         with pytest.raises(expected_exception=RuntimeError):
             async with stream:
-                raise RuntimeError("Generic")
+                raise RuntimeError("generic")
 
         spy_close.assert_awaited_once_with(error_code=ErrorCodes.APP_GENERIC_ERROR)
 
@@ -693,14 +693,14 @@ class TestWebTransportSendStream(TestBaseStream):
 
     @pytest.mark.asyncio
     async def test_reset_connection_error(self, stream: WebTransportSendStream, mock_connection: MagicMock) -> None:
-        mock_connection.execute_request.side_effect = ConnectionError(message="Fail")
+        mock_connection.execute_request.side_effect = ConnectionError(message="fail")
 
         with pytest.raises(expected_exception=ConnectionError):
             await stream.reset()
 
     @pytest.mark.asyncio
     async def test_reset_generic_error(self, stream: WebTransportSendStream, mock_connection: MagicMock) -> None:
-        mock_connection.execute_request.side_effect = ValueError("Fail")
+        mock_connection.execute_request.side_effect = ValueError("fail")
 
         with pytest.raises(expected_exception=StreamError, match="wt_stream abort failed"):
             await stream.reset()
@@ -715,7 +715,7 @@ class TestWebTransportSendStream(TestBaseStream):
     @pytest.mark.asyncio
     async def test_reset_stream_error_ignored(self, stream: WebTransportSendStream, mock_connection: MagicMock) -> None:
         mock_connection.execute_request.side_effect = StreamError(
-            message="State", error_code=ErrorCodes.LIB_STREAM_STATE_ERROR
+            message="state", error_code=ErrorCodes.LIB_STREAM_STATE_ERROR
         )
 
         await stream.reset()
@@ -724,7 +724,7 @@ class TestWebTransportSendStream(TestBaseStream):
     async def test_reset_stream_error_reraised(
         self, stream: WebTransportSendStream, mock_connection: MagicMock
     ) -> None:
-        mock_connection.execute_request.side_effect = StreamError(message="Other", error_code=ErrorCodes.H3_FRAME_ERROR)
+        mock_connection.execute_request.side_effect = StreamError(message="other", error_code=ErrorCodes.H3_FRAME_ERROR)
 
         with pytest.raises(expected_exception=StreamError):
             await stream.reset()
@@ -762,7 +762,7 @@ class TestWebTransportSendStream(TestBaseStream):
     @pytest.mark.asyncio
     async def test_write_all_error(self, stream: WebTransportSendStream, mocker: MockerFixture) -> None:
         mocker.patch.object(
-            target=WebTransportSendStream, attribute="write", side_effect=StreamError(message="Fail", stream_id=3)
+            target=WebTransportSendStream, attribute="write", side_effect=StreamError(message="fail", stream_id=3)
         )
 
         with pytest.raises(expected_exception=StreamError):
@@ -788,7 +788,7 @@ class TestWebTransportSendStream(TestBaseStream):
 
     @pytest.mark.asyncio
     async def test_write_generic_error(self, stream: WebTransportSendStream, mock_connection: MagicMock) -> None:
-        mock_connection.execute_request.side_effect = ValueError("Fail")
+        mock_connection.execute_request.side_effect = ValueError("fail")
 
         with pytest.raises(expected_exception=StreamError, match="wt_stream send failed"):
             await stream.write(data=b"payload")
@@ -802,7 +802,7 @@ class TestWebTransportSendStream(TestBaseStream):
 
     @pytest.mark.asyncio
     async def test_write_stream_error(self, stream: WebTransportSendStream, mock_connection: MagicMock) -> None:
-        mock_connection.execute_request.side_effect = StreamError(message="Fail")
+        mock_connection.execute_request.side_effect = StreamError(message="fail")
 
         with pytest.raises(expected_exception=StreamError):
             await stream.write(data=b"payload")

@@ -28,7 +28,9 @@ logger = logging.getLogger(name="test_advanced_features")
 
 async def test_session_statistics() -> bool:
     """Test the retrieval and correctness of session-level statistics."""
-    logger.info("--- Test 07A: Session Statistics ---")
+    logger.info("Test 07A: Session Statistics")
+    logger.info("-" * 50)
+
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
@@ -45,16 +47,16 @@ async def test_session_statistics() -> bool:
                 await session.send_datagram(data=f"Datagram {i + 1}".encode())
 
             final_stats = await session.diagnostics()
-            logger.info("Final session statistics retrieved.")
+            logger.info("Final session statistics retrieved")
 
             streams_ok = final_stats.local_streams_bidi_opened >= 3
             datagrams_ok = final_stats.datagrams_sent >= 5
 
             if streams_ok and datagrams_ok:
-                logger.info("SUCCESS: Session statistics appear correct.")
+                logger.info("SUCCESS: Session statistics appear correct")
                 return True
             else:
-                logger.error("FAILURE: Session statistics mismatch.")
+                logger.error("FAILURE: Session statistics mismatch")
                 logger.error("   - Streams Created: %d (expected >= 3)", final_stats.local_streams_bidi_opened)
                 logger.error("   - Datagrams Sent: %d (expected >= 5)", final_stats.datagrams_sent)
                 return False
@@ -65,7 +67,9 @@ async def test_session_statistics() -> bool:
 
 async def test_connection_info() -> bool:
     """Test the retrieval of underlying connection information."""
-    logger.info("--- Test 07B: Connection Information ---")
+    logger.info("Test 07B: Connection Information")
+    logger.info("-" * 50)
+
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
@@ -73,7 +77,7 @@ async def test_connection_info() -> bool:
             session = await client.connect(url=SERVER_URL)
             connection = session._connection()
             if not connection:
-                logger.error("FAILURE: No connection object available on session.")
+                logger.error("FAILURE: No connection object available on session")
                 return False
 
             logger.info("Retrieving connection information...")
@@ -82,10 +86,10 @@ async def test_connection_info() -> bool:
             logger.info("   - Remote Address: %s", connection.remote_address)
 
             if connection.is_connected and connection.remote_address:
-                logger.info("SUCCESS: Connection information retrieved successfully.")
+                logger.info("SUCCESS: Connection information retrieved successfully")
                 return True
             else:
-                logger.error("FAILURE: Connection information is incomplete or state is incorrect.")
+                logger.error("FAILURE: Connection information is incomplete or state is incorrect")
                 return False
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)
@@ -94,7 +98,9 @@ async def test_connection_info() -> bool:
 
 async def test_client_statistics() -> bool:
     """Test the retrieval of client-wide statistics across multiple connections."""
-    logger.info("--- Test 07C: Client-Wide Statistics ---")
+    logger.info("Test 07C: Client-Wide Statistics")
+    logger.info("-" * 50)
+
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
@@ -112,19 +118,21 @@ async def test_client_statistics() -> bool:
             logger.info("   - Avg Connect Time: %.3fs", final_stats.avg_connect_time)
 
             if final_stats.connections_attempted >= 3 and final_stats.connections_successful >= 3:
-                logger.info("SUCCESS: Client statistics appear correct.")
+                logger.info("SUCCESS: Client statistics appear correct")
                 return True
             else:
-                logger.error("FAILURE: Client statistics are incorrect.")
+                logger.error("FAILURE: Client statistics are incorrect")
                 return False
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)
         return False
 
 
-async def test_stream_management_diagnostics() -> bool:
-    """Test advanced stream management features via diagnostics."""
-    logger.info("--- Test 07D: Stream Management (Diagnostics) ---")
+async def test_stream_statistics() -> bool:
+    """Test that connection diagnostics correctly report the active stream count."""
+    logger.info("Test 07D: Stream Statistics")
+    logger.info("-" * 50)
+
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
@@ -133,20 +141,20 @@ async def test_stream_management_diagnostics() -> bool:
             logger.info("Connected, session: %d", session.session_id)
             connection = session._connection()
             if not connection:
-                logger.error("FAILURE: Connection lost.")
+                logger.error("FAILURE: Connection lost")
                 return False
 
             streams = [await session.create_bidirectional_stream() for _ in range(5)]
-            logger.info("Created %d streams.", len(streams))
+            logger.info("Created %d streams", len(streams))
 
             conn_diag = await connection.diagnostics()
             logger.info("Connection diagnostics:")
             logger.info("   - Stream count: %d", conn_diag.stream_count)
 
             if conn_diag.stream_count == 5:
-                logger.info("SUCCESS: Connection diagnostics correctly report stream count.")
+                logger.info("SUCCESS: Connection diagnostics correctly report stream count")
             else:
-                logger.error("FAILURE: Stream count is incorrect in connection diagnostics.")
+                logger.error("FAILURE: Stream count is incorrect in connection diagnostics")
                 return False
 
             for stream in streams:
@@ -161,7 +169,9 @@ async def test_stream_management_diagnostics() -> bool:
 
 async def test_datagram_statistics() -> bool:
     """Test retrieval of detailed statistics for the datagram transport."""
-    logger.info("--- Test 07E: Datagram Statistics ---")
+    logger.info("Test 07E: Datagram Statistics")
+    logger.info("-" * 50)
+
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
@@ -181,10 +191,10 @@ async def test_datagram_statistics() -> bool:
             logger.info("   - Bytes Sent: %d", final_stats.datagram_bytes_sent)
 
             if final_stats.datagrams_sent >= 5 and final_stats.datagram_bytes_sent >= total_bytes_sent:
-                logger.info("SUCCESS: Datagram statistics appear correct.")
+                logger.info("SUCCESS: Datagram statistics appear correct")
                 return True
             else:
-                logger.error("FAILURE: Datagram statistics are incorrect.")
+                logger.error("FAILURE: Datagram statistics are incorrect")
                 return False
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)
@@ -193,7 +203,9 @@ async def test_datagram_statistics() -> bool:
 
 async def test_performance_monitoring() -> bool:
     """Test a simple performance monitoring loop over multiple transfers."""
-    logger.info("--- Test 07F: Performance Monitoring ---")
+    logger.info("Test 07F: Performance Monitoring")
+    logger.info("-" * 50)
+
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
@@ -214,7 +226,7 @@ async def test_performance_monitoring() -> bool:
                 avg_rtt_ms = (sum(latencies) / len(latencies)) * 1000
                 logger.info("   - Avg RTT for %d bytes: %.1fms", size, avg_rtt_ms)
 
-            logger.info("SUCCESS: Performance monitoring loop completed.")
+            logger.info("SUCCESS: Performance monitoring loop completed")
             return True
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)
@@ -223,7 +235,9 @@ async def test_performance_monitoring() -> bool:
 
 async def test_session_lifecycle_events() -> bool:
     """Test the real event emission lifecycle using deterministic history verification."""
-    logger.info("--- Test 07G: Session Lifecycle Events ---")
+    logger.info("Test 07G: Session Lifecycle Events")
+    logger.info("-" * 50)
+
     config = ClientConfig(verify_mode=ssl.CERT_NONE, event_history_capacity=50)
 
     try:
@@ -238,7 +252,7 @@ async def test_session_lifecycle_events() -> bool:
             filtered_events = [et for et in event_types if et in expected_events]
 
             if filtered_events == expected_events:
-                logger.info("SUCCESS: Session lifecycle events occurred in the correct order.")
+                logger.info("SUCCESS: Session lifecycle events occurred in the correct order")
                 return True
             else:
                 logger.error("FAILURE: Incorrect event order: %s", filtered_events)
@@ -250,7 +264,9 @@ async def test_session_lifecycle_events() -> bool:
 
 async def test_server_diagnostics() -> bool:
     """Test retrieving the server's diagnostics API."""
-    logger.info("--- Test 07H: Server-Side Diagnostics ---")
+    logger.info("Test 07H: Server-Side Diagnostics")
+    logger.info("-" * 50)
+
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
     try:
         async with WebTransportClient(config=config) as client:
@@ -259,11 +275,11 @@ async def test_server_diagnostics() -> bool:
             stream = await session.create_bidirectional_stream()
             response_data = await stream.read_all()
             if not response_data:
-                logger.error("FAILURE: Received no data from /diagnostics endpoint.")
+                logger.error("FAILURE: Received no data from /diagnostics endpoint")
                 return False
 
             stats = json.loads(s=response_data)
-            logger.info("Received server diagnostics successfully.")
+            logger.info("Received server diagnostics successfully")
 
             if (
                 "stats" in stats
@@ -271,10 +287,10 @@ async def test_server_diagnostics() -> bool:
                 and "session_states" in stats
                 and stats["is_serving"] is True
             ):
-                logger.info("SUCCESS: Server diagnostics structure is valid.")
+                logger.info("SUCCESS: Server diagnostics structure is valid")
                 return True
             else:
-                logger.error("FAILURE: Server diagnostics data is incomplete or invalid.")
+                logger.error("FAILURE: Server diagnostics data is incomplete or invalid")
                 logger.error("Received: %s", stats)
                 return False
     except Exception as e:
@@ -284,13 +300,13 @@ async def test_server_diagnostics() -> bool:
 
 async def main() -> int:
     """Run the main entry point for the advanced features test suite."""
-    logger.info("--- Starting Test 07: Advanced Features ---")
+    logger.info("Starting Test 07: Advanced Features")
 
     tests: list[tuple[str, Callable[[], Awaitable[bool]]]] = [
         ("Session Statistics", test_session_statistics),
         ("Connection Information", test_connection_info),
         ("Client-Wide Statistics", test_client_statistics),
-        ("Stream Management (Diagnostics)", test_stream_management_diagnostics),
+        ("Stream Statistics", test_stream_statistics),
         ("Datagram Statistics", test_datagram_statistics),
         ("Performance Monitoring", test_performance_monitoring),
         ("Session Lifecycle Events", test_session_lifecycle_events),
@@ -312,14 +328,14 @@ async def main() -> int:
         await asyncio.sleep(delay=1)
 
     logger.info("")
-    logger.info("=" * 60)
+    logger.info("=" * 50)
     logger.info("Test 07 Results: %d/%d passed", passed, total)
 
     if passed == total:
-        logger.info("TEST 07 PASSED: All advanced features tests successful!")
+        logger.info("TEST 07 PASSED: All tests successful")
         return 0
     else:
-        logger.error("TEST 07 FAILED: Some advanced features tests failed!")
+        logger.error("TEST 07 FAILED: Some tests failed")
         return 1
 
 
@@ -328,7 +344,7 @@ if __name__ == "__main__":
     try:
         exit_code = asyncio.run(main())
     except KeyboardInterrupt:
-        logger.warning("\nTest interrupted by user.")
+        logger.warning("\nTest interrupted by user")
         exit_code = 130
     except Exception as e:
         logger.critical("Test suite crashed with an unhandled exception: %s", e, exc_info=True)

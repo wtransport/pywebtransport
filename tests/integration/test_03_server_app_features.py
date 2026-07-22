@@ -76,7 +76,7 @@ async def test_middleware_rejects_session(
 
     @server_app.route(path="/protected")
     async def protected_handler(session: WebTransportSession, **kwargs: Any) -> None:
-        pytest.fail(reason="Rejected session reached the route handler.")
+        pytest.fail(reason="rejected session reached the route handler")
 
     headers: Headers = {"x-auth-token": "invalid-token"}
     with pytest.raises(expected_exception=ClientError) as exc_info:
@@ -111,7 +111,7 @@ async def test_pattern_routing_with_params(
 
     async with await client.connect(url=f"https://{host}:{port}/items/123-abc") as session:
         stream = await session.create_bidirectional_stream()
-        await stream.write(data=b"get item data")
+        await stream.write(data=b"Filler")
         response = await stream.read()
         assert response == b"Accessed item: 123-abc"
 

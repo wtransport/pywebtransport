@@ -1,4 +1,4 @@
-//! Single QUIC connection orchestrator bridging WebTransport engine and Quinn state machine.
+//! Single QUIC connection orchestrator bridging WebTransport engine and QUIC state machine.
 
 use std::borrow::Cow;
 use std::collections::VecDeque;

@@ -32,7 +32,7 @@ async def test_client_initiated_close(
     async with asyncio.timeout(delay=2.0):
         await server_entered.wait()
 
-    await session.close(reason="Client-initiated close")
+    await session.close(reason="client-initiated close")
 
     try:
         async with asyncio.timeout(delay=2.0):
@@ -65,7 +65,7 @@ async def test_server_initiated_close(
     @server_app.route(path="/close-me")
     async def immediate_close_handler(session: WebTransportSession, **kwargs: Any) -> None:
         await asyncio.sleep(delay=0.2)
-        await session.close(reason="Server closed immediately.")
+        await session.close(reason="server closed immediately")
 
     session = await client.connect(url=url)
 
@@ -74,7 +74,7 @@ async def test_server_initiated_close(
             await session.events.wait_for(event_type=EventType.SESSION_CLOSED)
     except TimeoutError:
         if not session.is_closed:
-            pytest.fail(reason="Timed out waiting for server-initiated close.")
+            pytest.fail(reason="timed out waiting for server-initiated close")
 
     assert session.is_closed is True
 

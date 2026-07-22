@@ -493,7 +493,7 @@ class TestWebTransportClient:
 
         async def wait_for_2(*args: Any, **kwargs: Any) -> None:
             await sync_event.wait()
-            raise ConnectionError(message="Simultaneous failure")
+            raise ConnectionError(message="simultaneous failure")
 
         conn1.events.wait_for.side_effect = wait_for_1
         conn2.events.wait_for.side_effect = wait_for_2
@@ -595,7 +595,7 @@ class TestWebTransportClient:
 
         async def wait_for_fail(*args: Any, **kwargs: Any) -> None:
             await asyncio.sleep(delay=0.2)
-            raise ConnectionError(message="Simulated failure")
+            raise ConnectionError(message="simulated failure")
 
         conn1.events.wait_for.side_effect = wait_for_fail
         conn2.events.wait_for.side_effect = wait_for_fail
@@ -683,7 +683,7 @@ class TestWebTransportClient:
             conn2.state = ConnectionState.CONNECTED
 
         async def wait_for_3(*args: Any, **kwargs: Any) -> None:
-            raise ConnectionError(message="Fast failure")
+            raise ConnectionError(message="fast failure")
 
         conn1.events.wait_for.side_effect = wait_for_1
         conn2.events.wait_for.side_effect = wait_for_2
@@ -734,10 +734,10 @@ class TestWebTransportClient:
 
         async def wait_for_2(*args: Any, **kwargs: Any) -> None:
             await sync_event.wait()
-            raise ConnectionError(message="Simultaneous failure")
+            raise ConnectionError(message="simultaneous failure")
 
         async def wait_for_3(*args: Any, **kwargs: Any) -> None:
-            raise ConnectionError(message="Fast failure")
+            raise ConnectionError(message="fast failure")
 
         conn1.events.wait_for.side_effect = wait_for_1
         conn2.events.wait_for.side_effect = wait_for_2

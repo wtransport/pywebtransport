@@ -34,7 +34,7 @@ lint:
     - update-ca-certificates
     - sed -i -e "s|http://deb.debian.org/debian-security|$APT_SECURITY_PROXY_URL|g" -e "s|http://deb.debian.org/debian|$APT_PROXY_URL|g" /etc/apt/sources.list.d/debian.sources
     - apt-get update && apt-get install -y curl build-essential clang
-    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.96.1
+    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.97.1
     - export PATH="$CARGO_HOME/bin:$PATH"
     - python -m pip install --upgrade pip
     - pip install -r dev-requirements.txt
@@ -65,7 +65,7 @@ audit:
     - update-ca-certificates
     - sed -i -e "s|http://deb.debian.org/debian-security|$APT_SECURITY_PROXY_URL|g" -e "s|http://deb.debian.org/debian|$APT_PROXY_URL|g" /etc/apt/sources.list.d/debian.sources
     - apt-get update && apt-get install -y curl git
-    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.96.1
+    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.97.1
     - export PATH="$CARGO_HOME/bin:$PATH"
     - python -m pip install --upgrade pip
     - pip install pip-audit
@@ -81,7 +81,7 @@ test:
   stage: test
   parallel:
     matrix:
-      - PYTHON_VERSION: ["3.12", "3.13", "3.14"]
+      - PYTHON_VERSION: ["3.12", "3.13", "3.14", "3.15-rc"]
   image: python:$PYTHON_VERSION-slim-trixie
   cache:
     key: "$CI_JOB_NAME_SLUG"
@@ -97,7 +97,7 @@ test:
     - update-ca-certificates
     - sed -i -e "s|http://deb.debian.org/debian-security|$APT_SECURITY_PROXY_URL|g" -e "s|http://deb.debian.org/debian|$APT_PROXY_URL|g" /etc/apt/sources.list.d/debian.sources
     - apt-get update && apt-get install -y curl build-essential clang
-    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.96.1
+    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.97.1
     - export PATH="$CARGO_HOME/bin:$PATH"
     - python -m pip install --upgrade pip
     - pip install -r dev-requirements.txt
