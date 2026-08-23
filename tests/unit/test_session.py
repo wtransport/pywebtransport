@@ -241,15 +241,11 @@ class TestWebTransportSession:
         mock_connection.execute_request.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_close_cancelled(
-        self, session: WebTransportSession, mock_connection: MagicMock, mocker: MockerFixture
-    ) -> None:
+    async def test_close_cancelled(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
         mock_connection.execute_request.side_effect = asyncio.CancelledError
-        spy_logger = mocker.patch(target="pywebtransport.session._logger")
 
-        await session.close()
-
-        spy_logger.warning.assert_not_called()
+        with pytest.raises(expected_exception=asyncio.CancelledError):
+            await session.close()
 
     @pytest.mark.asyncio
     async def test_close_connection_error_channel_closed(
@@ -787,13 +783,8 @@ class TestWebTransportSession:
     async def test_reject_cancelled(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
         mock_connection.execute_request.side_effect = asyncio.CancelledError
 
-        await session.reject(status_code=404)
-
-        assert session.state == SessionState.CLOSED
-        assert session._incoming_bidi_streams.qsize() == 1
-        assert session._incoming_bidi_streams.get_nowait() is None
-        assert session._incoming_uni_streams.qsize() == 1
-        assert session._incoming_uni_streams.get_nowait() is None
+        with pytest.raises(expected_exception=asyncio.CancelledError):
+            await session.reject(status_code=404)
 
     @pytest.mark.asyncio
     async def test_reject_connection_error_channel_closed(

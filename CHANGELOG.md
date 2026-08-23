@@ -7,9 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned for future release
+### Fixed
 
-_(No planned changes for the next release yet.)_
+- **Cancellation Suppression**: Resolved a caller cancellation leak where `WebTransportConnection.close`/`.close_gracefully` and `WebTransportSession.close`/`.reject` caught `asyncio.CancelledError` and returned normally instead of re-raising it.
 
 ## [0.20.1] - 2026-07-22
 

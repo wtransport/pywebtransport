@@ -244,8 +244,6 @@ class WebTransportSession:
                     request_id=request_id, session_id=self.session_id, error_code=error_code, reason=reason
                 )
             )
-        except asyncio.CancelledError:
-            pass
         except (ConnectionError, SessionError) as e:
             if "channel closed" not in str(e):
                 _logger.warning("wt_session close failed session_id=%d err=%s", self.session_id, e)
@@ -366,8 +364,6 @@ class WebTransportSession:
                     request_id=request_id, session_id=self.session_id, status_code=status_code
                 )
             )
-        except asyncio.CancelledError:
-            pass
         except ConnectionError as e:
             if "channel closed" not in str(e):
                 _logger.warning("wt_session reject failed session_id=%d err=%s", self.session_id, e)

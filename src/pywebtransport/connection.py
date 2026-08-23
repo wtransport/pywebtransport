@@ -183,7 +183,7 @@ class WebTransportConnection:
                         request_id=request_id, error_code=error_code, reason=reason
                     )
                 )
-        except (asyncio.CancelledError, asyncio.TimeoutError):
+        except asyncio.TimeoutError:
             pass
         except ConnectionError as e:
             if "channel closed" not in str(e):
@@ -269,15 +269,15 @@ class WebTransportConnection:
                 await self.execute_request(
                     event_factory=lambda request_id: UserCloseConnectionGracefully(request_id=request_id)
                 )
-        except (asyncio.CancelledError, asyncio.TimeoutError):
+        except asyncio.TimeoutError:
             _logger.warning("wt_connection drain failed connection_handle=%d", self._handle)
         except ConnectionError as e:
             if "channel closed" not in str(e):
                 _logger.warning("wt_connection drain failed connection_handle=%d err=%s", self._handle, e)
         except Exception as e:
             _logger.warning("wt_connection drain failed connection_handle=%d err=%s", self._handle, e)
-
-        await self.close()
+        finally:
+            await self.close()
 
     def _handle_session_event(self, *, event_type: EventType, data: dict[str, Any]) -> None:
         """Process internal session-related events and manage handles."""

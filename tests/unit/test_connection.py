@@ -218,6 +218,13 @@ class TestWebTransportConnection:
         spy_logger.warning.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_close_cancelled(self, connection: WebTransportConnection, mock_controller: MagicMock) -> None:
+        mock_controller.execute_request.side_effect = asyncio.CancelledError
+
+        with pytest.raises(expected_exception=asyncio.CancelledError):
+            await connection.close()
+
+    @pytest.mark.asyncio
     async def test_context_manager(self, connection: WebTransportConnection, mocker: MockerFixture) -> None:
         spy_close = mocker.patch.object(target=WebTransportConnection, attribute="close", new_callable=mocker.AsyncMock)
 
@@ -493,6 +500,20 @@ class TestWebTransportConnection:
         await connection.graceful_shutdown()
 
         spy_logger.warning.assert_any_call("wt_connection drain failed connection_handle=%d", 42)
+
+    @pytest.mark.asyncio
+    async def test_graceful_shutdown_cancelled(
+        self, connection: WebTransportConnection, mock_controller: MagicMock, mocker: MockerFixture
+    ) -> None:
+        mock_controller.execute_request.side_effect = asyncio.CancelledError
+        mock_close = mocker.patch.object(
+            target=WebTransportConnection, attribute="close", new_callable=mocker.AsyncMock
+        )
+
+        with pytest.raises(expected_exception=asyncio.CancelledError):
+            await connection.graceful_shutdown()
+
+        mock_close.assert_awaited_once()
 
     @pytest.mark.parametrize(argnames="event_type", argvalues=[EventType.SESSION_PENDING, EventType.SESSION_READY])
     def test_handle_session_event_client_creation(
