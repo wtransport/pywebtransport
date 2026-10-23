@@ -1,5 +1,3 @@
-# PyWebTransport Bug Report GitHub Issue Form
-
 name: "Bug Report"
 description: "File a technical defect report."
 labels: ["bug", "triage"]

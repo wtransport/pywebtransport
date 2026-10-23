@@ -1,4 +1,4 @@
-//! FFI error mapping and conversion logic.
+//! FFI conversion logic for common errors.
 
 use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
@@ -7,14 +7,12 @@ use pyo3::types::PyDict;
 use crate::common::error::WebTransportError;
 use crate::common::types::{ErrorCode, ErrorSource};
 
-// Cached Python exception module.
 static EXCEPTION_MODULE: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
 
-// Python exception instance creation based on error classification.
 pub(super) fn create_py_exception(
     py: Python<'_>,
     source: ErrorSource,
-    code: Option<ErrorCode>,
+    error_code: Option<ErrorCode>,
     reason: &str,
 ) -> PyErr {
     let class_name = match source {
@@ -25,30 +23,36 @@ pub(super) fn create_py_exception(
         ErrorSource::Unspecified => "WebTransportError",
     };
 
-    let kwargs = make_kwargs(py, code);
+    let kwargs = make_kwargs(py, error_code);
 
     instantiate_py_exception(py, class_name, reason, &kwargs)
 }
 
 impl From<WebTransportError> for PyErr {
-    fn from(err: WebTransportError) -> PyErr {
+    fn from(error: WebTransportError) -> PyErr {
         Python::attach(|py| {
-            let (class_name, code, reason) = match err {
-                WebTransportError::Configuration(c, r) => ("ConfigurationError", c, r),
-                WebTransportError::Connection(c, r) => ("ConnectionError", c, r),
-                WebTransportError::Protocol(c, r) => ("ProtocolError", c, r),
-                WebTransportError::Stream(_, c, r) => ("StreamError", c, r),
-                WebTransportError::Unknown(c, r) => ("WebTransportError", c, r),
+            let (class_name, error_code, reason) = match error {
+                WebTransportError::Configuration(error_code, reason) => {
+                    ("ConfigurationError", error_code, reason)
+                }
+                WebTransportError::Protocol(error_code, reason) => {
+                    ("ProtocolError", error_code, reason)
+                }
+                WebTransportError::Stream(_, error_code, reason) => {
+                    ("StreamError", error_code, reason)
+                }
+                WebTransportError::Unknown(error_code, reason) => {
+                    ("WebTransportError", error_code, reason)
+                }
             };
 
-            let kwargs = make_kwargs(py, code);
+            let kwargs = make_kwargs(py, error_code);
 
             instantiate_py_exception(py, class_name, &reason, &kwargs)
         })
     }
 }
 
-// Dynamic Python exception class instantiation.
 fn instantiate_py_exception(
     py: Python<'_>,
     class_name: &str,
@@ -59,10 +63,10 @@ fn instantiate_py_exception(
         .get_or_try_init(py, || {
             py.import("pywebtransport.exceptions").map(Into::into)
         })
-        .and_then(|m| m.bind(py).getattr(class_name));
+        .and_then(|module| module.bind(py).getattr(class_name));
 
     match module {
-        Ok(cls) => match cls.call((reason,), Some(kwargs)) {
+        Ok(class) => match class.call((reason,), Some(kwargs)) {
             Ok(instance) => PyErr::from_value(instance),
             Err(e) => e,
         },
@@ -70,11 +74,10 @@ fn instantiate_py_exception(
     }
 }
 
-// Keyword arguments dictionary construction.
-fn make_kwargs(py: Python<'_>, code: Option<ErrorCode>) -> Bound<'_, PyDict> {
+fn make_kwargs(py: Python<'_>, error_code: Option<ErrorCode>) -> Bound<'_, PyDict> {
     let dict = PyDict::new(py);
-    if let Some(c) = code {
-        dict.set_item("error_code", c).ok();
+    if let Some(error_code) = error_code {
+        dict.set_item("error_code", error_code).ok();
     }
     dict
 }

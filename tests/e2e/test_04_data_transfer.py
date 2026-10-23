@@ -40,23 +40,23 @@ async def test_small_data() -> bool:
 
     try:
         async with WebTransportClient(config=config) as client:
-            session = await client.connect(url=SERVER_URL)
-            for size in test_sizes:
-                logger.info("Testing %d bytes transfer...", size)
-                test_data = generate_test_data(size=size)
-                stream = await session.create_bidirectional_stream()
+            async with await client.connect(url=SERVER_URL) as session:
+                for size in test_sizes:
+                    logger.info("Testing %d bytes transfer...", size)
+                    test_data = generate_test_data(size=size)
+                    stream = await session.create_bidirectional_stream()
 
-                await stream.write_all(data=test_data, end_stream=True)
-                response = await stream.read_all()
+                    await stream.write_all(data=test_data, end_stream=True)
+                    response = await stream.read_all()
 
-                expected = b"ECHO: " + test_data
-                if response != expected:
-                    logger.error("FAILURE: Data mismatch for %d bytes", size)
-                    return False
-                logger.info("   - %d bytes: OK", size)
+                    expected = b"ECHO: " + test_data
+                    if response != expected:
+                        logger.error("FAILURE: Data mismatch for %d bytes", size)
+                        return False
+                    logger.info("   - %d bytes: OK", size)
 
-            logger.info("SUCCESS: All small data transfers completed successfully")
-            return True
+                logger.info("SUCCESS: All small data transfers completed successfully")
+                return True
     except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Test failed due to connection or timeout issue: %s", e)
         return False
@@ -75,24 +75,24 @@ async def test_medium_data() -> bool:
 
     try:
         async with WebTransportClient(config=config) as client:
-            session = await client.connect(url=SERVER_URL)
-            for size in test_sizes:
-                size_kb = size / 1024
-                logger.info("Testing %.1f KB transfer...", size_kb)
-                test_data = generate_test_data(size=size)
-                stream = await session.create_bidirectional_stream()
+            async with await client.connect(url=SERVER_URL) as session:
+                for size in test_sizes:
+                    size_kb = size / 1024
+                    logger.info("Testing %.1f KB transfer...", size_kb)
+                    test_data = generate_test_data(size=size)
+                    stream = await session.create_bidirectional_stream()
 
-                await stream.write_all(data=test_data, end_stream=True)
-                response_data = await stream.read_all()
+                    await stream.write_all(data=test_data, end_stream=True)
+                    response_data = await stream.read_all()
 
-                expected = b"ECHO: " + test_data
-                if response_data != expected:
-                    logger.error("FAILURE: Data mismatch for %.1f KB", size_kb)
-                    return False
-                logger.info("   - %.1f KB: OK", size_kb)
+                    expected = b"ECHO: " + test_data
+                    if response_data != expected:
+                        logger.error("FAILURE: Data mismatch for %.1f KB", size_kb)
+                        return False
+                    logger.info("   - %.1f KB: OK", size_kb)
 
-            logger.info("SUCCESS: All medium data transfers completed successfully")
-            return True
+                logger.info("SUCCESS: All medium data transfers completed successfully")
+                return True
     except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Test failed due to connection or timeout issue: %s", e)
         return False
@@ -112,27 +112,27 @@ async def test_chunked_transfer() -> bool:
 
     try:
         async with WebTransportClient(config=config) as client:
-            session = await client.connect(url=SERVER_URL)
-            test_data = generate_test_data(size=total_size)
-            stream = await session.create_bidirectional_stream()
-            logger.info("Sending %d bytes in %d-byte chunks...", total_size, chunk_size)
+            async with await client.connect(url=SERVER_URL) as session:
+                test_data = generate_test_data(size=total_size)
+                stream = await session.create_bidirectional_stream()
+                logger.info("Sending %d bytes in %d-byte chunks...", total_size, chunk_size)
 
-            bytes_sent = 0
-            for i in range(0, total_size, chunk_size):
-                chunk = test_data[i : i + chunk_size]
-                is_last_chunk = (i + chunk_size) >= total_size
-                await stream.write(data=chunk, end_stream=is_last_chunk)
-                bytes_sent += len(chunk)
-            logger.info("All %d bytes sent", bytes_sent)
+                bytes_sent = 0
+                for i in range(0, total_size, chunk_size):
+                    chunk = test_data[i : i + chunk_size]
+                    is_last_chunk = (i + chunk_size) >= total_size
+                    await stream.write(data=chunk, end_stream=is_last_chunk)
+                    bytes_sent += len(chunk)
+                logger.info("All %d bytes sent", bytes_sent)
 
-            response_data = await stream.read_all()
-            expected = b"ECHO: " + test_data
-            if response_data != expected:
-                logger.error("FAILURE: Chunked data transfer response mismatch")
-                return False
+                response_data = await stream.read_all()
+                expected = b"ECHO: " + test_data
+                if response_data != expected:
+                    logger.error("FAILURE: Chunked data transfer response mismatch")
+                    return False
 
-            logger.info("SUCCESS: Chunked transfer completed successfully")
-            return True
+                logger.info("SUCCESS: Chunked transfer completed successfully")
+                return True
     except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Test failed due to connection or timeout issue: %s", e)
         return False
@@ -150,21 +150,21 @@ async def test_binary_data() -> bool:
 
     try:
         async with WebTransportClient(config=config) as client:
-            session = await client.connect(url=SERVER_URL)
-            binary_data = bytes(range(256)) * 100
-            logger.info("Testing transfer of %d raw binary bytes", len(binary_data))
-            stream = await session.create_bidirectional_stream()
+            async with await client.connect(url=SERVER_URL) as session:
+                binary_data = bytes(range(256)) * 100
+                logger.info("Testing transfer of %d raw binary bytes", len(binary_data))
+                stream = await session.create_bidirectional_stream()
 
-            await stream.write_all(data=binary_data, end_stream=True)
-            response_data = await stream.read_all()
+                await stream.write_all(data=binary_data, end_stream=True)
+                response_data = await stream.read_all()
 
-            expected = b"ECHO: " + binary_data
-            if response_data != expected:
-                logger.error("FAILURE: Binary data was corrupted during transfer")
-                return False
+                expected = b"ECHO: " + binary_data
+                if response_data != expected:
+                    logger.error("FAILURE: Binary data was corrupted during transfer")
+                    return False
 
-            logger.info("SUCCESS: Binary data transfer completed without corruption")
-            return True
+                logger.info("SUCCESS: Binary data transfer completed without corruption")
+                return True
     except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Test failed due to connection or timeout issue: %s", e)
         return False
@@ -183,27 +183,27 @@ async def test_performance_benchmark() -> bool:
 
     try:
         async with WebTransportClient(config=config) as client:
-            session = await client.connect(url=SERVER_URL)
-            test_data = generate_test_data(size=test_size)
-            stream = await session.create_bidirectional_stream()
+            async with await client.connect(url=SERVER_URL) as session:
+                test_data = generate_test_data(size=test_size)
+                stream = await session.create_bidirectional_stream()
 
-            logger.info("Starting 1MB round-trip transfer...")
-            start_time = time.time()
-            await stream.write_all(data=test_data, end_stream=True)
-            response_data = await stream.read_all()
-            duration = time.time() - start_time
+                logger.info("Starting 1MB round-trip transfer...")
+                start_time = time.time()
+                await stream.write_all(data=test_data, end_stream=True)
+                response_data = await stream.read_all()
+                duration = time.time() - start_time
 
-            expected = b"ECHO: " + test_data
-            if response_data != expected:
-                logger.error("FAILURE: Performance test data corrupted")
-                return False
+                expected = b"ECHO: " + test_data
+                if response_data != expected:
+                    logger.error("FAILURE: Performance test data corrupted")
+                    return False
 
-            total_mb = (len(test_data) + len(response_data)) / (1024 * 1024)
-            throughput = total_mb / duration if duration > 0 else float("inf")
-            logger.info("SUCCESS: Benchmark completed")
-            logger.info("   - Total round-trip time: %.3fs", duration)
-            logger.info("   - Aggregate throughput: %.2f MB/s", throughput)
-            return True
+                total_mb = (len(test_data) + len(response_data)) / (1024 * 1024)
+                throughput = total_mb / duration if duration > 0 else float("inf")
+                logger.info("SUCCESS: Benchmark completed")
+                logger.info("   - Total round-trip time: %.3fs", duration)
+                logger.info("   - Aggregate throughput: %.2f MB/s", throughput)
+                return True
     except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Test failed due to connection or timeout issue: %s", e)
         return False

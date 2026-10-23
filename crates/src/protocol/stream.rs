@@ -1,666 +1,376 @@
-//! Single stream state machine and logic entity.
+//! Stream state machine.
 
 use std::collections::VecDeque;
 
-use bytes::{BufMut, Bytes};
+use bytes::Bytes;
 use tracing::debug;
 
-use crate::common::constants::{
-    ERR_LIB_STREAM_STATE_ERROR, ERR_WT_APPLICATION_ERROR_FIRST, ERR_WT_STREAM_BUFFER_EXCEEDED,
-};
+use crate::common::constants::{ERR_LIB_STREAM_STATE_ERROR, ERR_WT_APPLICATION_ERROR_FIRST};
 use crate::common::types::{
-    ErrorCode, ErrorSource, EventType, RequestId, SessionId, StreamDirection, StreamId, StreamState,
+    ErrorCode, ErrorSource, EventType, RequestId, SessionId, StreamDirection, StreamId,
+    StreamReceiveState, StreamSendState,
 };
 use crate::protocol::events::{Effect, RequestResult};
-use crate::protocol::utils::{http_to_wt_error, wt_to_http_error};
+use crate::protocol::utils;
 
-// Threshold for zero-copy slicing optimization.
-const OPTIMIZED_READ_SLICE_SIZE: u64 = 32768;
-
-// Diagnostic information snapshot for a stream.
 #[derive(Clone, Debug)]
 pub(crate) struct StreamDiagnostics {
-    pub(crate) bytes_received: u64,
-    pub(crate) bytes_sent: u64,
-    pub(crate) close_code: Option<ErrorCode>,
-    pub(crate) close_reason: Option<String>,
-    pub(crate) closed_at: Option<f64>,
     pub(crate) created_at: f64,
     pub(crate) direction: StreamDirection,
     pub(crate) is_peer_initiated: bool,
-    pub(crate) read_buffer_size: u64,
+    pub(crate) receive_error_code: Option<ErrorCode>,
+    pub(crate) receive_state: Option<StreamReceiveState>,
+    pub(crate) send_error_code: Option<ErrorCode>,
+    pub(crate) send_state: Option<StreamSendState>,
     pub(crate) session_id: SessionId,
-    pub(crate) state: StreamState,
     pub(crate) stream_id: StreamId,
-    pub(crate) write_buffer_size: u64,
 }
 
-// Single WebTransport stream state machine.
 #[derive(Debug)]
 pub(super) struct Stream {
-    bytes_received: u64,
-    bytes_sent: u64,
-    close_code: Option<ErrorCode>,
-    close_reason: Option<String>,
-    closed_at: Option<f64>,
     created_at: f64,
     direction: StreamDirection,
     id: StreamId,
     is_peer_initiated: bool,
-    max_read_buffer_size: u64,
     max_write_buffer_size: u64,
     pending_read_requests: VecDeque<(RequestId, u64)>,
-    read_buffer: VecDeque<Bytes>,
-    read_buffer_size: u64,
+    pending_write_request: Option<RequestId>,
+    receive_error_code: Option<ErrorCode>,
+    receive_state: Option<StreamReceiveState>,
+    send_error_code: Option<ErrorCode>,
+    send_state: Option<StreamSendState>,
     session_id: SessionId,
-    state: StreamState,
     write_buffer: VecDeque<(Bytes, RequestId, bool)>,
     write_buffer_size: u64,
 }
 
 impl Stream {
-    // Stream entity initialization.
     pub(super) fn new(
         id: StreamId,
         session_id: SessionId,
         direction: StreamDirection,
         is_peer_initiated: bool,
-        max_read_buffer_size: u64,
-        max_write_buffer_size: u64,
+        parameters: StreamParameters,
         created_at: f64,
     ) -> Self {
         Self {
-            bytes_received: 0,
-            bytes_sent: 0,
-            close_code: None,
-            close_reason: None,
-            closed_at: None,
             created_at,
             direction,
             id,
             is_peer_initiated,
-            max_read_buffer_size,
-            max_write_buffer_size,
+            max_write_buffer_size: parameters.max_write_buffer_size,
             pending_read_requests: VecDeque::new(),
-            read_buffer: VecDeque::new(),
-            read_buffer_size: 0,
+            pending_write_request: None,
+            receive_error_code: None,
+            receive_state: (direction != StreamDirection::SendOnly)
+                .then_some(StreamReceiveState::Receive),
+            send_error_code: None,
+            send_state: (direction != StreamDirection::ReceiveOnly)
+                .then_some(StreamSendState::Ready),
             session_id,
-            state: StreamState::Open,
             write_buffer: VecDeque::new(),
             write_buffer_size: 0,
         }
     }
 
-    // Forceful stream termination.
-    pub(super) fn abort(&mut self, error_code: ErrorCode, now: f64) -> Vec<Effect> {
-        let mut effects = Vec::new();
-
-        if self.state == StreamState::Closed {
-            return effects;
-        }
-
+    pub(super) fn abort(&mut self, error_code: ErrorCode) -> Vec<Effect> {
         debug!("wt_stream abort stream_id={} err={error_code}", self.id);
-        self.close_code = Some(error_code);
-        self.closed_at = Some(now);
-        self.state = StreamState::Closed;
-
-        let can_send = matches!(
-            self.direction,
-            StreamDirection::Bidirectional | StreamDirection::SendOnly
-        );
-        let can_receive = matches!(
-            self.direction,
-            StreamDirection::Bidirectional | StreamDirection::ReceiveOnly
-        );
-
-        if can_send {
-            effects.push(Effect::ResetQuicStream {
-                stream_id: self.id,
-                error_code,
-            });
-        }
-
-        if can_receive {
-            effects.push(Effect::StopQuicStream {
-                stream_id: self.id,
-                error_code,
-            });
-        }
-
-        while let Some((req_id, _)) = self.pending_read_requests.pop_front() {
-            effects.push(Effect::NotifyRequestFailed {
-                request_id: req_id,
-                source: ErrorSource::Stream,
-                error_code: Some(error_code),
-                reason: "wt_stream abort".into(),
-            });
-        }
-
-        while let Some((_, req_id, _)) = self.write_buffer.pop_front() {
-            effects.push(Effect::NotifyRequestFailed {
-                request_id: req_id,
-                source: ErrorSource::Stream,
-                error_code: Some(error_code),
-                reason: "wt_stream abort".into(),
-            });
-        }
-
-        self.read_buffer.clear();
-        self.read_buffer_size = 0;
-        self.write_buffer_size = 0;
-
-        effects.push(Effect::EmitStreamEvent {
-            stream_id: self.id,
-            event_type: EventType::StreamClosed,
-            session_id: None,
-            direction: None,
-            is_peer_initiated: None,
-            error_code: None,
-        });
+        let mut effects = self.send_reset(Some(error_code), error_code);
+        effects.extend(self.send_stop(Some(error_code), error_code));
 
         effects
     }
 
-    // User diagnostics event handling.
+    pub(super) fn complete_write(&mut self, available_credit: u64) -> (Vec<Effect>, u64) {
+        let Some(request_id) = self.pending_write_request.take() else {
+            return (Vec::new(), 0);
+        };
+
+        let mut effects = Vec::new();
+
+        let is_request_complete = self
+            .write_buffer
+            .front()
+            .is_none_or(|&(_, write_request_id, _)| write_request_id != request_id);
+
+        if is_request_complete {
+            effects.push(Effect::NotifyRequestDone {
+                request_id,
+                result: RequestResult::None,
+            });
+        }
+
+        let (flush_effects, sent) = self.flush_writes(available_credit);
+        effects.extend(flush_effects);
+
+        (effects, sent)
+    }
+
     pub(super) fn diagnose(&self, request_id: RequestId) -> Vec<Effect> {
-        let diag = self.diagnostics_snapshot();
+        let diagnostics = self.diagnostics_snapshot();
 
         vec![Effect::NotifyRequestDone {
             request_id,
-            result: RequestResult::StreamDiagnostics(Box::new(diag)),
+            result: RequestResult::StreamDiagnostics(Box::new(diagnostics)),
         }]
     }
 
-    // Write buffer flushing with flow control.
-    pub(super) fn flush_writes(&mut self, available_credit: u64, now: f64) -> (Vec<Effect>, u64) {
-        let mut effects = Vec::new();
-        let mut remaining_credit = available_credit;
-        let mut total_sent = 0;
-
-        while remaining_credit > 0 {
-            let Some((data, request_id, end_stream)) = self.write_buffer.pop_front() else {
-                break;
-            };
-
-            let data_len = data.len() as u64;
-            self.write_buffer_size -= data_len;
-
-            if data_len <= remaining_credit {
-                total_sent += data_len;
-                remaining_credit -= data_len;
-                self.bytes_sent += data_len;
-
-                effects.push(Effect::SendQuicData {
-                    stream_id: self.id,
-                    data,
-                    end_stream,
-                });
-                effects.push(Effect::NotifyRequestDone {
-                    request_id,
-                    result: RequestResult::None,
-                });
-
-                if end_stream {
-                    match self.state {
-                        StreamState::HalfClosedRemote | StreamState::ResetReceived => {
-                            self.closed_at = Some(now);
-                            self.state = StreamState::Closed;
-                            effects.push(Effect::EmitStreamEvent {
-                                stream_id: self.id,
-                                event_type: EventType::StreamClosed,
-                                session_id: None,
-                                direction: None,
-                                is_peer_initiated: None,
-                                error_code: None,
-                            });
-                        }
-                        StreamState::Open => {
-                            self.state = StreamState::HalfClosedLocal;
-                        }
-                        _ => {}
-                    }
-                }
-            } else {
-                let sendable = usize::try_from(remaining_credit).unwrap_or(usize::MAX);
-                let data_to_send = data.slice(0..sendable);
-                let remaining_data = data.slice(sendable..);
-                let remaining_len = remaining_data.len() as u64;
-
-                total_sent += remaining_credit;
-                self.bytes_sent += remaining_credit;
-
-                effects.push(Effect::SendQuicData {
-                    stream_id: self.id,
-                    data: data_to_send,
-                    end_stream: false,
-                });
-
-                self.write_buffer
-                    .push_front((remaining_data, request_id, end_stream));
-                self.write_buffer_size += remaining_len;
-
-                break;
-            }
+    pub(super) fn flush_writes(&mut self, available_credit: u64) -> (Vec<Effect>, u64) {
+        if self.pending_write_request.is_some() || self.send_state != Some(StreamSendState::Ready) {
+            return (Vec::new(), 0);
         }
 
-        (effects, total_sent)
+        let Some((mut data, request_id, end_stream)) = self.write_buffer.pop_front() else {
+            return (Vec::new(), 0);
+        };
+
+        let data_len = data.len() as u64;
+
+        if data_len > 0 && available_credit == 0 {
+            self.write_buffer.push_front((data, request_id, end_stream));
+            return (Vec::new(), 0);
+        }
+
+        let is_request_complete = data_len <= available_credit;
+        if !is_request_complete {
+            let sendable = usize::try_from(available_credit).unwrap_or(usize::MAX);
+            let remaining_data = data.split_off(sendable);
+            self.write_buffer
+                .push_front((remaining_data, request_id, end_stream));
+        }
+
+        let sent = data.len() as u64;
+        let is_finished = is_request_complete && end_stream;
+
+        self.write_buffer_size -= sent;
+        self.pending_write_request = Some(request_id);
+
+        if is_finished {
+            self.send_state = Some(StreamSendState::DataSent);
+        }
+
+        (
+            vec![Effect::SendQuicData {
+                stream_id: self.id,
+                data,
+                end_stream: is_finished,
+            }],
+            sent,
+        )
     }
 
-    // Pending write state validation.
-    pub(super) fn has_pending_writes(&self) -> bool {
-        self.write_buffer_size > 0
+    pub(super) fn handle_data_acknowledged(&mut self) {
+        if self.send_state == Some(StreamSendState::DataSent) {
+            self.send_state = Some(StreamSendState::DataReceived);
+        }
     }
 
-    // Terminal state predicate.
+    pub(super) fn is_blocked(&self) -> bool {
+        self.pending_write_request.is_none() && !self.write_buffer.is_empty()
+    }
+
     pub(super) fn is_closed(&self) -> bool {
-        self.state == StreamState::Closed
+        let is_receive_terminated = self.receive_state.is_none_or(|receive_state| {
+            matches!(
+                receive_state,
+                StreamReceiveState::DataRead | StreamReceiveState::ResetRead
+            )
+        });
+        let is_send_terminated = self.send_state.is_none_or(|send_state| {
+            matches!(
+                send_state,
+                StreamSendState::DataReceived | StreamSendState::ResetSent
+            )
+        });
+
+        is_receive_terminated && is_send_terminated
     }
 
-    // User read request handling.
-    pub(super) fn read(&mut self, request_id: RequestId, max_bytes: u64) -> (Vec<Effect>, u64) {
-        let mut effects = Vec::new();
-
-        if self.direction == StreamDirection::SendOnly {
+    pub(super) fn read(&mut self, request_id: RequestId, max_size: u64) -> Vec<Effect> {
+        let Some(receive_state) = self.receive_state else {
             debug!(
                 "wt_stream validate invalid actual={:?} stream_id={}",
                 self.direction, self.id
             );
-            effects.push(Effect::NotifyRequestFailed {
+            return vec![Effect::NotifyRequestFailed {
                 request_id,
                 source: ErrorSource::Stream,
                 error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
                 reason: "wt_stream validate invalid".into(),
-            });
-            return (effects, 0);
-        }
+            }];
+        };
 
-        if self.read_buffer_size > 0 {
-            let target = Self::limit_read(max_bytes, self.read_buffer_size);
-            let data_to_return = self.take_data(target);
-            let consumed = data_to_return.len() as u64;
+        match receive_state {
+            StreamReceiveState::Receive if max_size > 0 => {
+                self.pending_read_requests.push_back((request_id, max_size));
 
-            effects.push(Effect::NotifyRequestDone {
-                request_id,
-                result: RequestResult::ReadData(data_to_return),
-            });
+                if self.pending_read_requests.len() == 1 {
+                    return vec![Effect::ReceiveQuicData {
+                        stream_id: self.id,
+                        max_size,
+                    }];
+                }
 
-            if self.read_buffer_size == 0 && self.state == StreamState::Closed {
-                effects.push(Effect::EmitStreamEvent {
-                    stream_id: self.id,
-                    event_type: EventType::StreamClosed,
-                    session_id: None,
-                    direction: None,
-                    is_peer_initiated: None,
-                    error_code: self.close_code,
-                });
+                Vec::new()
             }
+            StreamReceiveState::DataRead
+            | StreamReceiveState::DataReceived
+            | StreamReceiveState::Receive => {
+                if receive_state == StreamReceiveState::DataReceived && max_size > 0 {
+                    self.receive_state = Some(StreamReceiveState::DataRead);
+                }
 
-            return (effects, consumed);
-        }
-
-        if self.state == StreamState::HalfClosedRemote
-            || (self.state == StreamState::Closed
-                && (self.close_code.is_none() || self.close_code == Some(0)))
-        {
-            effects.push(Effect::NotifyRequestDone {
-                request_id,
-                result: RequestResult::ReadData(Bytes::new()),
-            });
-            return (effects, 0);
-        }
-
-        if !matches!(
-            self.state,
-            StreamState::HalfClosedLocal | StreamState::Open | StreamState::ResetSent
-        ) {
-            let error_to_return = self.close_code.unwrap_or(ERR_LIB_STREAM_STATE_ERROR);
-            debug!(
-                "wt_stream validate failed actual={:?} stream_id={}",
-                self.state, self.id
-            );
-            effects.push(Effect::NotifyRequestFailed {
-                request_id,
-                source: ErrorSource::Stream,
-                error_code: Some(error_to_return),
-                reason: "wt_stream validate failed".into(),
-            });
-            return (effects, 0);
-        }
-
-        self.pending_read_requests
-            .push_back((request_id, max_bytes));
-
-        (effects, 0)
-    }
-
-    // Network data reception handling.
-    pub(super) fn recv_data(
-        &mut self,
-        data: Bytes,
-        end_stream: bool,
-        now: f64,
-    ) -> (Vec<Effect>, u64) {
-        let mut effects = Vec::new();
-        let mut consumed_bytes_by_reads = 0;
-
-        if !matches!(
-            self.state,
-            StreamState::HalfClosedLocal | StreamState::Open | StreamState::ResetSent
-        ) {
-            return (effects, 0);
-        }
-
-        if !data.is_empty() {
-            let data_len = data.len() as u64;
-            if self.read_buffer_size + data_len > self.max_read_buffer_size {
+                vec![Effect::NotifyRequestDone {
+                    request_id,
+                    result: RequestResult::ReadData(Bytes::new()),
+                }]
+            }
+            StreamReceiveState::ResetRead => {
                 debug!(
-                    "wt_stream validate exceeded actual={} limit={} stream_id={}",
-                    self.read_buffer_size + data_len,
-                    self.max_read_buffer_size,
+                    "wt_stream validate failed actual={receive_state:?} stream_id={}",
                     self.id
                 );
-                effects.push(Effect::StopQuicStream {
-                    stream_id: self.id,
-                    error_code: ERR_WT_STREAM_BUFFER_EXCEEDED,
-                });
-                return (effects, 0);
+                vec![Effect::NotifyRequestFailed {
+                    request_id,
+                    source: ErrorSource::Stream,
+                    error_code: self.receive_error_code,
+                    reason: "wt_stream validate failed".into(),
+                }]
             }
+        }
+    }
 
-            self.bytes_received += data_len;
-            self.read_buffer.push_back(data);
-            self.read_buffer_size += data_len;
+    pub(super) fn recv_data(&mut self, data: Bytes, end_stream: bool) -> Vec<Effect> {
+        if self.receive_state != Some(StreamReceiveState::Receive) {
+            return Vec::new();
         }
 
-        while !self.pending_read_requests.is_empty() && self.read_buffer_size > 0 {
-            if let Some((req_id, max_bytes)) = self.pending_read_requests.pop_front() {
-                let target = Self::limit_read(max_bytes, self.read_buffer_size);
-                let data_chunk = self.take_data(target);
+        let mut effects = Vec::new();
 
-                consumed_bytes_by_reads += data_chunk.len() as u64;
+        if let Some((request_id, _)) = self.pending_read_requests.pop_front() {
+            let is_data_delivered = !data.is_empty();
 
-                effects.push(Effect::NotifyRequestDone {
-                    request_id: req_id,
-                    result: RequestResult::ReadData(data_chunk),
-                });
+            effects.push(Effect::NotifyRequestDone {
+                request_id,
+                result: RequestResult::ReadData(data),
+            });
+
+            if end_stream && !is_data_delivered {
+                self.receive_state = Some(StreamReceiveState::DataRead);
             }
         }
 
         if end_stream {
-            match self.state {
-                StreamState::HalfClosedLocal | StreamState::ResetSent => {
-                    self.closed_at = Some(now);
-                    self.state = StreamState::Closed;
-                    if self.read_buffer_size == 0 {
-                        effects.push(Effect::EmitStreamEvent {
-                            stream_id: self.id,
-                            event_type: EventType::StreamClosed,
-                            session_id: None,
-                            direction: None,
-                            is_peer_initiated: None,
-                            error_code: None,
-                        });
-                    }
-                }
-                StreamState::Open => {
-                    self.state = StreamState::HalfClosedRemote;
-                }
-                _ => {}
+            if self.receive_state == Some(StreamReceiveState::Receive) {
+                self.receive_state = Some(StreamReceiveState::DataReceived);
             }
 
-            while let Some((req_id, _)) = self.pending_read_requests.pop_front() {
+            while let Some((request_id, _)) = self.pending_read_requests.pop_front() {
+                self.receive_state = Some(StreamReceiveState::DataRead);
                 effects.push(Effect::NotifyRequestDone {
-                    request_id: req_id,
+                    request_id,
                     result: RequestResult::ReadData(Bytes::new()),
                 });
             }
+        } else if let Some(&(_, max_size)) = self.pending_read_requests.front() {
+            effects.push(Effect::ReceiveQuicData {
+                stream_id: self.id,
+                max_size,
+            });
         }
 
-        (effects, consumed_bytes_by_reads)
+        effects
     }
 
-    // Network reset reception handling.
-    pub(super) fn recv_reset(&mut self, error_code: ErrorCode, now: f64) -> Vec<Effect> {
-        let mut effects = Vec::new();
-
-        if matches!(self.state, StreamState::Closed | StreamState::ResetReceived) {
-            return effects;
+    pub(super) fn recv_reset(&mut self, error_code: ErrorCode) -> Vec<Effect> {
+        if matches!(
+            self.receive_state,
+            None | Some(StreamReceiveState::DataRead | StreamReceiveState::ResetRead)
+        ) {
+            return Vec::new();
         }
 
         debug!("wt_stream abort stream_id={} err={error_code}", self.id);
-        let app_error_code = http_to_wt_error(error_code).map(u64::from);
+        let application_error_code =
+            utils::http_code_to_webtransport_code(error_code).map(u64::from);
+        self.receive_error_code = application_error_code;
+        self.receive_state = Some(StreamReceiveState::ResetRead);
 
-        effects.push(Effect::EmitStreamEvent {
+        let mut effects = vec![Effect::EmitStreamEvent {
             stream_id: self.id,
             event_type: EventType::StreamResetReceived,
             session_id: None,
             direction: None,
             is_peer_initiated: None,
-            error_code: app_error_code,
-        });
+            error_code: application_error_code,
+        }];
 
-        while let Some((req_id, _)) = self.pending_read_requests.pop_front() {
+        while let Some((request_id, _)) = self.pending_read_requests.pop_front() {
             effects.push(Effect::NotifyRequestFailed {
-                request_id: req_id,
+                request_id,
                 source: ErrorSource::Stream,
-                error_code: app_error_code,
+                error_code: application_error_code,
                 reason: "wt_stream abort".into(),
             });
-        }
-
-        match self.state {
-            StreamState::HalfClosedLocal | StreamState::ResetSent => {
-                self.close_code = app_error_code;
-                self.closed_at = Some(now);
-                self.state = StreamState::Closed;
-
-                while let Some((_, req_id, _)) = self.write_buffer.pop_front() {
-                    effects.push(Effect::NotifyRequestFailed {
-                        request_id: req_id,
-                        source: ErrorSource::Stream,
-                        error_code: app_error_code,
-                        reason: "wt_stream abort".into(),
-                    });
-                }
-                self.write_buffer_size = 0;
-
-                effects.push(Effect::EmitStreamEvent {
-                    stream_id: self.id,
-                    event_type: EventType::StreamClosed,
-                    session_id: None,
-                    direction: None,
-                    is_peer_initiated: None,
-                    error_code: None,
-                });
-            }
-            StreamState::HalfClosedRemote | StreamState::Open => {
-                self.close_code = app_error_code;
-                self.state = StreamState::ResetReceived;
-            }
-            _ => {}
         }
 
         effects
     }
 
-    // Network stop_sending reception handling.
     pub(super) fn recv_stop_sending(&mut self, error_code: ErrorCode) -> Vec<Effect> {
-        let mut effects = Vec::new();
-
-        if matches!(self.state, StreamState::Closed | StreamState::ResetSent) {
-            return effects;
+        if matches!(
+            self.send_state,
+            None | Some(StreamSendState::DataReceived | StreamSendState::ResetSent)
+        ) {
+            return Vec::new();
         }
 
         debug!("wt_stream abort stream_id={} err={error_code}", self.id);
-        let app_error_code = http_to_wt_error(error_code).map(u64::from);
+        let application_error_code =
+            utils::http_code_to_webtransport_code(error_code).map(u64::from);
 
-        effects.push(Effect::EmitStreamEvent {
+        let mut effects = vec![Effect::EmitStreamEvent {
             stream_id: self.id,
-            event_type: EventType::StopSendingReceived,
+            event_type: EventType::StreamStopSendingReceived,
             session_id: None,
             direction: None,
             is_peer_initiated: None,
-            error_code: app_error_code,
-        });
+            error_code: application_error_code,
+        }];
+        effects.extend(self.send_reset(application_error_code, error_code));
 
         effects
     }
 
-    // User reset command handling.
-    pub(super) fn reset(
-        &mut self,
-        request_id: RequestId,
-        error_code: ErrorCode,
-        now: f64,
-    ) -> Vec<Effect> {
-        let mut effects = Vec::new();
-
-        if self.direction == StreamDirection::ReceiveOnly {
+    pub(super) fn reset(&mut self, request_id: RequestId, error_code: ErrorCode) -> Vec<Effect> {
+        let Some(send_state) = self.send_state else {
             debug!(
                 "wt_stream validate invalid actual={:?} stream_id={}",
                 self.direction, self.id
             );
-            effects.push(Effect::NotifyRequestFailed {
+            return vec![Effect::NotifyRequestFailed {
                 request_id,
                 source: ErrorSource::Stream,
                 error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
                 reason: "wt_stream validate invalid".into(),
-            });
-            return effects;
-        }
+            }];
+        };
 
-        if matches!(self.state, StreamState::Closed | StreamState::ResetSent) {
-            effects.push(Effect::NotifyRequestDone {
-                request_id,
-                result: RequestResult::None,
-            });
-            return effects;
-        }
-
-        let previous_state = self.state;
-        debug!(
-            "wt_stream abort request_id={request_id} stream_id={} err={error_code}",
-            self.id
-        );
-        self.close_code = Some(error_code);
-        self.closed_at = Some(now);
-        self.state = StreamState::ResetSent;
-
-        let http_error_code = u32::try_from(error_code)
-            .map(wt_to_http_error)
-            .unwrap_or(ERR_WT_APPLICATION_ERROR_FIRST);
-
-        effects.push(Effect::ResetQuicStream {
-            stream_id: self.id,
-            error_code: http_error_code,
-        });
-
-        while let Some((_, req_id, _)) = self.write_buffer.pop_front() {
-            effects.push(Effect::NotifyRequestFailed {
-                request_id: req_id,
-                source: ErrorSource::Stream,
-                error_code: Some(error_code),
-                reason: "wt_stream abort".into(),
-            });
-        }
-        self.write_buffer_size = 0;
-
-        match previous_state {
-            StreamState::HalfClosedRemote | StreamState::ResetReceived => {
-                self.state = StreamState::Closed;
-                effects.push(Effect::EmitStreamEvent {
-                    stream_id: self.id,
-                    event_type: EventType::StreamClosed,
-                    session_id: None,
-                    direction: None,
-                    is_peer_initiated: None,
-                    error_code: None,
-                });
-            }
-            _ => {}
-        }
-
-        effects.push(Effect::NotifyRequestDone {
-            request_id,
-            result: RequestResult::None,
-        });
-
-        effects
-    }
-
-    // User stop command handling.
-    pub(super) fn stop(
-        &mut self,
-        request_id: RequestId,
-        error_code: ErrorCode,
-        now: f64,
-    ) -> Vec<Effect> {
         let mut effects = Vec::new();
 
-        if self.direction == StreamDirection::SendOnly {
-            debug!(
-                "wt_stream validate invalid actual={:?} stream_id={}",
-                self.direction, self.id
-            );
-            effects.push(Effect::NotifyRequestFailed {
-                request_id,
-                source: ErrorSource::Stream,
-                error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
-                reason: "wt_stream validate invalid".into(),
-            });
-            return effects;
-        }
-
-        if matches!(
-            self.state,
-            StreamState::Closed | StreamState::HalfClosedRemote | StreamState::ResetReceived
+        if !matches!(
+            send_state,
+            StreamSendState::DataReceived | StreamSendState::ResetSent
         ) {
-            effects.push(Effect::NotifyRequestDone {
-                request_id,
-                result: RequestResult::None,
-            });
-            return effects;
-        }
+            debug!(
+                "wt_stream abort request_id={request_id} stream_id={} err={error_code}",
+                self.id
+            );
+            let http_error_code = u32::try_from(error_code)
+                .map(utils::webtransport_code_to_http_code)
+                .unwrap_or(ERR_WT_APPLICATION_ERROR_FIRST);
 
-        let previous_state = self.state;
-        debug!(
-            "wt_stream abort request_id={request_id} stream_id={} err={error_code}",
-            self.id
-        );
-        self.close_code = Some(error_code);
-        self.closed_at = Some(now);
-        self.state = StreamState::ResetReceived;
-
-        let http_error_code = u32::try_from(error_code)
-            .map(wt_to_http_error)
-            .unwrap_or(ERR_WT_APPLICATION_ERROR_FIRST);
-
-        effects.push(Effect::StopQuicStream {
-            stream_id: self.id,
-            error_code: http_error_code,
-        });
-
-        while let Some((req_id, _)) = self.pending_read_requests.pop_front() {
-            effects.push(Effect::NotifyRequestFailed {
-                request_id: req_id,
-                source: ErrorSource::Stream,
-                error_code: Some(error_code),
-                reason: "wt_stream abort".into(),
-            });
-        }
-
-        match previous_state {
-            StreamState::HalfClosedLocal | StreamState::ResetSent => {
-                self.state = StreamState::Closed;
-                effects.push(Effect::EmitStreamEvent {
-                    stream_id: self.id,
-                    event_type: EventType::StreamClosed,
-                    session_id: None,
-                    direction: None,
-                    is_peer_initiated: None,
-                    error_code: None,
-                });
-            }
-            _ => {}
+            effects.extend(self.send_reset(Some(error_code), http_error_code));
         }
 
         effects.push(Effect::NotifyRequestDone {
@@ -671,220 +381,223 @@ impl Stream {
         effects
     }
 
-    // User write request handling.
+    pub(super) fn stop(&mut self, request_id: RequestId, error_code: ErrorCode) -> Vec<Effect> {
+        let Some(receive_state) = self.receive_state else {
+            debug!(
+                "wt_stream validate invalid actual={:?} stream_id={}",
+                self.direction, self.id
+            );
+            return vec![Effect::NotifyRequestFailed {
+                request_id,
+                source: ErrorSource::Stream,
+                error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
+                reason: "wt_stream validate invalid".into(),
+            }];
+        };
+
+        let mut effects = Vec::new();
+
+        if !matches!(
+            receive_state,
+            StreamReceiveState::DataRead | StreamReceiveState::ResetRead
+        ) {
+            debug!(
+                "wt_stream abort request_id={request_id} stream_id={} err={error_code}",
+                self.id
+            );
+            let http_error_code = u32::try_from(error_code)
+                .map(utils::webtransport_code_to_http_code)
+                .unwrap_or(ERR_WT_APPLICATION_ERROR_FIRST);
+
+            effects.extend(self.send_stop(Some(error_code), http_error_code));
+        }
+
+        effects.push(Effect::NotifyRequestDone {
+            request_id,
+            result: RequestResult::None,
+        });
+
+        effects
+    }
+
     pub(super) fn write(
         &mut self,
         request_id: RequestId,
         data: Bytes,
         end_stream: bool,
         available_credit: u64,
-        now: f64,
     ) -> (Vec<Effect>, u64) {
-        let mut effects = Vec::new();
-
-        if self.direction == StreamDirection::ReceiveOnly {
+        let Some(send_state) = self.send_state else {
             debug!(
                 "wt_stream validate invalid actual={:?} stream_id={}",
                 self.direction, self.id
             );
-            effects.push(Effect::NotifyRequestFailed {
-                request_id,
-                source: ErrorSource::Stream,
-                error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
-                reason: "wt_stream validate invalid".into(),
-            });
-            return (effects, 0);
-        }
-
-        if !matches!(
-            self.state,
-            StreamState::HalfClosedRemote | StreamState::Open | StreamState::ResetReceived
-        ) {
-            if data.is_empty() && end_stream {
-                effects.push(Effect::NotifyRequestDone {
+            return (
+                vec![Effect::NotifyRequestFailed {
                     request_id,
-                    result: RequestResult::None,
-                });
-                return (effects, 0);
+                    source: ErrorSource::Stream,
+                    error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
+                    reason: "wt_stream validate invalid".into(),
+                }],
+                0,
+            );
+        };
+
+        let is_finish_pending = self
+            .write_buffer
+            .back()
+            .is_some_and(|&(_, _, end_stream)| end_stream);
+
+        if send_state != StreamSendState::Ready || is_finish_pending {
+            if data.is_empty() && end_stream {
+                return (
+                    vec![Effect::NotifyRequestDone {
+                        request_id,
+                        result: RequestResult::None,
+                    }],
+                    0,
+                );
             }
 
             debug!(
-                "wt_stream validate failed actual={:?} stream_id={}",
-                self.state, self.id
+                "wt_stream validate failed actual={send_state:?} stream_id={}",
+                self.id
             );
-            effects.push(Effect::NotifyRequestFailed {
-                request_id,
-                source: ErrorSource::Stream,
-                error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
-                reason: "wt_stream validate failed".into(),
-            });
-            return (effects, 0);
+            return (
+                vec![Effect::NotifyRequestFailed {
+                    request_id,
+                    source: ErrorSource::Stream,
+                    error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
+                    reason: "wt_stream validate failed".into(),
+                }],
+                0,
+            );
         }
 
         let data_len = data.len() as u64;
-        let current_buffer_size = self.write_buffer_size;
 
-        if current_buffer_size + data_len > self.max_write_buffer_size {
+        if self.write_buffer_size + data_len > self.max_write_buffer_size {
             debug!(
                 "wt_stream validate exceeded actual={} limit={} stream_id={}",
-                current_buffer_size + data_len,
+                self.write_buffer_size + data_len,
                 self.max_write_buffer_size,
                 self.id
             );
-            effects.push(Effect::NotifyRequestFailed {
-                request_id,
-                source: ErrorSource::Stream,
-                error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
-                reason: "wt_stream validate exceeded".into(),
-            });
-            return (effects, 0);
+            return (
+                vec![Effect::NotifyRequestFailed {
+                    request_id,
+                    source: ErrorSource::Stream,
+                    error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
+                    reason: "wt_stream validate exceeded".into(),
+                }],
+                0,
+            );
         }
 
-        if !self.write_buffer.is_empty() {
-            self.write_buffer.push_back((data, request_id, end_stream));
-            self.write_buffer_size += data_len;
-            return (effects, 0);
-        }
+        self.write_buffer.push_back((data, request_id, end_stream));
+        self.write_buffer_size += data_len;
 
-        if data_len <= available_credit {
-            self.bytes_sent += data_len;
-            effects.push(Effect::SendQuicData {
-                stream_id: self.id,
-                data,
-                end_stream,
-            });
-            effects.push(Effect::NotifyRequestDone {
-                request_id,
-                result: RequestResult::None,
-            });
-
-            if end_stream {
-                match self.state {
-                    StreamState::HalfClosedRemote | StreamState::ResetReceived => {
-                        self.closed_at = Some(now);
-                        self.state = StreamState::Closed;
-                        effects.push(Effect::EmitStreamEvent {
-                            stream_id: self.id,
-                            event_type: EventType::StreamClosed,
-                            session_id: None,
-                            direction: None,
-                            is_peer_initiated: None,
-                            error_code: None,
-                        });
-                    }
-                    StreamState::Open => {
-                        self.state = StreamState::HalfClosedLocal;
-                    }
-                    _ => {}
-                }
-            }
-            (effects, data_len)
-        } else if available_credit > 0 {
-            let sendable = usize::try_from(available_credit).unwrap_or(usize::MAX);
-            let data_to_send = data.slice(0..sendable);
-            let remaining_data = data.slice(sendable..);
-            let remaining_len = remaining_data.len() as u64;
-
-            self.bytes_sent += available_credit;
-            effects.push(Effect::SendQuicData {
-                stream_id: self.id,
-                data: data_to_send,
-                end_stream: false,
-            });
-
-            self.write_buffer
-                .push_front((remaining_data, request_id, end_stream));
-            self.write_buffer_size += remaining_len;
-
-            (effects, available_credit)
-        } else {
-            self.write_buffer.push_back((data, request_id, end_stream));
-            self.write_buffer_size += data_len;
-
-            (effects, 0)
-        }
+        self.flush_writes(available_credit)
     }
 
-    // Internal diagnostics snapshot creation.
     fn diagnostics_snapshot(&self) -> StreamDiagnostics {
         StreamDiagnostics {
-            bytes_received: self.bytes_received,
-            bytes_sent: self.bytes_sent,
-            close_code: self.close_code,
-            close_reason: self.close_reason.clone(),
-            closed_at: self.closed_at,
             created_at: self.created_at,
             direction: self.direction,
             is_peer_initiated: self.is_peer_initiated,
-            read_buffer_size: self.read_buffer_size,
+            receive_error_code: self.receive_error_code,
+            receive_state: self.receive_state,
+            send_error_code: self.send_error_code,
+            send_state: self.send_state,
             session_id: self.session_id,
-            state: self.state,
             stream_id: self.id,
-            write_buffer_size: self.write_buffer_size,
         }
     }
 
-    // Read size clamping calculation.
-    fn limit_read(requested_bytes: u64, buffer_size: u64) -> u64 {
-        if requested_bytes == 0 {
-            buffer_size
-        } else {
-            std::cmp::min(requested_bytes, buffer_size)
+    fn send_reset(
+        &mut self,
+        error_code: Option<ErrorCode>,
+        http_error_code: ErrorCode,
+    ) -> Vec<Effect> {
+        if matches!(
+            self.send_state,
+            None | Some(StreamSendState::DataReceived | StreamSendState::ResetSent)
+        ) {
+            return Vec::new();
         }
+
+        self.send_error_code = error_code;
+        self.send_state = Some(StreamSendState::ResetSent);
+        self.write_buffer_size = 0;
+
+        let mut effects = vec![Effect::ResetQuicStream {
+            stream_id: self.id,
+            error_code: http_error_code,
+        }];
+
+        if let Some(request_id) = self.pending_write_request.take()
+            && self
+                .write_buffer
+                .front()
+                .is_none_or(|&(_, write_request_id, _)| write_request_id != request_id)
+        {
+            effects.push(Effect::NotifyRequestFailed {
+                request_id,
+                source: ErrorSource::Stream,
+                error_code,
+                reason: "wt_stream abort".into(),
+            });
+        }
+
+        while let Some((_, request_id, _)) = self.write_buffer.pop_front() {
+            effects.push(Effect::NotifyRequestFailed {
+                request_id,
+                source: ErrorSource::Stream,
+                error_code,
+                reason: "wt_stream abort".into(),
+            });
+        }
+
+        effects
     }
 
-    // Read buffer chunk extraction logic.
-    fn take_data(&mut self, max_bytes: u64) -> Bytes {
-        if max_bytes == 0 || self.read_buffer_size == 0 {
-            return Bytes::new();
-        }
+    fn send_stop(
+        &mut self,
+        error_code: Option<ErrorCode>,
+        http_error_code: ErrorCode,
+    ) -> Vec<Effect> {
+        let mut effects = Vec::new();
 
-        let mut chunks = Vec::new();
-        let mut bytes_collected = 0;
-
-        while bytes_collected < max_bytes {
-            let Some(chunk) = self.read_buffer.pop_front() else {
-                break;
-            };
-
-            let chunk_len = chunk.len() as u64;
-            let needed = max_bytes - bytes_collected;
-
-            if chunk_len <= needed {
-                chunks.push(chunk);
-                bytes_collected += chunk_len;
-                self.read_buffer_size -= chunk_len;
-            } else {
-                let usize_needed = usize::try_from(needed).unwrap_or(usize::MAX);
-                if chunk_len <= OPTIMIZED_READ_SLICE_SIZE || needed >= chunk_len / 2 {
-                    let part = chunk.slice(0..usize_needed);
-                    let remainder = chunk.slice(usize_needed..);
-                    chunks.push(part);
-                    self.read_buffer_size -= needed;
-                    self.read_buffer.push_front(remainder);
-                } else {
-                    let mut isolated_buffer = bytes::BytesMut::with_capacity(usize_needed);
-                    isolated_buffer.put(chunk.slice(0..usize_needed));
-                    let remainder = chunk.slice(usize_needed..);
-                    chunks.push(isolated_buffer.freeze());
-                    self.read_buffer_size -= needed;
-                    self.read_buffer.push_front(remainder);
-                }
-                break;
+        match self.receive_state {
+            Some(StreamReceiveState::Receive) => {
+                effects.push(Effect::StopQuicStream {
+                    stream_id: self.id,
+                    error_code: http_error_code,
+                });
             }
+            Some(StreamReceiveState::DataReceived) => {}
+            _ => return effects,
         }
 
-        if chunks.len() == 1 {
-            chunks.pop().unwrap_or_default()
-        } else {
-            let total_len = chunks.iter().map(Bytes::len).sum();
-            let mut merged = bytes::BytesMut::with_capacity(total_len);
-            for c in chunks {
-                merged.put(c);
-            }
-            merged.freeze()
+        self.receive_error_code = error_code;
+        self.receive_state = Some(StreamReceiveState::ResetRead);
+
+        while let Some((request_id, _)) = self.pending_read_requests.pop_front() {
+            effects.push(Effect::NotifyRequestFailed {
+                request_id,
+                source: ErrorSource::Stream,
+                error_code,
+                reason: "wt_stream abort".into(),
+            });
         }
+
+        effects
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct StreamParameters {
+    pub(super) max_write_buffer_size: u64,
 }
 
 #[cfg(test)]

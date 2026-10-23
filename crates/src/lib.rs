@@ -1,4 +1,4 @@
-//! Root crate definition and Python module registration.
+//! `PyWebTransport` engine.
 
 use pyo3::prelude::*;
 
@@ -10,8 +10,7 @@ pub(crate) mod transport;
 
 mod ffi;
 
-// Python module initialization.
 #[pymodule]
-fn _pywebtransport(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
-    ffi::register(m)
+fn _pywebtransport(_py: Python, module: &Bound<'_, PyModule>) -> PyResult<()> {
+    ffi::register(module)
 }

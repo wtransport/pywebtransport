@@ -1,34 +1,32 @@
-//! Tokio-based event loop orchestrating the WebTransport I/O and state machines.
+//! Runtime reactor.
 
+use std::cmp;
+use std::future;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
 use bytes::BytesMut;
-use quinn_proto::Transmit;
+use quinn_proto::Transmit as QuicTransmit;
 use tokio::net::UdpSocket;
-use tokio::sync::mpsc;
+use tokio::select;
+use tokio::sync::mpsc::{self, Receiver};
+use tokio::time::{self, Instant as TokioInstant};
 use tracing::debug;
 
 use crate::runtime::channel::{RuntimeCommand, RuntimeCommandRx, RuntimeEvent, RuntimeEventTx};
 use crate::transport::endpoint::{TransportEndpoint, TransportEvent};
 
-// Callback type for cross-thread Python asyncio wake-ups.
 pub(crate) type WakerCallback = Arc<dyn Fn() + Send + Sync>;
 
-// Inbound UDP channel capacity between socket listeners and the reactor.
 const UDP_CHANNEL_CAPACITY: usize = 8192;
-// UDP maximum datagrams processed per reactor iteration.
 const UDP_POLL_DATAGRAMS: usize = 64;
-// UDP slab allocation block capacity.
 const UDP_SLAB_CAPACITY: usize = 65536;
-// UDP slab remaining threshold before reallocation.
 const UDP_SLAB_THRESHOLD: usize = 2048;
 
-// Core event loop engine managing asynchronous I/O and multiplexing.
 pub(crate) struct Reactor {
     command_rx: RuntimeCommandRx,
-    datagram_rx: mpsc::Receiver<(SocketAddr, Option<SocketAddr>, BytesMut)>,
+    datagram_rx: Receiver<(SocketAddr, Option<SocketAddr>, BytesMut)>,
     endpoint: TransportEndpoint,
     event_tx: RuntimeEventTx,
     events_emitted: bool,
@@ -38,7 +36,6 @@ pub(crate) struct Reactor {
 }
 
 impl Reactor {
-    // Initializes the Tokio reactor with the given I/O and IPC components.
     pub(crate) fn new(
         command_rx: RuntimeCommandRx,
         endpoint: TransportEndpoint,
@@ -47,32 +44,35 @@ impl Reactor {
         waker: WakerCallback,
     ) -> Self {
         let (datagram_tx, datagram_rx) = mpsc::channel(UDP_CHANNEL_CAPACITY);
-        let mut arc_sockets = Vec::new();
+        let mut bound_sockets = Vec::new();
 
         for socket in sockets {
-            let is_ipv4 = socket.local_addr().is_ok_and(|l| l.is_ipv4());
+            let is_ipv4 = socket.local_addr().is_ok_and(|address| address.is_ipv4());
             let socket = Arc::new(socket);
-            arc_sockets.push(BoundSocket {
+            bound_sockets.push(BoundSocket {
                 is_ipv4,
                 socket: Arc::clone(&socket),
             });
 
-            let tx = datagram_tx.clone();
-            let sock_clone = Arc::clone(&socket);
+            let datagram_tx = datagram_tx.clone();
 
             tokio::spawn(async move {
-                let mut buf = BytesMut::with_capacity(UDP_SLAB_CAPACITY);
+                let mut buffer = BytesMut::with_capacity(UDP_SLAB_CAPACITY);
 
                 loop {
-                    if buf.capacity() < UDP_SLAB_THRESHOLD {
-                        buf.reserve(UDP_SLAB_CAPACITY);
+                    if buffer.capacity() < UDP_SLAB_THRESHOLD {
+                        buffer.reserve(UDP_SLAB_CAPACITY);
                     }
 
-                    if let Ok((len, remote_addr)) = sock_clone.recv_buf_from(&mut buf).await {
-                        let data = buf.split_to(len);
-                        let local_addr = sock_clone.local_addr().ok();
+                    if let Ok((len, remote_address)) = socket.recv_buf_from(&mut buffer).await {
+                        let data = buffer.split_to(len);
+                        let local_address = socket.local_addr().ok();
 
-                        if tx.send((remote_addr, local_addr, data)).await.is_err() {
+                        if datagram_tx
+                            .send((remote_address, local_address, data))
+                            .await
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -86,46 +86,45 @@ impl Reactor {
             endpoint,
             event_tx,
             events_emitted: false,
-            sockets: arc_sockets,
+            sockets: bound_sockets,
             start_instant: Instant::now(),
             waker,
         }
     }
 
-    // Starts the continuous non-blocking event loop.
     pub(crate) async fn run(mut self) {
         loop {
-            let timeout = self.endpoint.timeout();
-            let sleep_fut = async {
-                if let Some(t) = timeout {
-                    tokio::time::sleep_until(tokio::time::Instant::from_std(t)).await;
+            let timeout = self.endpoint.poll_timeout();
+            let sleep_future = async {
+                if let Some(timeout) = timeout {
+                    time::sleep_until(TokioInstant::from_std(timeout)).await;
                 } else {
-                    std::future::pending::<()>().await;
+                    future::pending::<()>().await;
                 }
             };
 
-            tokio::select! {
-                cmd_opt = self.command_rx.recv() => {
-                    let Some(cmd) = cmd_opt else { break; };
+            select! {
+                command_option = self.command_rx.recv() => {
+                    let Some(command) = command_option else { break; };
 
-                    if !self.handle_command(cmd).await {
+                    if !self.handle_command(command).await {
                         break;
                     }
                 }
-                datagram_opt = self.datagram_rx.recv() => {
-                    let Some((remote, local, data)) = datagram_opt else { break; };
+                datagram_option = self.datagram_rx.recv() => {
+                    let Some((remote_address, local_address, data)) = datagram_option else { break; };
 
-                    self.handle_datagram(remote, local, data).await;
+                    self.handle_datagram(remote_address, local_address, data).await;
 
                     for _ in 1..UDP_POLL_DATAGRAMS {
-                        if let Ok((remote, local, data)) = self.datagram_rx.try_recv() {
-                            self.handle_datagram(remote, local, data).await;
+                        if let Ok((remote_address, local_address, data)) = self.datagram_rx.try_recv() {
+                            self.handle_datagram(remote_address, local_address, data).await;
                         } else {
                             break;
                         }
                     }
                 }
-                () = sleep_fut => {
+                () = sleep_future => {
                     self.handle_timeout();
                 }
             }
@@ -147,7 +146,6 @@ impl Reactor {
         self.notify_shutdown();
     }
 
-    // Drains pending network transmissions from the endpoint.
     async fn flush_transmits(&mut self) {
         let now_instant = Instant::now();
 
@@ -156,7 +154,6 @@ impl Reactor {
         }
     }
 
-    // Processes an inbound control instruction from the FFI plane.
     async fn handle_command(&mut self, command: RuntimeCommand) -> bool {
         let (now, now_instant) = self.now_context();
 
@@ -165,50 +162,46 @@ impl Reactor {
                 request_id,
                 remote_address,
                 server_name,
-            } => match self
-                .endpoint
-                .connect(remote_address, &server_name, now_instant)
-            {
-                Ok((handle, remote_address)) => {
-                    if self
-                        .event_tx
-                        .push(RuntimeEvent::CommandCompleted {
-                            request_id,
-                            handle,
-                            remote_address,
-                        })
-                        .is_ok()
-                    {
-                        self.events_emitted = true;
-                    } else {
-                        debug!("rt_event send failed");
-                    }
-                }
-                Err(e) => {
-                    if self
-                        .event_tx
-                        .push(RuntimeEvent::CommandFailed {
-                            request_id,
-                            error_code: None,
-                            reason: e.to_string().into(),
-                        })
-                        .is_ok()
-                    {
-                        self.events_emitted = true;
-                    } else {
-                        debug!("rt_event send failed");
-                    }
-                }
-            },
-            RuntimeCommand::Protocol { handle, event } => {
-                if let Some(transport_event) =
+            } => {
+                let transport_event =
                     self.endpoint
-                        .handle_user_event(handle, event, now, now_instant)
-                {
-                    self.process_transport_event(transport_event).await;
-                }
+                        .connect(request_id, remote_address, &server_name, now_instant);
+
+                self.process_transport_event(transport_event).await;
             }
-            RuntimeCommand::Shutdown => {
+            RuntimeCommand::ProtocolEvent {
+                request_id,
+                handle,
+                event,
+            } => {
+                let transport_event = self.endpoint.handle_protocol_event(
+                    handle,
+                    request_id,
+                    event,
+                    now,
+                    now_instant,
+                );
+
+                self.process_transport_event(transport_event).await;
+            }
+            RuntimeCommand::ShutdownReactor => {
+                let (now, now_instant) = self.now_context();
+                let results = self.endpoint.shutdown(now, now_instant);
+
+                for (handle, effects) in results {
+                    if !effects.is_empty() {
+                        if self
+                            .event_tx
+                            .push(RuntimeEvent::ConnectionEffects { handle, effects })
+                            .is_ok()
+                        {
+                            self.events_emitted = true;
+                        } else {
+                            debug!("rt_event send failed");
+                        }
+                    }
+                }
+
                 return false;
             }
         }
@@ -216,23 +209,21 @@ impl Reactor {
         true
     }
 
-    // Processes an inbound UDP datagram payload.
     async fn handle_datagram(
         &mut self,
-        remote: SocketAddr,
-        local: Option<SocketAddr>,
+        remote_address: SocketAddr,
+        local_address: Option<SocketAddr>,
         data: BytesMut,
     ) {
         let (now, now_instant) = self.now_context();
 
-        let transport_event = self
-            .endpoint
-            .handle_datagram(remote, local, data, now, now_instant);
+        let transport_event =
+            self.endpoint
+                .handle_datagram(remote_address, local_address, data, now, now_instant);
 
         self.process_transport_event(transport_event).await;
     }
 
-    // Triggers the multiplexer timeout evaluations.
     fn handle_timeout(&mut self) {
         let (now, now_instant) = self.now_context();
 
@@ -253,16 +244,14 @@ impl Reactor {
         }
     }
 
-    // Emits the final shutdown acknowledgment to Python.
     fn notify_shutdown(&self) {
-        if self.event_tx.push(RuntimeEvent::ReactorShutDown).is_err() {
+        if self.event_tx.push(RuntimeEvent::ReactorShutdown).is_err() {
             debug!("rt_event send failed");
         }
 
         (self.waker)();
     }
 
-    // Retrieves the current absolute monotonic timestamps.
     fn now_context(&self) -> (f64, Instant) {
         let now_instant = Instant::now();
         let now = now_instant.duration_since(self.start_instant).as_secs_f64();
@@ -270,9 +259,27 @@ impl Reactor {
         (now, now_instant)
     }
 
-    // Translates and dispatches an aggregated endpoint event.
     async fn process_transport_event(&mut self, event: TransportEvent) {
         match event {
+            TransportEvent::CommandFailed {
+                request_id,
+                error_code,
+                reason,
+            } => {
+                if self
+                    .event_tx
+                    .push(RuntimeEvent::CommandFailed {
+                        request_id,
+                        error_code,
+                        reason,
+                    })
+                    .is_ok()
+                {
+                    self.events_emitted = true;
+                } else {
+                    debug!("rt_event send failed");
+                }
+            }
             TransportEvent::ConnectionEffects { handle, effects } => {
                 if !effects.is_empty() {
                     if self
@@ -288,8 +295,8 @@ impl Reactor {
             }
             TransportEvent::ConnectionSpawned {
                 handle,
-                effects,
                 remote_address,
+                effects,
             } => {
                 if self
                     .event_tx
@@ -312,31 +319,34 @@ impl Reactor {
         }
     }
 
-    // Executes a physical UDP transmission using the socket.
-    async fn send_transmit(&self, transmit: &Transmit) {
-        let addr = transmit.destination;
+    async fn send_transmit(&self, transmit: &QuicTransmit) {
+        let address = transmit.destination;
         let size = transmit.size;
         let segment_size = transmit.segment_size.unwrap_or(size);
         let workspace = self.endpoint.transmit_workspace();
 
         if let Some(data) = workspace.get(..size) {
-            let is_ipv4 = addr.is_ipv4();
+            let is_ipv4 = address.is_ipv4();
             let target_socket = self
                 .sockets
                 .iter()
-                .find(|s| s.is_ipv4 == is_ipv4)
-                .map(|s| &s.socket)
-                .or_else(|| self.sockets.first().map(|s| &s.socket));
+                .find(|bound_socket| bound_socket.is_ipv4 == is_ipv4)
+                .map(|bound_socket| &bound_socket.socket)
+                .or_else(|| {
+                    self.sockets
+                        .first()
+                        .map(|bound_socket| &bound_socket.socket)
+                });
 
             if let Some(socket) = target_socket {
                 let mut offset = 0;
                 while offset < size {
-                    let chunk_len = std::cmp::min(segment_size, size - offset);
+                    let chunk_len = cmp::min(segment_size, size - offset);
                     let Some(chunk) = data.get(offset..offset + chunk_len) else {
                         break;
                     };
 
-                    if let Err(e) = socket.send_to(chunk, addr).await {
+                    if let Err(e) = socket.send_to(chunk, address).await {
                         debug!("sys_socket send failed err={e:?}");
                     }
 
@@ -347,7 +357,6 @@ impl Reactor {
     }
 }
 
-// Pre-evaluated UDP socket instance with cached protocol state.
 struct BoundSocket {
     is_ipv4: bool,
     socket: Arc<UdpSocket>,

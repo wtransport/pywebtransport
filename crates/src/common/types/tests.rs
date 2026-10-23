@@ -68,8 +68,19 @@ fn test_stream_direction_traits_behavior_success() {
 }
 
 #[test]
-fn test_stream_state_traits_behavior_success() {
-    let state = StreamState::ResetSent;
+fn test_stream_receive_state_traits_behavior_success() {
+    let state = StreamReceiveState::ResetRead;
+
+    let state_copy = state;
+    let debug_output = format!("{state:?}");
+
+    assert_eq!(state, state_copy);
+    assert_eq!(debug_output, "ResetRead");
+}
+
+#[test]
+fn test_stream_send_state_traits_behavior_success() {
+    let state = StreamSendState::ResetSent;
 
     let state_copy = state;
     let debug_output = format!("{state:?}");
@@ -80,21 +91,21 @@ fn test_stream_state_traits_behavior_success() {
 
 #[test]
 fn test_type_aliases_instantiation_and_usage_success() {
-    let conn_handle: ConnectionHandle = 42;
-    let err_code: ErrorCode = 404;
-    let req_id: RequestId = 1001;
-    let sess_id: SessionId = 500;
-    let stream_id: StreamId = 8;
+    let connection_handle: ConnectionHandle = 42;
+    let error_code: ErrorCode = 404;
     let headers: Headers = vec![(Bytes::from("content-type"), Bytes::from("application/json"))];
+    let request_id: RequestId = 1001;
+    let session_id: SessionId = 500;
+    let stream_id: StreamId = 8;
 
-    assert_eq!(conn_handle, 42);
-    assert_eq!(err_code, 404);
-    assert_eq!(req_id, 1001);
-    assert_eq!(sess_id, 500);
-    assert_eq!(stream_id, 8);
+    assert_eq!(connection_handle, 42);
+    assert_eq!(error_code, 404);
     assert_eq!(headers.len(), 1);
     assert_eq!(
-        headers.first().map(|(k, _)| k),
+        headers.first().map(|(key, _)| key),
         Some(&Bytes::from("content-type"))
     );
+    assert_eq!(request_id, 1001);
+    assert_eq!(session_id, 500);
+    assert_eq!(stream_id, 8);
 }

@@ -9,18 +9,16 @@ from collections.abc import Generator
 from typing import Any, Final, cast
 
 import pytest
-import uvloop
 from pytest_benchmark.fixture import BenchmarkFixture
 
-from pywebtransport import ClientConfig, Event, WebTransportClient, WebTransportSession
-from pywebtransport.types import EventType
+from pywebtransport import ClientConfig, WebTransportClient, WebTransportSession
 
 SERVER_URL_BASE: Final[str] = "https://127.0.0.1:4433"
 WARMUP_ROUNDS: Final[int] = 5
 PAYLOAD_64B: Final[bytes] = b"x" * 64
 PAYLOAD_1KB: Final[bytes] = b"x" * 1024
 
-logging.basicConfig(level=logging.CRITICAL)
+logging.basicConfig(level=logging.CRITICAL, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 
 @pytest.fixture(scope="module")
@@ -35,14 +33,14 @@ class TestLatency:
 
         async def run_handshake() -> None:
             async with WebTransportClient(config=client_config) as client:
-                session = await client.connect(url=url)
-                await session.close()
+                async with await client.connect(url=url):
+                    pass
 
         for _ in range(WARMUP_ROUNDS):
-            uvloop.run(run_handshake())
+            asyncio.run(run_handshake())
         gc.collect()
 
-        benchmark(lambda: uvloop.run(run_handshake()))
+        benchmark(lambda: asyncio.run(run_handshake()))
 
         stats = cast(dict[str, Any], benchmark.stats)
         benchmark.extra_info["median_ms"] = stats["median"] * 1000
@@ -80,20 +78,10 @@ class TestLatency:
         payload = PAYLOAD_64B
 
         with self._sync_session(config=client_config, url=url) as (loop, session):
-            echo_future: asyncio.Future[bool] = loop.create_future()
-
-            async def on_dgram(event: Event) -> None:
-                if isinstance(event.data, dict) and (data := event.data.get("data")):
-                    if data == payload and not echo_future.done():
-                        echo_future.set_result(True)
-
-            session.events.on(event_type=EventType.DATAGRAM_RECEIVED, handler=on_dgram)
 
             async def run_dgram_rtt() -> None:
-                nonlocal echo_future
-                echo_future = loop.create_future()
                 await session.send_datagram(data=payload)
-                await asyncio.wait_for(echo_future, timeout=1.0)
+                await asyncio.wait_for(session.read_datagram(), timeout=1.0)
 
             for _ in range(WARMUP_ROUNDS):
                 loop.run_until_complete(run_dgram_rtt())
@@ -108,20 +96,18 @@ class TestLatency:
 
     @contextlib.contextmanager
     def _sync_session(
-        self, config: ClientConfig, url: str
+        self, *, config: ClientConfig, url: str
     ) -> Generator[tuple[asyncio.AbstractEventLoop, WebTransportSession], None, None]:
-        loop = uvloop.new_event_loop()
+        loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         stack = contextlib.AsyncExitStack()
-        session: WebTransportSession | None = None
 
         try:
             client = loop.run_until_complete(stack.enter_async_context(WebTransportClient(config=config)))
             session = loop.run_until_complete(client.connect(url=url))
+            loop.run_until_complete(stack.enter_async_context(session))
             yield loop, session
         finally:
-            if session is not None:
-                loop.run_until_complete(session.close())
             loop.run_until_complete(stack.aclose())
             loop.close()
             asyncio.set_event_loop(None)

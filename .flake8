@@ -21,4 +21,4 @@ exclude =
     docs
     scripts
 per-file-ignores =
-    *.pyi: E302
+    *.pyi: E301, E302

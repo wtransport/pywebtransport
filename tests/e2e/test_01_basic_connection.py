@@ -59,24 +59,21 @@ async def test_basic_connection() -> bool:
         async with WebTransportClient(config=config) as client:
             logger.info("Client activated, attempting connection...")
             start_time = time.time()
-            session = await client.connect(url=SERVER_URL)
-            connect_time = time.time() - start_time
+            async with await client.connect(url=SERVER_URL) as session:
+                connect_time = time.time() - start_time
+                diagnostics = await session.diagnose()
 
-            logger.info("Connection established")
-            logger.info("   - Connection time: %.3fs", connect_time)
-            logger.info("   - Session ID: %d", session.session_id)
-            logger.info("   - Session state: %s", session.state.value)
+                logger.info("Connection established")
+                logger.info("   - Connection time: %.3fs", connect_time)
+                logger.info("   - Session ID: %d", session.session_id)
+                logger.info("   - Session state: %s", diagnostics.state)
 
-            if session.state != SessionState.CONNECTED:
-                logger.error("FAILURE: Session not in CONNECTED state")
-                return False
+                if diagnostics.state != SessionState.CONNECTED:
+                    logger.error("FAILURE: Session not in CONNECTED state")
+                    return False
 
-            logger.info("SUCCESS: Session is in CONNECTED state")
-
-            logger.info("Closing session...")
-            await session.close()
-            logger.info("Session closed successfully")
-            return True
+                logger.info("SUCCESS: Session is in CONNECTED state")
+                return True
     except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Connection error: %s", e)
         logger.error("Possible issues:")

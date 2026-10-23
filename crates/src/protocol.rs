@@ -1,9 +1,8 @@
-//! Protocol logic and state machine implementation.
+//! Protocol module declarations.
 
-pub(crate) use connection::ConnectionDiagnostics;
-pub(crate) use h3::H3Settings;
-pub(crate) use session::SessionDiagnostics;
-pub(crate) use stream::StreamDiagnostics;
+pub(crate) use crate::protocol::connection::ConnectionDiagnostics;
+pub(crate) use crate::protocol::session::SessionDiagnostics;
+pub(crate) use crate::protocol::stream::StreamDiagnostics;
 
 pub(crate) mod engine;
 pub(crate) mod events;

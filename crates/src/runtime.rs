@@ -1,4 +1,4 @@
-//! Asynchronous I/O engine and lock-free IPC channels for the threaded Tokio reactor.
+//! Runtime module declarations.
 
 pub(crate) mod channel;
 pub(crate) mod reactor;

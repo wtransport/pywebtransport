@@ -1,40 +1,38 @@
-//! Configuration definitions for transport and application protocols.
+//! Common configuration.
 
 use std::path::PathBuf;
 use std::time::Duration;
 
-// Core common configuration shared between client and server.
 #[derive(Clone, Debug)]
 pub(crate) struct RustBaseConfig {
-    pub(crate) alpn_protocols: Vec<String>,
     pub(crate) congestion_control_algorithm: String,
-    pub(crate) connection_idle_timeout: Duration,
-    pub(crate) flow_control_window: u64,
+    pub(crate) connection_receive_window: u64,
+    pub(crate) connection_send_window: u64,
     pub(crate) initial_max_data: u64,
     pub(crate) initial_max_streams_bidi: u64,
     pub(crate) initial_max_streams_uni: u64,
     pub(crate) keep_alive_interval: Option<Duration>,
     pub(crate) max_capsule_size: u64,
+    pub(crate) max_connection_pending_events: u64,
+    pub(crate) max_connections: u64,
     pub(crate) max_datagram_size: u64,
     pub(crate) max_field_section_size: u64,
+    pub(crate) max_idle_timeout: Duration,
     pub(crate) max_pending_capsules: u64,
     pub(crate) max_pending_datagrams: u64,
     pub(crate) max_pending_streams: u64,
     pub(crate) max_session_pending_events: u64,
     pub(crate) max_sessions: u64,
-    pub(crate) max_stream_read_buffer_size: u64,
-    pub(crate) max_stream_write_buffer_size: u64,
-    pub(crate) max_total_pending_events: u64,
+    pub(crate) max_streams_bidi: u64,
+    pub(crate) max_streams_uni: u64,
+    pub(crate) max_udp_payload_size: u64,
+    pub(crate) max_write_buffer_size: u64,
     pub(crate) pending_event_ttl: Duration,
-    pub(crate) quic_max_concurrent_bidi_streams: u64,
-    pub(crate) quic_max_concurrent_uni_streams: u64,
-    pub(crate) quic_receive_window: u64,
-    pub(crate) quic_send_window: u64,
-    pub(crate) quic_stream_receive_window: u64,
     pub(crate) resource_cleanup_interval: Duration,
+    pub(crate) session_receive_window: u64,
+    pub(crate) stream_receive_window: u64,
 }
 
-// WebTransport client configuration options.
 #[derive(Clone, Debug)]
 pub(crate) struct RustClientConfig {
     pub(crate) base: RustBaseConfig,
@@ -44,7 +42,6 @@ pub(crate) struct RustClientConfig {
     pub(crate) verify_server_certificate: bool,
 }
 
-// WebTransport server configuration options.
 #[derive(Clone, Debug)]
 pub(crate) struct RustServerConfig {
     pub(crate) base: RustBaseConfig,

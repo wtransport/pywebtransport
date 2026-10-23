@@ -1,17 +1,15 @@
-//! WebTransport logic error definitions.
+//! Common errors.
 
 use std::borrow::Cow;
+
 use thiserror::Error;
 
 use crate::common::types::{ErrorCode, StreamId};
 
-// Enumeration of WebTransport protocol errors.
 #[derive(Debug, Error)]
 pub(crate) enum WebTransportError {
     #[error("Configuration error: {1} (code: {0:?})")]
     Configuration(Option<ErrorCode>, Cow<'static, str>),
-    #[error("Connection error: {1} (code: {0:?})")]
-    Connection(Option<ErrorCode>, Cow<'static, str>),
     #[error("Protocol error: {1} (code: {0:?})")]
     Protocol(Option<ErrorCode>, Cow<'static, str>),
     #[error("Stream error: {2} (stream: {0}, code: {1:?})")]

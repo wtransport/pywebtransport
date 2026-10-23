@@ -1,3 +1,0 @@
-# Framework API
-
-::: pywebtransport.framework

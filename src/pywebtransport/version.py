@@ -1,4 +1,4 @@
-"""Define the library version."""
+"""Package version."""
 
 from __future__ import annotations
 

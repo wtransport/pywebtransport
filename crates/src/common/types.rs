@@ -1,21 +1,14 @@
-//! Common type definitions and state enumerations.
+//! Common types.
 
 use bytes::Bytes;
 
-// WebTransport connection handle.
 pub(crate) type ConnectionHandle = u64;
-// Protocol error code.
 pub(crate) type ErrorCode = u64;
-// Canonicalized HTTP/3 header byte pairs.
 pub(crate) type Headers = Vec<(Bytes, Bytes)>;
-// Asynchronous operation correlation identifier.
 pub(crate) type RequestId = u64;
-// WebTransport session identifier.
 pub(crate) type SessionId = u64;
-// WebTransport stream identifier.
 pub(crate) type StreamId = u64;
 
-// Connection lifecycle states.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ConnectionState {
     Closed,
@@ -25,7 +18,6 @@ pub(crate) enum ConnectionState {
     Idle,
 }
 
-// Architectural source context of an error.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ErrorSource {
     Connection,
@@ -35,12 +27,10 @@ pub(crate) enum ErrorSource {
     Unspecified,
 }
 
-// System event type definition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum EventType {
     ConnectionClosed,
     ConnectionEstablished,
-    DatagramReceived,
     SessionClosed,
     SessionDataBlocked,
     SessionDraining,
@@ -49,15 +39,14 @@ pub(crate) enum EventType {
     SessionMaxStreamsUniUpdated,
     SessionPending,
     SessionReady,
-    SessionRequest,
+    SessionRequestReceived,
     SessionStreamsBlocked,
-    StopSendingReceived,
     StreamClosed,
     StreamOpened,
     StreamResetReceived,
+    StreamStopSendingReceived,
 }
 
-// WebTransport session lifecycle states.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SessionState {
     Closed,
@@ -67,7 +56,6 @@ pub(crate) enum SessionState {
     Draining,
 }
 
-// Stream data flow direction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum StreamDirection {
     Bidirectional,
@@ -75,14 +63,19 @@ pub(crate) enum StreamDirection {
     SendOnly,
 }
 
-// WebTransport stream lifecycle states.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum StreamState {
-    Closed,
-    HalfClosedLocal,
-    HalfClosedRemote,
-    Open,
-    ResetReceived,
+pub(crate) enum StreamReceiveState {
+    DataRead,
+    DataReceived,
+    Receive,
+    ResetRead,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum StreamSendState {
+    DataReceived,
+    DataSent,
+    Ready,
     ResetSent,
 }
 

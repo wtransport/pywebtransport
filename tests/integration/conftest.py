@@ -10,7 +10,7 @@ from typing import Final, cast
 import pytest
 from pytest_asyncio import fixture as asyncio_fixture
 
-from pywebtransport import ClientConfig, ServerApp, ServerConfig, WebTransportClient
+from pywebtransport import ClientConfig, ServerConfig, WebTransportClient, WebTransportServer, WebTransportSession
 from pywebtransport.utils import generate_self_signed_cert
 
 CERT_HOSTNAME: Final[str] = "localhost"
@@ -29,51 +29,48 @@ def certificates_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return cert_dir
 
 
-@pytest.fixture(scope="module")
-def client_config(certificates_dir: Path) -> ClientConfig:
-    return ClientConfig(verify_mode=ssl.CERT_NONE)
+@pytest.fixture
+def client_config(request: pytest.FixtureRequest) -> ClientConfig:
+    return ClientConfig(verify_mode=ssl.CERT_NONE, **getattr(request, "param", {}))
 
 
-@pytest.fixture(scope="module")
-def server_config(certificates_dir: Path) -> ServerConfig:
+@pytest.fixture
+def server_config(request: pytest.FixtureRequest, certificates_dir: Path) -> ServerConfig:
     return ServerConfig(
-        certfile=str(certificates_dir / f"{CERT_HOSTNAME}.crt"), keyfile=str(certificates_dir / f"{CERT_HOSTNAME}.key")
+        certfile=str(certificates_dir / f"{CERT_HOSTNAME}.crt"),
+        keyfile=str(certificates_dir / f"{CERT_HOSTNAME}.key"),
+        **getattr(request, "param", {}),
     )
 
 
 @asyncio_fixture
 async def client(client_config: ClientConfig) -> AsyncGenerator[WebTransportClient, None]:
-    async with WebTransportClient(config=client_config) as wt_client:
-        yield wt_client
+    async with WebTransportClient(config=client_config) as client:
+        yield client
 
 
 @asyncio_fixture
-async def server(server_app: ServerApp) -> AsyncGenerator[tuple[str, int], None]:
-    host = "127.0.0.1"
-    port = find_free_port()
+async def server(server_config: ServerConfig) -> AsyncGenerator[WebTransportServer, None]:
+    async with WebTransportServer(config=server_config) as server:
+        await server.listen(host="127.0.0.1", port=find_free_port())
+        yield server
 
-    async with server_app:
-        server_task = asyncio.create_task(coro=server_app.serve(host=host, port=port))
-        await asyncio.sleep(delay=0.1)
 
-        try:
-            yield host, port
-        finally:
-            if not server_task.done():
-                server_task.cancel()
-            try:
-                await server_task
-            except asyncio.CancelledError:
-                pass
+@asyncio_fixture
+async def sessions(
+    client: WebTransportClient, server: WebTransportServer, url: str
+) -> AsyncGenerator[tuple[WebTransportSession, WebTransportSession], None]:
+    async with asyncio.TaskGroup() as task_group:
+        connect_task = task_group.create_task(coro=client.connect(url=url))
+        connection = await anext(server.incoming_connections())
+        server_session = await anext(connection.incoming_sessions())
+        await server_session.accept()
+
+    async with connect_task.result() as client_session, server_session:
+        yield client_session, server_session
 
 
 @pytest.fixture
-def server_app(request: pytest.FixtureRequest, server_config: ServerConfig) -> ServerApp:
-    config_overrides = getattr(request, "param", {})
-    if config_overrides and isinstance(config_overrides, dict):
-        custom_config = server_config.update(**config_overrides)
-        app = ServerApp(config=custom_config)
-    else:
-        app = ServerApp(config=server_config)
-
-    return app
+def url(server: WebTransportServer) -> str:
+    host, port = server.local_addresses[0]
+    return f"https://{host}:{port}/"

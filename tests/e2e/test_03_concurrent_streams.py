@@ -41,25 +41,25 @@ async def test_sequential_streams() -> bool:
 
     try:
         async with WebTransportClient(config=config) as client:
-            session = await client.connect(url=SERVER_URL)
-            logger.info("Connected, session ID: %d", session.session_id)
+            async with await client.connect(url=SERVER_URL) as session:
+                logger.info("Connected, session ID: %d", session.session_id)
 
-            for i in range(num_streams):
-                stream_num = i + 1
-                logger.info("Creating and testing stream %d/%d...", stream_num, num_streams)
-                stream = await session.create_bidirectional_stream()
-                test_msg = f"Sequential stream {stream_num}".encode()
-                await stream.write_all(data=test_msg, end_stream=True)
-                response = await stream.read_all()
+                for i in range(num_streams):
+                    stream_num = i + 1
+                    logger.info("Creating and testing stream %d/%d...", stream_num, num_streams)
+                    stream = await session.create_bidirectional_stream()
+                    test_msg = f"Sequential stream {stream_num}".encode()
+                    await stream.write_all(data=test_msg, end_stream=True)
+                    response = await stream.read_all()
 
-                expected = b"ECHO: " + test_msg
-                if response != expected:
-                    logger.error("FAILURE: Stream %d echo failed", stream_num)
-                    return False
-                logger.info("Stream %d echo successful", stream_num)
+                    expected = b"ECHO: " + test_msg
+                    if response != expected:
+                        logger.error("FAILURE: Stream %d echo failed", stream_num)
+                        return False
+                    logger.info("Stream %d echo successful", stream_num)
 
-            logger.info("SUCCESS: All sequential streams worked correctly")
-            return True
+                logger.info("SUCCESS: All sequential streams worked correctly")
+                return True
     except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Test failed due to connection or timeout issue: %s", e)
         return False
@@ -98,22 +98,24 @@ async def test_concurrent_streams() -> bool:
 
     try:
         async with WebTransportClient(config=config) as client:
-            session = await client.connect(url=SERVER_URL)
-            logger.info("Starting %d concurrent stream tasks...", num_streams)
-            start_time = time.time()
+            async with await client.connect(url=SERVER_URL) as session:
+                logger.info("Starting %d concurrent stream tasks...", num_streams)
+                start_time = time.time()
 
-            tasks = [asyncio.create_task(coro=stream_task(session=session, task_id=i + 1)) for i in range(num_streams)]
-            results = await asyncio.gather(*tasks)
-            duration = time.time() - start_time
-            logger.info("All tasks completed in %.2fs", duration)
+                tasks = [
+                    asyncio.create_task(coro=stream_task(session=session, task_id=i + 1)) for i in range(num_streams)
+                ]
+                results = await asyncio.gather(*tasks)
+                duration = time.time() - start_time
+                logger.info("All tasks completed in %.2fs", duration)
 
-            success_count = sum(1 for result in results if result is True)
-            if success_count == num_streams:
-                logger.info("SUCCESS: All concurrent streams completed successfully")
-                return True
-            else:
-                logger.error("FAILURE: %d/%d concurrent streams failed", num_streams - success_count, num_streams)
-                return False
+                success_count = sum(1 for result in results if result is True)
+                if success_count == num_streams:
+                    logger.info("SUCCESS: All concurrent streams completed successfully")
+                    return True
+                else:
+                    logger.error("FAILURE: %d/%d concurrent streams failed", num_streams - success_count, num_streams)
+                    return False
     except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Test failed due to connection or timeout issue: %s", e)
         return False
@@ -131,24 +133,24 @@ async def test_stream_lifecycle() -> bool:
 
     try:
         async with WebTransportClient(config=config) as client:
-            session = await client.connect(url=SERVER_URL)
-            stream = await session.create_bidirectional_stream()
-            logger.info("Stream created: %d", stream.stream_id)
+            async with await client.connect(url=SERVER_URL) as session:
+                stream = await session.create_bidirectional_stream()
+                logger.info("Stream created: %d", stream.stream_id)
 
-            await stream.write_all(data=b"Lifecycle test", end_stream=True)
-            await stream.read_all()
-            logger.info("Data exchanged")
+                await stream.write_all(data=b"Lifecycle test", end_stream=True)
+                await stream.read_all()
+                logger.info("Data exchanged")
 
-            try:
-                await stream.write(data=b"This should fail")
-                logger.error("FAILURE: Write on a half-closed stream should not succeed")
-                return False
-            except StreamError:
-                logger.info("SUCCESS: Write on a half-closed stream correctly failed")
-                return True
-            except Exception as e:
-                logger.error("FAILURE: Unexpected error on second write: %s", e)
-                return False
+                try:
+                    await stream.write(data=b"This should fail")
+                    logger.error("FAILURE: Write on a half-closed stream should not succeed")
+                    return False
+                except StreamError:
+                    logger.info("SUCCESS: Write on a half-closed stream correctly failed")
+                    return True
+                except Exception as e:
+                    logger.error("FAILURE: Unexpected error on second write: %s", e)
+                    return False
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)
         return False
@@ -164,24 +166,24 @@ async def test_stream_stress() -> bool:
 
     try:
         async with WebTransportClient(config=config) as client:
-            session = await client.connect(url=SERVER_URL)
-            logger.info("Starting stress test with %d iterations...", num_iterations)
+            async with await client.connect(url=SERVER_URL) as session:
+                logger.info("Starting stress test with %d iterations...", num_iterations)
 
-            start_time = time.time()
-            for i in range(num_iterations):
-                stream = await session.create_bidirectional_stream()
-                test_msg = f"Stress test {i + 1}".encode()
-                await stream.write_all(data=test_msg, end_stream=True)
-                response = await stream.read_all()
-                expected = b"ECHO: " + test_msg
-                if response != expected:
-                    logger.error("FAILURE: Iteration %d echo mismatch", i + 1)
-                    return False
+                start_time = time.time()
+                for i in range(num_iterations):
+                    stream = await session.create_bidirectional_stream()
+                    test_msg = f"Stress test {i + 1}".encode()
+                    await stream.write_all(data=test_msg, end_stream=True)
+                    response = await stream.read_all()
+                    expected = b"ECHO: " + test_msg
+                    if response != expected:
+                        logger.error("FAILURE: Iteration %d echo mismatch", i + 1)
+                        return False
 
-            duration = time.time() - start_time
-            rate = num_iterations / duration if duration > 0 else float("inf")
-            logger.info("SUCCESS: %d stream operations in %.2fs (%.1f ops/s)", num_iterations, duration, rate)
-            return True
+                duration = time.time() - start_time
+                rate = num_iterations / duration if duration > 0 else float("inf")
+                logger.info("SUCCESS: %d stream operations in %.2fs (%.1f ops/s)", num_iterations, duration, rate)
+                return True
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)
         return False

@@ -1,7 +1,7 @@
-//! X509 certificate generation loading and validation subsystem.
+//! TLS certificates.
 
 use std::fs;
-use std::io;
+use std::io::{self, Error, ErrorKind};
 use std::net::IpAddr;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -14,11 +14,11 @@ use rcgen::{
     Issuer, KeyPair, KeyUsagePurpose, SanType,
 };
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime, pem::PemObject};
+use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, Error as RustlsError, SignatureScheme};
 use time::{Duration, OffsetDateTime};
 
-// Bypasses server certificate verification for insecure client connections.
 #[derive(Debug)]
 pub(crate) struct NoCertificateVerification;
 
@@ -71,25 +71,24 @@ impl ServerCertVerifier for NoCertificateVerification {
     }
 }
 
-// Self-signed certificate generation and persistence.
 pub(crate) fn generate_self_signed_cert(
     hostname: &str,
     output_dir: &Path,
     validity_days: i64,
 ) -> io::Result<(String, String, String)> {
-    let ca_params = build_ca_params(validity_days);
-    let ca_key_pair = KeyPair::generate().map_err(io::Error::other)?;
-    let ca_cert = ca_params
+    let ca_parameters = build_ca_parameters(validity_days);
+    let ca_key_pair = KeyPair::generate().map_err(Error::other)?;
+    let ca_cert = ca_parameters
         .self_signed(&ca_key_pair)
-        .map_err(io::Error::other)?;
+        .map_err(Error::other)?;
 
-    let ca_issuer = Issuer::new(ca_params, &ca_key_pair);
+    let ca_issuer = Issuer::new(ca_parameters, &ca_key_pair);
 
-    let params = build_cert_params(hostname, validity_days)?;
-    let key_pair = KeyPair::generate().map_err(io::Error::other)?;
-    let cert = params
+    let parameters = build_cert_parameters(hostname, validity_days)?;
+    let key_pair = KeyPair::generate().map_err(Error::other)?;
+    let cert = parameters
         .signed_by(&key_pair, &ca_issuer)
-        .map_err(io::Error::other)?;
+        .map_err(Error::other)?;
 
     if !output_dir.exists() {
         fs::create_dir_all(output_dir)?;
@@ -110,9 +109,9 @@ pub(crate) fn generate_self_signed_cert(
 
     #[cfg(unix)]
     {
-        let mut perms = fs::metadata(&key_path)?.permissions();
-        perms.set_mode(0o600);
-        fs::set_permissions(&key_path, perms)?;
+        let mut permissions = fs::metadata(&key_path)?.permissions();
+        permissions.set_mode(0o600);
+        fs::set_permissions(&key_path, permissions)?;
     }
 
     Ok((
@@ -122,22 +121,19 @@ pub(crate) fn generate_self_signed_cert(
     ))
 }
 
-// Extracts PEM certificate chains from the filesystem.
 pub(crate) fn load_certs(path: &Path) -> io::Result<Vec<CertificateDer<'static>>> {
     CertificateDer::pem_file_iter(path)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
-        .map(|res| res.map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e)))
+        .map_err(|e| Error::new(ErrorKind::InvalidData, e))?
+        .map(|result| result.map_err(|e| Error::new(ErrorKind::InvalidData, e)))
         .collect::<Result<Vec<_>, _>>()
 }
 
-// Extracts a PEM private key from the filesystem.
 pub(crate) fn load_private_key(path: &Path) -> io::Result<PrivateKeyDer<'static>> {
-    PrivateKeyDer::from_pem_file(path).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    PrivateKeyDer::from_pem_file(path).map_err(|e| Error::new(ErrorKind::InvalidData, e))
 }
 
-// Root CA parameter construction.
-fn build_ca_params(validity_days: i64) -> CertificateParams {
-    let mut params = CertificateParams::default();
+fn build_ca_parameters(validity_days: i64) -> CertificateParams {
+    let mut parameters = CertificateParams::default();
 
     let mut distinguished_name = DistinguishedName::new();
     distinguished_name.push(DnType::CountryName, "US");
@@ -145,21 +141,20 @@ fn build_ca_params(validity_days: i64) -> CertificateParams {
     distinguished_name.push(DnType::LocalityName, "San Francisco");
     distinguished_name.push(DnType::OrganizationName, "WTransport");
     distinguished_name.push(DnType::CommonName, "WTransport Root CA");
-    params.distinguished_name = distinguished_name;
+    parameters.distinguished_name = distinguished_name;
 
-    params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
+    parameters.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    parameters.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
 
     let now = OffsetDateTime::now_utc();
-    params.not_before = now - Duration::hours(1);
-    params.not_after = now + Duration::days(validity_days);
+    parameters.not_before = now - Duration::hours(1);
+    parameters.not_after = now + Duration::days(validity_days);
 
-    params
+    parameters
 }
 
-// Certificate parameter construction with defaults.
-fn build_cert_params(hostname: &str, validity_days: i64) -> io::Result<CertificateParams> {
-    let mut params = CertificateParams::default();
+fn build_cert_parameters(hostname: &str, validity_days: i64) -> io::Result<CertificateParams> {
+    let mut parameters = CertificateParams::default();
 
     let mut distinguished_name = DistinguishedName::new();
     distinguished_name.push(DnType::CountryName, "US");
@@ -167,29 +162,29 @@ fn build_cert_params(hostname: &str, validity_days: i64) -> io::Result<Certifica
     distinguished_name.push(DnType::LocalityName, "San Francisco");
     distinguished_name.push(DnType::OrganizationName, "WTransport");
     distinguished_name.push(DnType::CommonName, hostname);
-    params.distinguished_name = distinguished_name;
+    parameters.distinguished_name = distinguished_name;
 
     let subject_alt_name = if let Ok(ip) = IpAddr::from_str(hostname) {
         SanType::IpAddress(ip)
     } else {
-        let ia5 = Ia5String::try_from(hostname)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        let ia5 =
+            Ia5String::try_from(hostname).map_err(|e| Error::new(ErrorKind::InvalidInput, e))?;
         SanType::DnsName(ia5)
     };
 
-    params.subject_alt_names = vec![subject_alt_name];
+    parameters.subject_alt_names = vec![subject_alt_name];
 
-    params.key_usages = vec![
+    parameters.key_usages = vec![
         KeyUsagePurpose::DigitalSignature,
         KeyUsagePurpose::KeyEncipherment,
     ];
-    params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+    parameters.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
 
     let now = OffsetDateTime::now_utc();
-    params.not_before = now - Duration::hours(1);
-    params.not_after = now + Duration::days(validity_days);
+    parameters.not_before = now - Duration::hours(1);
+    parameters.not_after = now + Duration::days(validity_days);
 
-    Ok(params)
+    Ok(parameters)
 }
 
 #[cfg(test)]

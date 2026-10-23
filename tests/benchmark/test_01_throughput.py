@@ -8,7 +8,6 @@ from collections.abc import Callable, Coroutine
 from typing import Any, Final, cast
 
 import pytest
-import uvloop
 from pytest_benchmark.fixture import BenchmarkFixture
 
 from pywebtransport import ClientConfig, WebTransportClient, WebTransportSession
@@ -19,7 +18,7 @@ PAYLOAD_SIZE: Final[int] = 100 * 1024 * 1024
 STREAMS_PER_ROUND: Final[int] = 4
 STATIC_VIEW: Final[memoryview] = memoryview(b"x" * PAYLOAD_SIZE)
 
-logging.basicConfig(level=logging.CRITICAL)
+logging.basicConfig(level=logging.CRITICAL, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 
 @pytest.fixture(scope="module")
@@ -48,7 +47,7 @@ class TestStreamThroughput:
             await stream.write(data=cmd)
             received = 0
             while True:
-                chunk = await stream.read(max_bytes=PAYLOAD_SIZE)
+                chunk = await stream.read(max_size=PAYLOAD_SIZE)
                 if not chunk:
                     break
                 received += len(chunk)
@@ -70,7 +69,7 @@ class TestStreamThroughput:
             async def receiver() -> int:
                 received = 0
                 while True:
-                    chunk = await stream.read(max_bytes=PAYLOAD_SIZE)
+                    chunk = await stream.read(max_size=PAYLOAD_SIZE)
                     if not chunk:
                         break
                     received += len(chunk)
@@ -95,20 +94,16 @@ class TestStreamThroughput:
         url = f"{SERVER_URL_BASE}{endpoint}"
 
         async def run_scenario() -> int:
-            total_bytes = 0
             async with WebTransportClient(config=client_config) as client:
-                session = await client.connect(url=url)
-                tasks = [stream_handler(session) for _ in range(STREAMS_PER_ROUND)]
-                results = await asyncio.gather(*tasks)
-                total_bytes = sum(results)
-                await session.close()
-            return total_bytes
+                async with await client.connect(url=url) as session:
+                    results = await asyncio.gather(*[stream_handler(session) for _ in range(STREAMS_PER_ROUND)])
+                    return sum(results)
 
         for _ in range(WARMUP_ROUNDS):
-            uvloop.run(run_scenario())
+            asyncio.run(run_scenario())
         gc.collect()
 
-        result_bytes = benchmark(lambda: uvloop.run(run_scenario()))
+        result_bytes = benchmark(lambda: asyncio.run(run_scenario()))
 
         stats = cast(dict[str, Any], benchmark.stats)
         mean_time = stats["mean"]

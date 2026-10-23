@@ -3,21 +3,21 @@
 import asyncio
 import logging
 import ssl
-import struct
 import sys
 import time
 import traceback
+from collections.abc import AsyncGenerator, Callable, Coroutine
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator, Callable, Coroutine, Final
+from typing import Any, Final
 from urllib.parse import urlencode
 
 from pywebtransport import (
     ClientConfig,
     ClientError,
-    ConnectionError,
-    SessionClosedError,
-    SessionError,
+    ErrorCodes,
+    Event,
     StreamError,
+    WebTransportBidirectionalStream,
     WebTransportClient,
     WebTransportSession,
 )
@@ -35,9 +35,7 @@ ERR_I_LIED: Final[int] = 0x03
 ERR_SUS: Final[int] = 0x03
 ERR_WHATEVER: Final[int] = 0x02
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", datefmt="%H:%M:%S"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(name="test_devious_baton")
 
 
@@ -45,46 +43,32 @@ class TestFailure(Exception):
     """Exception raised when a test assertion fails."""
 
 
-class VarInt:
-    """Helper for parsing/encoding QUIC VarInts."""
-
-    @staticmethod
-    def encode(value: int) -> bytes:
-        if value < 0x40:
-            return struct.pack("!B", value)
-        elif value < 0x4000:
-            return struct.pack("!H", value | 0x4000)
-        elif value < 0x40000000:
-            return struct.pack("!L", value | 0x80000000)
-        else:
-            return struct.pack("!Q", value | 0xC000000000000000)
-
-    @staticmethod
-    def parse(data: bytes) -> tuple[int, int]:
-        if not data:
-            raise ValueError("Empty data")
-
-        first = data[0]
-        if first < 0x40:
-            return first, 1
-        elif first < 0x80:
-            if len(data) < 2:
-                raise ValueError("Truncated VarInt")
-            return struct.unpack("!H", bytes([first & 0x3F]) + data[1:2])[0], 2
-        elif first < 0xC0:
-            if len(data) < 4:
-                raise ValueError("Truncated VarInt")
-            return struct.unpack("!L", bytes([first & 0x3F]) + data[1:4])[0], 4
-        else:
-            if len(data) < 8:
-                raise ValueError("Truncated VarInt")
-            return struct.unpack("!Q", bytes([first & 0x3F]) + data[1:8])[0], 8
+def create_baton_message(*, baton: int, padding_length: int = 0) -> bytes:
+    """Create a Baton message."""
+    return encode_varint(value=padding_length) + b"\x00" * padding_length + bytes([baton])
 
 
-def create_payload(baton_value: int, padding_len: int = 0) -> bytes:
-    """Create a baton message payload."""
-    padding = b"\x00" * padding_len
-    return VarInt.encode(padding_len) + padding + bytes([baton_value])
+def encode_varint(*, value: int) -> bytes:
+    """Encode an integer as a QUIC variable-length integer."""
+    if value < 0x40:
+        return value.to_bytes(length=1)
+    if value < 0x4000:
+        return (value | 0x4000).to_bytes(length=2)
+    if value < 0x40000000:
+        return (value | 0x80000000).to_bytes(length=4)
+    return (value | 0xC000000000000000).to_bytes(length=8)
+
+
+def parse_varint(*, data: bytes) -> tuple[int, int]:
+    """Parse a QUIC variable-length integer, returning its value and encoded size."""
+    if not data:
+        raise ValueError("Empty data")
+
+    size = 1 << (data[0] >> 6)
+    if len(data) < size:
+        raise ValueError("Truncated varint")
+
+    return int.from_bytes(bytes([data[0] & 0x3F]) + data[1:size]), size
 
 
 class DeviousBatonTest:
@@ -107,9 +91,9 @@ class DeviousBatonTest:
             self.test_01_invalid_version,
             self.test_02_invalid_count,
             self.test_03_invalid_baton,
-            self.test_04_server_initiates_uni_stream,
-            self.test_05_flow_uni_to_bidi,
-            self.test_06_flow_bidi_self_to_uni,
+            self.test_04_server_initiates_unidirectional_stream,
+            self.test_05_flow_unidirectional_to_bidirectional,
+            self.test_06_flow_self_bidirectional_to_unidirectional,
             self.test_07_datagram_trigger,
             self.test_08_random_padding,
             self.test_09_malformed_baton,
@@ -126,97 +110,67 @@ class DeviousBatonTest:
 
     async def test_01_invalid_version(self) -> None:
         """Verify server rejects invalid protocol version."""
-        url = self._build_url(version=99)
-        try:
-            async with self._connect(url=url):
-                pass
-        except (ClientError, ConnectionError, SessionError) as e:
-            if "0x10b" in str(e).lower() or "400" in str(e):
-                return
-        raise TestFailure("Server accepted invalid version 99")
+        await self._expect_rejection(url=self._build_url(version=99), description="invalid version 99")
 
     async def test_02_invalid_count(self) -> None:
         """Verify server rejects excessive baton count."""
-        url = self._build_url(count=999999)
-        try:
-            async with self._connect(url=url):
-                pass
-        except (ClientError, ConnectionError, SessionError) as e:
-            if "0x10b" in str(e).lower() or "400" in str(e):
-                return
-        raise TestFailure("Server accepted invalid count 999999")
+        await self._expect_rejection(url=self._build_url(count=999999), description="invalid count 999999")
 
     async def test_03_invalid_baton(self) -> None:
         """Verify server rejects invalid baton value."""
-        url = self._build_url(baton=0)
-        try:
-            async with self._connect(url=url):
-                pass
-        except (ClientError, ConnectionError, SessionError) as e:
-            if "0x10b" in str(e).lower() or "400" in str(e):
-                return
-        raise TestFailure("Server accepted invalid baton value 0")
+        await self._expect_rejection(url=self._build_url(baton=0), description="invalid baton value 0")
 
-    async def test_04_server_initiates_uni_stream(self) -> None:
+    async def test_04_server_initiates_unidirectional_stream(self) -> None:
         """Verify server initiates the protocol with unidirectional streams."""
         count = 3
         url = self._build_url(count=count, baton=10)
 
         async with self._connect(url=url) as session:
             streams_received = 0
-            event = asyncio.Event()
+            all_received = asyncio.Event()
 
-            async def accept_uni() -> None:
+            async def count_unidirectional_streams() -> None:
                 nonlocal streams_received
-                try:
-                    while True:
-                        _ = await session.accept_unidirectional_stream()
-                        streams_received += 1
-                        if streams_received >= count:
-                            event.set()
-                except SessionClosedError:
-                    pass
+                async for _ in session.incoming_unidirectional_streams():
+                    streams_received += 1
+                    if streams_received >= count:
+                        all_received.set()
 
-            task = asyncio.create_task(coro=accept_uni())
+            task = asyncio.create_task(coro=count_unidirectional_streams())
 
             try:
                 async with asyncio.timeout(delay=5.0):
-                    await event.wait()
+                    await all_received.wait()
             except asyncio.TimeoutError:
                 raise TestFailure("Server did not initiate unidirectional stream") from None
             finally:
                 task.cancel()
 
-    async def test_05_flow_uni_to_bidi(self) -> None:
+    async def test_05_flow_unidirectional_to_bidirectional(self) -> None:
         """Verify Unidirectional -> Bidirectional stream switching logic."""
         url = self._build_url(baton=10)
 
         async with self._connect(url=url) as session:
             reply_received = asyncio.Event()
 
-            async def accept_uni() -> None:
-                try:
-                    while True:
-                        stream = await session.accept_unidirectional_stream()
+            async def read_reply(*, stream: WebTransportBidirectionalStream) -> None:
+                if await stream.read_all():
+                    reply_received.set()
+
+            async def reply_unidirectional_streams() -> None:
+                async with asyncio.TaskGroup() as task_group:
+                    async for stream in session.incoming_unidirectional_streams():
                         payload = await stream.read_all()
                         if not payload:
                             continue
 
-                        bidi = await session.create_bidirectional_stream()
+                        reply_stream = await session.create_bidirectional_stream()
+                        task_group.create_task(coro=read_reply(stream=reply_stream))
+                        await reply_stream.write(
+                            data=create_baton_message(baton=(payload[-1] + 1) % 256), end_stream=True
+                        )
 
-                        async def read_reply() -> None:
-                            data = await bidi.read_all()
-                            if data:
-                                reply_received.set()
-
-                        asyncio.create_task(coro=read_reply())
-
-                        next_val = (payload[-1] + 1) % 256
-                        await bidi.write(data=create_payload(next_val), end_stream=True)
-                except SessionClosedError:
-                    pass
-
-            task = asyncio.create_task(coro=accept_uni())
+            task = asyncio.create_task(coro=reply_unidirectional_streams())
 
             try:
                 async with asyncio.timeout(delay=5.0):
@@ -226,7 +180,7 @@ class DeviousBatonTest:
             finally:
                 task.cancel()
 
-    async def test_06_flow_bidi_self_to_uni(self) -> None:
+    async def test_06_flow_self_bidirectional_to_unidirectional(self) -> None:
         """Verify Bidirectional (Self) -> Unidirectional stream switching logic."""
         url = self._build_url(count=1, baton=10)
 
@@ -234,38 +188,29 @@ class DeviousBatonTest:
             server_bidi_opened = asyncio.Event()
             server_uni_opened = asyncio.Event()
 
-            async def accept_bidi() -> None:
+            async def reply_bidirectional_stream(*, stream: WebTransportBidirectionalStream) -> None:
                 try:
-                    while True:
-                        stream = await session.accept_bidirectional_stream()
+                    payload = await stream.read_all()
+                    if payload:
+                        await stream.write(data=create_baton_message(baton=(payload[-1] + 1) % 256), end_stream=True)
+                except StreamError:
+                    pass
+
+            async def reply_bidirectional_streams() -> None:
+                async with asyncio.TaskGroup() as task_group:
+                    async for stream in session.incoming_bidirectional_streams():
                         server_bidi_opened.set()
+                        task_group.create_task(coro=reply_bidirectional_stream(stream=stream))
 
-                        async def handle_server_bidi(s: Any) -> None:
-                            try:
-                                payload = await s.read_all()
-                                if payload:
-                                    next_val = (payload[-1] + 1) % 256
-                                    await s.write(data=create_payload(next_val), end_stream=True)
-                            except StreamError:
-                                pass
+            async def observe_unidirectional_streams() -> None:
+                async for _ in session.incoming_unidirectional_streams():
+                    server_uni_opened.set()
 
-                        asyncio.create_task(coro=handle_server_bidi(stream))
-                except SessionClosedError:
-                    pass
+            bidirectional_task = asyncio.create_task(coro=reply_bidirectional_streams())
+            unidirectional_task = asyncio.create_task(coro=observe_unidirectional_streams())
 
-            async def accept_uni() -> None:
-                try:
-                    while True:
-                        _ = await session.accept_unidirectional_stream()
-                        server_uni_opened.set()
-                except SessionClosedError:
-                    pass
-
-            task_bidi = asyncio.create_task(coro=accept_bidi())
-            task_uni = asyncio.create_task(coro=accept_uni())
-
-            uni = await session.create_unidirectional_stream()
-            await uni.write(data=create_payload(50), end_stream=True)
+            stream = await session.create_unidirectional_stream()
+            await stream.write(data=create_baton_message(baton=50), end_stream=True)
 
             try:
                 async with asyncio.timeout(delay=5.0):
@@ -273,30 +218,27 @@ class DeviousBatonTest:
                     await server_uni_opened.wait()
             except asyncio.TimeoutError:
                 if not server_bidi_opened.is_set():
-                    raise TestFailure("Server did not open Bidi stream in response to Uni") from None
-                raise TestFailure("Server did not open Uni stream in response to Bidi (Self)") from None
+                    raise TestFailure(
+                        "Server did not open a bidirectional stream in response to a unidirectional stream"
+                    ) from None
+                raise TestFailure(
+                    "Server did not open a unidirectional stream in response to its own bidirectional stream"
+                ) from None
             finally:
-                task_bidi.cancel()
-                task_uni.cancel()
+                bidirectional_task.cancel()
+                unidirectional_task.cancel()
 
     async def test_07_datagram_trigger(self) -> None:
         """Verify server sends datagram when baton value modulo 7 is 0."""
         url = self._build_url(count=1, baton=10)
 
         async with self._connect(url=url) as session:
-            dgram_received = asyncio.Event()
-
-            def on_dgram(evt: Any) -> None:
-                dgram_received.set()
-
-            session.events.on(event_type=EventType.DATAGRAM_RECEIVED, handler=on_dgram)
-
             stream = await session.create_unidirectional_stream()
-            await stream.write(data=create_payload(7), end_stream=True)
+            await stream.write(data=create_baton_message(baton=7), end_stream=True)
 
             try:
                 async with asyncio.timeout(delay=5.0):
-                    await dgram_received.wait()
+                    await session.read_datagram()
             except asyncio.TimeoutError:
                 raise TestFailure("Server did not send datagram for baton % 7 == 0") from None
 
@@ -307,25 +249,17 @@ class DeviousBatonTest:
         async with self._connect(url=url) as session:
             padding_verified = asyncio.Event()
 
-            async def accept_uni() -> None:
-                try:
-                    while True:
-                        stream = await session.accept_unidirectional_stream()
-                        data = await stream.read_all()
-                        if not data:
-                            continue
+            async def check_unidirectional_streams() -> None:
+                async for stream in session.incoming_unidirectional_streams():
+                    data = await stream.read_all()
+                    try:
+                        padding_length, size = parse_varint(data=data)
+                    except ValueError:
+                        continue
+                    if padding_length > 0 and len(data) == size + padding_length + 1:
+                        padding_verified.set()
 
-                        try:
-                            p_len, header_len = VarInt.parse(data)
-                            if len(data) == header_len + p_len + 1:
-                                if p_len > 0:
-                                    padding_verified.set()
-                        except Exception:
-                            pass
-                except SessionClosedError:
-                    pass
-
-            task = asyncio.create_task(coro=accept_uni())
+            task = asyncio.create_task(coro=check_unidirectional_streams())
 
             try:
                 async with asyncio.timeout(delay=5.0):
@@ -340,22 +274,22 @@ class DeviousBatonTest:
         url = self._build_url(count=1, baton=10)
 
         async with self._connect(url=url) as session:
-            close_event = asyncio.Event()
-            received_error = None
+            session_closed = asyncio.Event()
+            received_error: int | None = None
 
-            def on_close(evt: Any) -> None:
+            def on_close(event: Event) -> None:
                 nonlocal received_error
-                received_error = evt.data.get("error_code")
-                close_event.set()
+                received_error = event.data.get("error_code") if isinstance(event.data, dict) else None
+                session_closed.set()
 
             session.events.on(event_type=EventType.SESSION_CLOSED, handler=on_close)
 
             stream = await session.create_unidirectional_stream()
-            await stream.write(data=VarInt.encode(100) + b"\x00", end_stream=True)
+            await stream.write(data=encode_varint(value=100) + b"\x00", end_stream=True)
 
             try:
                 async with asyncio.timeout(delay=5.0):
-                    await close_event.wait()
+                    await session_closed.wait()
             except asyncio.TimeoutError:
                 raise TestFailure("Server did not close session on malformed baton") from None
 
@@ -367,30 +301,19 @@ class DeviousBatonTest:
         url = self._build_url(count=1, baton=10)
 
         async with self._connect(url=url) as session:
-            close_event = asyncio.Event()
-            received_error = None
+            session_closed = asyncio.Event()
+            session.events.on(event_type=EventType.SESSION_CLOSED, handler=lambda event: session_closed.set())
 
-            def on_close(evt: Any) -> None:
-                nonlocal received_error
-                received_error = evt.data.get("error_code")
-                close_event.set()
+            async def reply_unexpected_batons() -> None:
+                async for _ in session.incoming_unidirectional_streams():
+                    reply_stream = await session.create_bidirectional_stream()
+                    await reply_stream.write(data=create_baton_message(baton=99), end_stream=True)
 
-            session.events.on(event_type=EventType.SESSION_CLOSED, handler=on_close)
-
-            async def accept_uni() -> None:
-                try:
-                    while True:
-                        _ = await session.accept_unidirectional_stream()
-                        reply = await session.create_bidirectional_stream()
-                        await reply.write(data=create_payload(99), end_stream=True)
-                except SessionClosedError:
-                    pass
-
-            task = asyncio.create_task(coro=accept_uni())
+            task = asyncio.create_task(coro=reply_unexpected_batons())
 
             try:
                 async with asyncio.timeout(delay=5.0):
-                    await close_event.wait()
+                    await session_closed.wait()
             except asyncio.TimeoutError:
                 raise TestFailure("Server did not close session on unexpected baton value") from None
             finally:
@@ -403,21 +326,16 @@ class DeviousBatonTest:
         async with self._connect(url=url) as session:
             reset_received = asyncio.Event()
 
-            async def accept_uni() -> None:
-                try:
-                    while True:
-                        stream = await session.accept_unidirectional_stream()
+            def on_reset(event: Event) -> None:
+                if isinstance(event.data, dict) and event.data.get("error_code") == ERR_WHATEVER:
+                    reset_received.set()
 
-                        def on_reset(e: Any) -> None:
-                            if e.data.get("error_code") == ERR_WHATEVER:
-                                reset_received.set()
+            async def stop_unidirectional_streams() -> None:
+                async for stream in session.incoming_unidirectional_streams():
+                    stream.events.on(event_type=EventType.STREAM_RESET_RECEIVED, handler=on_reset)
+                    await stream.stop_receiving(error_code=ERR_IDC)
 
-                        stream.events.on(event_type=EventType.STREAM_RESET_RECEIVED, handler=on_reset)
-                        await stream.stop_receiving(error_code=ERR_IDC)
-                except SessionClosedError:
-                    pass
-
-            task = asyncio.create_task(coro=accept_uni())
+            task = asyncio.create_task(coro=stop_unidirectional_streams())
 
             try:
                 async with asyncio.timeout(delay=5.0):
@@ -433,7 +351,7 @@ class DeviousBatonTest:
 
         async with self._connect(url=url) as session:
             session_closed = asyncio.Event()
-            session.events.on(event_type=EventType.SESSION_CLOSED, handler=lambda e: session_closed.set())
+            session.events.on(event_type=EventType.SESSION_CLOSED, handler=lambda event: session_closed.set())
 
             stream = await session.create_unidirectional_stream()
             await stream.write(data=b"padding")
@@ -451,31 +369,27 @@ class DeviousBatonTest:
         url = self._build_url(count=1, baton=255)
 
         async with self._connect(url=url) as session:
-            close_event = asyncio.Event()
-            close_code = None
+            session_closed = asyncio.Event()
+            close_code: int | None = None
 
-            def on_close(evt: Any) -> None:
+            def on_close(event: Event) -> None:
                 nonlocal close_code
-                close_code = evt.data.get("error_code")
-                close_event.set()
+                close_code = event.data.get("error_code") if isinstance(event.data, dict) else None
+                session_closed.set()
 
             session.events.on(event_type=EventType.SESSION_CLOSED, handler=on_close)
 
-            async def accept_uni() -> None:
-                try:
-                    while True:
-                        stream = await session.accept_unidirectional_stream()
-                        await stream.read_all()
-                        reply = await session.create_bidirectional_stream()
-                        await reply.write(data=create_payload(0), end_stream=True)
-                except SessionClosedError:
-                    pass
+            async def reply_final_batons() -> None:
+                async for stream in session.incoming_unidirectional_streams():
+                    await stream.read_all()
+                    reply_stream = await session.create_bidirectional_stream()
+                    await reply_stream.write(data=create_baton_message(baton=0), end_stream=True)
 
-            task = asyncio.create_task(coro=accept_uni())
+            task = asyncio.create_task(coro=reply_final_batons())
 
             try:
                 async with asyncio.timeout(delay=5.0):
-                    await close_event.wait()
+                    await session_closed.wait()
             except asyncio.TimeoutError:
                 raise TestFailure("Server did not close session gracefully") from None
             finally:
@@ -486,22 +400,16 @@ class DeviousBatonTest:
 
     def _build_url(self, **kwargs: Any) -> str:
         """Construct the connection URL with query parameters."""
-        query = urlencode(query=kwargs)
-        return f"https://{SERVER_HOST}:{SERVER_PORT}{BASE_PATH}?{query}"
+        return f"https://{SERVER_HOST}:{SERVER_PORT}{BASE_PATH}?{urlencode(query=kwargs)}"
 
     @asynccontextmanager
-    async def _connect(self, url: str) -> AsyncGenerator[WebTransportSession, None]:
+    async def _connect(self, *, url: str) -> AsyncGenerator[WebTransportSession, None]:
         """Establish a new WebTransport session context for testing."""
         async with WebTransportClient(config=self._config) as client:
-            try:
-                session = await client.connect(url=url)
+            async with await client.connect(url=url) as session:
                 yield session
-                if not session.is_closed:
-                    await session.close()
-            except Exception:
-                raise
 
-    async def _execute_test_with_retry(self, name: str, test_func: Callable[[], Coroutine[Any, Any, None]]) -> None:
+    async def _execute_test_with_retry(self, *, name: str, test_func: Callable[[], Coroutine[Any, Any, None]]) -> None:
         """Execute a test case with retries."""
         for attempt in range(1, self.TEST_MAX_RETRIES + 1):
             try:
@@ -524,6 +432,17 @@ class DeviousBatonTest:
                     logger.warning("RETRY: %s error (%s) - attempt %d/%d", name, e, attempt, self.TEST_MAX_RETRIES)
                     await asyncio.sleep(delay=self.TEST_RETRY_DELAY)
 
+    async def _expect_rejection(self, *, url: str, description: str) -> None:
+        """Verify the server rejects the session request."""
+        try:
+            async with self._connect(url=url):
+                pass
+        except ClientError as e:
+            if e.error_code == ErrorCodes.H3_REQUEST_REJECTED:
+                return
+            raise TestFailure(f"Session failed with an unexpected error: {e}") from e
+        raise TestFailure(f"Server accepted {description}")
+
     def _print_results(self) -> None:
         """Output the final test report."""
         logger.info("-" * 60)
@@ -533,7 +452,7 @@ class DeviousBatonTest:
         if passed != total:
             sys.exit(1)
 
-    async def _run_test(self, test_func: Callable[[], Coroutine[Any, Any, None]]) -> None:
+    async def _run_test(self, *, test_func: Callable[[], Coroutine[Any, Any, None]]) -> None:
         """Execute a single test case with logging and error handling."""
         name = test_func.__name__
         logger.info("RUNNING: %s", name)

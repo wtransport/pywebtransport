@@ -8,10 +8,10 @@ use crate::common::types::Headers;
 
 fn create_dummy_headers(count: usize) -> Headers {
     (0..count)
-        .map(|i| {
+        .map(|index| {
             (
-                Bytes::from(format!("x-header-name-{i}")),
-                Bytes::from(format!("x-header-value-{i}")),
+                Bytes::from(format!("x-header-name-{index}")),
+                Bytes::from(format!("x-header-value-{index}")),
             )
         })
         .collect()
@@ -37,12 +37,12 @@ fn test_abandon_header_block_active_stream() {
         assert_eq!("ok", "err");
         unreachable!()
     };
-    let Ok((hb2, _)) = encoder.encode(stream_id, &headers) else {
+    let Ok((header_block, _)) = encoder.encode(stream_id, &headers) else {
         assert_eq!("ok", "err");
         unreachable!()
     };
 
-    let Ok((_, status)) = decoder.decode_header(stream_id, Bytes::from(hb2)) else {
+    let Ok((_, status)) = decoder.decode_header(stream_id, Bytes::from(header_block)) else {
         assert_eq!("ok", "err");
         unreachable!()
     };
@@ -91,16 +91,16 @@ fn test_decoder_blocking_and_resumption_logic() {
         unreachable!()
     };
 
-    let Ok((_, enc_data_1)) = encoder.encode(99, &headers) else {
+    let Ok((_, encoder_instructions_1)) = encoder.encode(99, &headers) else {
         assert_eq!("ok", "err");
         unreachable!()
     };
-    let Ok((hb2, enc_data_2)) = encoder.encode(stream_id, &headers) else {
+    let Ok((header_block, encoder_instructions_2)) = encoder.encode(stream_id, &headers) else {
         assert_eq!("ok", "err");
         unreachable!()
     };
 
-    let Ok((_, status)) = decoder.decode_header(stream_id, Bytes::from(hb2)) else {
+    let Ok((_, status)) = decoder.decode_header(stream_id, Bytes::from(header_block)) else {
         assert_eq!("ok", "err");
         unreachable!()
     };
@@ -108,23 +108,23 @@ fn test_decoder_blocking_and_resumption_logic() {
     assert!(matches!(status, DecodeStatus::Blocked));
     assert!(decoder.pending_blocks.contains_key(&stream_id));
 
-    let Ok(_) = decoder.feed_encoder(&enc_data_1) else {
+    let Ok(_) = decoder.feed_encoder(&encoder_instructions_1) else {
         assert_eq!("ok", "err");
         unreachable!()
     };
-    let Ok(_) = decoder.feed_encoder(&enc_data_2) else {
+    let Ok(_) = decoder.feed_encoder(&encoder_instructions_2) else {
         assert_eq!("ok", "err");
         unreachable!()
     };
 
     let result = decoder.resume_header(stream_id);
 
-    let Ok((_, resume_res)) = result else {
+    let Ok((_, resumed_headers)) = result else {
         assert_eq!("ok", "err");
         unreachable!()
     };
 
-    assert!(matches!(resume_res, Some(ref h) if h == &headers));
+    assert!(matches!(resumed_headers, Some(ref decoded_headers) if decoded_headers == &headers));
     assert!(!decoder.pending_blocks.contains_key(&stream_id));
 }
 
@@ -162,13 +162,14 @@ fn test_decoder_pending_block_capacity_limit_dos_protection() {
         assert_eq!("ok", "err");
         unreachable!()
     };
-    let Ok((hb2, _)) = encoder.encode(1, &headers) else {
+    let Ok((header_block, _)) = encoder.encode(1, &headers) else {
         assert_eq!("ok", "err");
         unreachable!()
     };
 
     for stream_id in 2..=(DECODER_PENDING_BLOCK_CAPACITY as u64 + 1) {
-        let Ok((_, status)) = decoder.decode_header(stream_id, Bytes::from(hb2.clone())) else {
+        let Ok((_, status)) = decoder.decode_header(stream_id, Bytes::from(header_block.clone()))
+        else {
             assert_eq!("ok", "err");
             unreachable!()
         };
@@ -177,7 +178,7 @@ fn test_decoder_pending_block_capacity_limit_dos_protection() {
 
     let exceed_stream_id = DECODER_PENDING_BLOCK_CAPACITY as u64 + 2;
 
-    let result = decoder.decode_header(exceed_stream_id, Bytes::from(hb2));
+    let result = decoder.decode_header(exceed_stream_id, Bytes::from(header_block));
 
     assert!(matches!(result, Err(QpackError::DecoderError)));
 }
@@ -215,11 +216,13 @@ fn test_encoder_apply_settings_high_limits() {
 }
 
 #[test]
-fn test_encoder_feed_decoder_noop_safely() {
+fn test_encoder_feed_malformed_decoder_instructions() {
     let mut encoder = Encoder::new(4096, 100);
-    let dummy_data = vec![0x00, 0x01];
+    let malformed_data = vec![0x00, 0x01];
 
-    encoder.feed_decoder(&dummy_data);
+    let result = encoder.feed_decoder(&malformed_data);
+
+    assert!(matches!(result, Err(QpackError::EncoderError)));
 }
 
 #[test]
@@ -289,12 +292,12 @@ fn test_header_lsxpack_conversion_integrity() {
         unreachable!()
     };
 
-    let lsx = header.create_lsxpack_header();
+    let lsxpack_header = header.create_lsxpack_header();
 
-    assert_eq!(lsx.name_len, expected_name_len);
-    assert_eq!(lsx.val_len, expected_val_len);
-    assert_eq!(lsx.name_offset, 0);
-    assert_eq!(lsx.val_offset, expected_val_offset);
+    assert_eq!(lsxpack_header.name_len, expected_name_len);
+    assert_eq!(lsxpack_header.val_len, expected_val_len);
+    assert_eq!(lsxpack_header.name_offset, 0);
+    assert_eq!(lsxpack_header.val_offset, expected_val_offset);
 }
 
 #[test]
@@ -304,12 +307,12 @@ fn test_resume_header_non_existent_stream() {
 
     let result = decoder.resume_header(stream_id);
 
-    let Ok((_, h_opt)) = result else {
+    let Ok((_, resumed_headers)) = result else {
         assert_eq!("ok", "err");
         unreachable!()
     };
 
-    assert!(h_opt.is_none());
+    assert!(resumed_headers.is_none());
 }
 
 #[test]
@@ -322,23 +325,28 @@ fn test_round_trip_simple_flow() {
         (Bytes::from(":path"), Bytes::from("/index.html")),
     ];
 
-    let Ok((header_block, enc_data)) = encoder.encode(stream_id, &headers) else {
+    let Ok((header_block, encoder_instructions)) = encoder.encode(stream_id, &headers) else {
         assert_eq!("ok", "err");
         unreachable!()
     };
-    let Ok(_) = decoder.feed_encoder(&enc_data) else {
+    let Ok(_) = decoder.feed_encoder(&encoder_instructions) else {
         assert_eq!("ok", "err");
         unreachable!()
     };
 
     let result = decoder.decode_header(stream_id, Bytes::from(header_block));
 
-    let Ok((dec_instructions, status)) = result else {
+    let Ok((decoder_instructions, status)) = result else {
         assert_eq!("ok", "err");
         unreachable!()
     };
 
-    encoder.feed_decoder(&dec_instructions);
+    let Ok(()) = encoder.feed_decoder(&decoder_instructions) else {
+        assert_eq!("ok", "err");
+        unreachable!()
+    };
 
-    assert!(matches!(status, DecodeStatus::Complete(ref h) if h == &headers));
+    assert!(
+        matches!(status, DecodeStatus::Done(ref decoded_headers) if decoded_headers == &headers)
+    );
 }

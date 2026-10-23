@@ -2,6 +2,7 @@
 
 from .client import WebTransportClient
 from .config import ClientConfig, ServerConfig
+from .connection import WebTransportConnection
 from .constants import ErrorCodes
 from .events import Event
 from .exceptions import (
@@ -11,16 +12,19 @@ from .exceptions import (
     DatagramError,
     ProtocolError,
     ServerError,
-    SessionClosedError,
     SessionError,
     StreamError,
     TimeoutError,
     WebTransportError,
 )
-from .framework import ServerApp
 from .server import WebTransportServer
 from .session import WebTransportSession
-from .stream import WebTransportReceiveStream, WebTransportSendStream, WebTransportStream
+from .stream import (
+    WebTransportBidirectionalStream,
+    WebTransportReceiveStream,
+    WebTransportSendStream,
+    WebTransportStream,
+)
 from .types import Address, Headers
 from .version import __version__
 
@@ -35,14 +39,14 @@ __all__: list[str] = [
     "Event",
     "Headers",
     "ProtocolError",
-    "ServerApp",
     "ServerConfig",
     "ServerError",
-    "SessionClosedError",
     "SessionError",
     "StreamError",
     "TimeoutError",
+    "WebTransportBidirectionalStream",
     "WebTransportClient",
+    "WebTransportConnection",
     "WebTransportError",
     "WebTransportReceiveStream",
     "WebTransportSendStream",

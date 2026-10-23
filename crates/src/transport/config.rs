@@ -1,22 +1,32 @@
-//! Provides QUIC transport configuration builders and mapping utilities.
+//! QUIC configuration.
 
 use std::sync::{Arc, LazyLock};
 
-use quinn_proto::crypto::rustls::{QuicClientConfig, QuicServerConfig};
-use quinn_proto::{ClientConfig, EndpointConfig, ServerConfig, TransportConfig};
-use rustls::RootCertStore;
+use quinn_proto::congestion::{
+    BbrConfig as QuicBbrConfig, CubicConfig as QuicCubicConfig, NewRenoConfig as QuicNewRenoConfig,
+};
+use quinn_proto::crypto::rustls::{
+    QuicClientConfig as QuicCryptoClientConfig, QuicServerConfig as QuicCryptoServerConfig,
+};
+use quinn_proto::{
+    ClientConfig as QuicClientConfig, EndpointConfig as QuicEndpointConfig,
+    IdleTimeout as QuicIdleTimeout, ServerConfig as QuicServerConfig,
+    TransportConfig as QuicTransportConfig, VarInt as QuicVarInt,
+};
+use rustls::crypto::ring;
 use rustls::server::WebPkiClientVerifier;
 use rustls::version::TLS13;
+use rustls::{ClientConfig, RootCertStore, ServerConfig};
 use tracing::debug;
+use webpki_roots::TLS_SERVER_ROOTS;
 
 use crate::common::config::{RustBaseConfig, RustClientConfig, RustServerConfig};
+use crate::common::constants::ALPN_PROTOCOLS;
 use crate::common::error::WebTransportError;
-use crate::tls::certificate::{NoCertificateVerification, load_certs, load_private_key};
+use crate::tls::certificate::{self, NoCertificateVerification};
 
-// Datagram queue capacity.
 const DATAGRAM_QUEUE_CAPACITY: usize = 64;
 
-// Lazily initialized global cache for native OS root certificates.
 static NATIVE_ROOT_CERTS: LazyLock<RootCertStore> = LazyLock::new(|| {
     let mut store = RootCertStore::empty();
     let native_certs = rustls_native_certs::load_native_certs();
@@ -29,19 +39,18 @@ static NATIVE_ROOT_CERTS: LazyLock<RootCertStore> = LazyLock::new(|| {
     }
 
     if valid_count == 0 {
-        store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        store.extend(TLS_SERVER_ROOTS.iter().cloned());
     }
 
     store
 });
 
-// Constructs the QUIC client configuration entity enforcing TLS 1.3 with explicit crypto provider.
 pub(crate) fn build_client_config(
     config: &RustClientConfig,
-) -> Result<ClientConfig, WebTransportError> {
+) -> Result<QuicClientConfig, WebTransportError> {
     let root_store = if let Some(ca_path) = &config.ca_certs {
         let mut store = RootCertStore::empty();
-        let certs = load_certs(ca_path)
+        let certs = certificate::load_certs(ca_path)
             .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
 
         for cert in certs {
@@ -55,17 +64,17 @@ pub(crate) fn build_client_config(
         NATIVE_ROOT_CERTS.clone()
     };
 
-    let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let builder = rustls::ClientConfig::builder_with_provider(Arc::clone(&provider))
+    let provider = Arc::new(ring::default_provider());
+    let builder = ClientConfig::builder_with_provider(Arc::clone(&provider))
         .with_protocol_versions(&[&TLS13])
         .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?
         .with_root_certificates(root_store);
 
     let mut crypto = if let (Some(cert_path), Some(key_path)) = (&config.certfile, &config.keyfile)
     {
-        let certs = load_certs(cert_path)
+        let certs = certificate::load_certs(cert_path)
             .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
-        let key = load_private_key(key_path)
+        let key = certificate::load_private_key(key_path)
             .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
 
         builder
@@ -75,11 +84,9 @@ pub(crate) fn build_client_config(
         builder.with_no_client_auth()
     };
 
-    crypto.alpn_protocols = config
-        .base
-        .alpn_protocols
+    crypto.alpn_protocols = ALPN_PROTOCOLS
         .iter()
-        .map(|s| s.as_bytes().to_vec())
+        .map(|protocol| protocol.as_bytes().to_vec())
         .collect();
 
     if !config.verify_server_certificate {
@@ -88,9 +95,9 @@ pub(crate) fn build_client_config(
             .set_certificate_verifier(Arc::new(NoCertificateVerification));
     }
 
-    let quic_crypto = QuicClientConfig::try_from(crypto)
+    let quic_crypto = QuicCryptoClientConfig::try_from(crypto)
         .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
-    let mut client_config = ClientConfig::new(Arc::new(quic_crypto));
+    let mut client_config = QuicClientConfig::new(Arc::new(quic_crypto));
     let transport_config = build_transport_config(&config.base)?;
 
     client_config.transport_config(Arc::new(transport_config));
@@ -98,22 +105,31 @@ pub(crate) fn build_client_config(
     Ok(client_config)
 }
 
-// Constructs the global QUIC endpoint configuration.
-pub(crate) fn build_endpoint_config(_config: &RustServerConfig) -> EndpointConfig {
-    EndpointConfig::default()
+pub(crate) fn build_endpoint_config(
+    config: &RustBaseConfig,
+) -> Result<QuicEndpointConfig, WebTransportError> {
+    let mut endpoint_config = QuicEndpointConfig::default();
+
+    let max_udp_payload_size = u16::try_from(config.max_udp_payload_size)
+        .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
+
+    endpoint_config
+        .max_udp_payload_size(max_udp_payload_size)
+        .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
+
+    Ok(endpoint_config)
 }
 
-// Constructs the QUIC server configuration entity enforcing TLS 1.3 with explicit crypto provider.
 pub(crate) fn build_server_config(
     config: &RustServerConfig,
-) -> Result<ServerConfig, WebTransportError> {
-    let certs = load_certs(&config.certfile)
+) -> Result<QuicServerConfig, WebTransportError> {
+    let certs = certificate::load_certs(&config.certfile)
         .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
-    let key = load_private_key(&config.keyfile)
+    let key = certificate::load_private_key(&config.keyfile)
         .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
 
-    let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let builder = rustls::ServerConfig::builder_with_provider(Arc::clone(&provider))
+    let provider = Arc::new(ring::default_provider());
+    let builder = ServerConfig::builder_with_provider(Arc::clone(&provider))
         .with_protocol_versions(&[&TLS13])
         .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
 
@@ -121,7 +137,7 @@ pub(crate) fn build_server_config(
         let mut root_store = RootCertStore::empty();
 
         if let Some(ca_path) = &config.ca_certs {
-            let ca_certs = load_certs(ca_path)
+            let ca_certs = certificate::load_certs(ca_path)
                 .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
 
             for cert in ca_certs {
@@ -146,16 +162,14 @@ pub(crate) fn build_server_config(
             .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?
     };
 
-    crypto.alpn_protocols = config
-        .base
-        .alpn_protocols
+    crypto.alpn_protocols = ALPN_PROTOCOLS
         .iter()
-        .map(|s| s.as_bytes().to_vec())
+        .map(|protocol| protocol.as_bytes().to_vec())
         .collect();
 
-    let quic_crypto = QuicServerConfig::try_from(crypto)
+    let quic_crypto = QuicCryptoServerConfig::try_from(crypto)
         .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
-    let mut server_config = ServerConfig::with_crypto(Arc::new(quic_crypto));
+    let mut server_config = QuicServerConfig::with_crypto(Arc::new(quic_crypto));
     let transport_config = build_transport_config(&config.base)?;
 
     server_config.transport_config(Arc::new(transport_config));
@@ -163,27 +177,20 @@ pub(crate) fn build_server_config(
     Ok(server_config)
 }
 
-// Maps WebTransport configuration to the underlying QUIC transport configuration.
 fn build_transport_config(
     base_config: &RustBaseConfig,
-) -> Result<TransportConfig, WebTransportError> {
-    let mut config = TransportConfig::default();
+) -> Result<QuicTransportConfig, WebTransportError> {
+    let mut config = QuicTransportConfig::default();
 
     match base_config.congestion_control_algorithm.as_str() {
         "bbr" => {
-            config.congestion_controller_factory(Arc::new(
-                quinn_proto::congestion::BbrConfig::default(),
-            ));
+            config.congestion_controller_factory(Arc::new(QuicBbrConfig::default()));
         }
         "cubic" => {
-            config.congestion_controller_factory(Arc::new(
-                quinn_proto::congestion::CubicConfig::default(),
-            ));
+            config.congestion_controller_factory(Arc::new(QuicCubicConfig::default()));
         }
         "reno" => {
-            config.congestion_controller_factory(Arc::new(
-                quinn_proto::congestion::NewRenoConfig::default(),
-            ));
+            config.congestion_controller_factory(Arc::new(QuicNewRenoConfig::default()));
         }
         unknown => {
             debug!("cfg_congestion_control_algorithm validate invalid actual={unknown}");
@@ -209,27 +216,26 @@ fn build_transport_config(
 
     config.keep_alive_interval(base_config.keep_alive_interval);
 
-    let bidi_varint = quinn_proto::VarInt::try_from(base_config.quic_max_concurrent_bidi_streams)
+    let max_streams_bidi = QuicVarInt::try_from(base_config.max_streams_bidi)
         .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
-    config.max_concurrent_bidi_streams(bidi_varint);
+    config.max_concurrent_bidi_streams(max_streams_bidi);
 
-    let uni_varint = quinn_proto::VarInt::try_from(base_config.quic_max_concurrent_uni_streams)
+    let max_streams_uni = QuicVarInt::try_from(base_config.max_streams_uni)
         .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
-    config.max_concurrent_uni_streams(uni_varint);
+    config.max_concurrent_uni_streams(max_streams_uni);
 
-    let idle_timeout = quinn_proto::IdleTimeout::try_from(base_config.connection_idle_timeout)
+    let max_idle_timeout = QuicIdleTimeout::try_from(base_config.max_idle_timeout)
         .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
-    config.max_idle_timeout(Some(idle_timeout));
+    config.max_idle_timeout(Some(max_idle_timeout));
 
-    let receive_window = quinn_proto::VarInt::try_from(base_config.quic_receive_window)
+    let connection_receive_window = QuicVarInt::try_from(base_config.connection_receive_window)
         .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
-    config.receive_window(receive_window);
+    config.receive_window(connection_receive_window);
 
-    config.send_window(base_config.quic_send_window);
+    config.send_window(base_config.connection_send_window);
 
-    let stream_receive_window =
-        quinn_proto::VarInt::try_from(base_config.quic_stream_receive_window)
-            .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
+    let stream_receive_window = QuicVarInt::try_from(base_config.stream_receive_window)
+        .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
     config.stream_receive_window(stream_receive_window);
 
     Ok(config)

@@ -15,22 +15,12 @@ fn test_configuration_error_formatting() {
 }
 
 #[test]
-fn test_connection_error_formatting() {
-    let error = WebTransportError::Connection(None, Cow::Owned("connection reset".to_owned()));
-
-    assert_eq!(
-        error.to_string(),
-        "Connection error: connection reset (code: None)"
-    );
-}
-
-#[test]
 fn test_debug_formatting() {
     let error = WebTransportError::Protocol(None, Cow::Borrowed("debug check"));
-    let debug_str = format!("{error:?}");
+    let debug_output = format!("{error:?}");
 
-    assert!(debug_str.contains("Protocol"));
-    assert!(debug_str.contains("debug check"));
+    assert!(debug_output.contains("Protocol"));
+    assert!(debug_output.contains("debug check"));
 }
 
 #[test]

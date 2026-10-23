@@ -562,6 +562,7 @@ lsqpack_enc_init (struct lsqpack_enc *enc, void *logger_ctx,
         if (!buckets)
         {
             free(enc->qpe_hist_els);
+            enc->qpe_hist_els = NULL;
             return -1;
         }
 
@@ -1153,12 +1154,6 @@ lsqpack_enc_cancel_header (struct lsqpack_enc *enc)
 {
     /* No header has been started. */
     if (!(enc->qpe_flags & LSQPACK_ENC_HEADER))
-        return -1;
-
-    /* Cancellation is not (yet) allowed if the dynamic table is used since
-     * ls-qpack's state is changed when the dynamic table is used.
-     */
-    if (enc->qpe_cur_header.hinfo && HINFO_IDS_SET(enc->qpe_cur_header.hinfo))
         return -1;
 
     if (enc->qpe_cur_header.hinfo) {

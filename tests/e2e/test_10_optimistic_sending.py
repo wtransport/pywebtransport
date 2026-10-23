@@ -13,7 +13,6 @@ from pywebtransport import (
     SessionError,
     WebTransportClient,
     WebTransportSession,
-    WebTransportStream,
 )
 from pywebtransport.types import EventType, SessionState
 from pywebtransport.utils import init_tracing
@@ -21,9 +20,6 @@ from pywebtransport.utils import init_tracing
 SERVER_HOST: Final[str] = "127.0.0.1"
 SERVER_PORT: Final[int] = 4433
 SERVER_URL: Final[str] = f"https://{SERVER_HOST}:{SERVER_PORT}/"
-NEGOTIATION_URL: Final[str] = SERVER_URL + "protocol-negotiation"
-OPTIMISTIC_SERVER_PORT: Final[int] = 4434
-OPTIMISTIC_SERVER_URL: Final[str] = f"https://{SERVER_HOST}:{OPTIMISTIC_SERVER_PORT}/"
 DEBUG_MODE: Final[bool] = "--debug" in sys.argv
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -43,62 +39,69 @@ async def test_optimistic_basic_connection() -> bool:
 
     try:
         async with WebTransportClient(config=config) as client:
-            session = await client.connect_optimistic(url=SERVER_URL)
-            state_before = session.state
-            logger.info("Session returned with state: %s", state_before.value)
+            async with await client.connect_optimistic(url=SERVER_URL + "acceptance-delay") as session:
+                state_before = (await session.diagnose()).state
+                logger.info("Session returned with state: %s", state_before)
 
-            if state_before != SessionState.CONNECTING:
-                logger.error("FAILURE: Session should start in CONNECTING state, got %s", state_before.value)
-                return False
+                if state_before != SessionState.CONNECTING:
+                    logger.error("FAILURE: Session should start in CONNECTING state, got %s", state_before)
+                    return False
 
-            await session.ensure_ready()
-            state_after = session.state
-            logger.info("Session ready with state: %s", state_after.value)
+                await session.ensure_ready()
+                state_after = (await session.diagnose()).state
+                logger.info("Session ready with state: %s", state_after)
 
-            if state_after != SessionState.CONNECTED:
-                logger.error("FAILURE: Session should be CONNECTED after ensure_ready, got %s", state_after.value)
-                return False
+                if state_after != SessionState.CONNECTED:
+                    logger.error("FAILURE: Session should be CONNECTED after ensure_ready, got %s", state_after)
+                    return False
 
-            logger.info("SUCCESS: Optimistic session transitioned CONNECTING -> CONNECTED correctly")
-            await session.close()
-            return True
+                logger.info("SUCCESS: Optimistic session transitioned CONNECTING -> CONNECTED correctly")
+                return True
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)
         return False
 
 
 async def test_optimistic_lifecycle_events() -> bool:
-    """Test that optimistic sessions emit SESSION_PENDING before SESSION_READY, unlike standard sessions."""
+    """Test that optimistic sessions start unconfirmed and emit SESSION_READY before SESSION_CLOSED."""
     logger.info("Test 10B: Optimistic Lifecycle Events")
     logger.info("-" * 50)
 
-    config = ClientConfig(verify_mode=ssl.CERT_NONE, event_history_capacity=50)
+    config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
-            optimistic_session = await client.connect_optimistic(url=SERVER_URL)
-            await optimistic_session.ensure_ready()
-            await optimistic_session.close()
+            optimistic_observed: list[EventType] = []
 
-            optimistic_history = optimistic_session.events.get_event_history()
-            optimistic_types = [event.type for event in optimistic_history]
-            expected_optimistic = [EventType.SESSION_PENDING, EventType.SESSION_READY, EventType.SESSION_CLOSED]
-            filtered_optimistic = [et for et in optimistic_types if et in expected_optimistic]
+            async def record_optimistic(event: Event) -> None:
+                optimistic_observed.append(event.type)
 
-            standard_session = await client.connect(url=SERVER_URL)
-            await standard_session.close()
+            async with await client.connect_optimistic(url=SERVER_URL + "acceptance-delay") as optimistic_session:
+                optimistic_session.events.on(event_type=EventType.SESSION_READY, handler=record_optimistic)
+                optimistic_session.events.on(event_type=EventType.SESSION_CLOSED, handler=record_optimistic)
+                state_before_ready = (await optimistic_session.diagnose()).state
 
-            standard_history = standard_session.events.get_event_history()
-            standard_types = [event.type for event in standard_history]
-            expected_standard = [EventType.SESSION_READY, EventType.SESSION_CLOSED]
-            filtered_standard = [et for et in standard_types if et in expected_optimistic]
+                await optimistic_session.ensure_ready()
+                await optimistic_session.close()
 
-            if filtered_optimistic != expected_optimistic:
-                logger.error("FAILURE: Optimistic event order incorrect: %s", filtered_optimistic)
+            expected_optimistic = [EventType.SESSION_READY, EventType.SESSION_CLOSED]
+
+            standard_closed = asyncio.Event()
+
+            async def record_standard(event: Event) -> None:
+                standard_closed.set()
+
+            async with await client.connect(url=SERVER_URL) as standard_session:
+                standard_session.events.on(event_type=EventType.SESSION_CLOSED, handler=record_standard)
+                await standard_session.close()
+                await asyncio.wait_for(standard_closed.wait(), timeout=5.0)
+
+            if state_before_ready != SessionState.CONNECTING:
+                logger.error("FAILURE: Optimistic session should start unconfirmed, got %s", state_before_ready)
                 return False
 
-            if filtered_standard != expected_standard:
-                logger.error("FAILURE: Standard event order incorrect: %s", filtered_standard)
+            if optimistic_observed != expected_optimistic:
+                logger.error("FAILURE: Optimistic event order incorrect: %s", optimistic_observed)
                 return False
 
             logger.info("SUCCESS: Optimistic and standard sessions emitted correct, distinct event sequences")
@@ -117,27 +120,26 @@ async def test_optimistic_early_stream_write() -> bool:
 
     try:
         async with WebTransportClient(config=config) as client:
-            session = await client.connect_optimistic(url=OPTIMISTIC_SERVER_URL)
-            logger.info("Session state before write: %s", session.state.value)
+            async with await client.connect_optimistic(url=SERVER_URL + "acceptance-delay") as session:
+                logger.info("Session state before write: %s", (await session.diagnose()).state)
 
-            test_message = b"Hello from an unconfirmed session!"
-            stream = await session.create_bidirectional_stream()
-            await stream.write(data=test_message, end_stream=True)
-            logger.info("Sent data before calling ensure_ready()")
+                test_message = b"Hello from an unconfirmed session!"
+                stream = await session.create_bidirectional_stream()
+                await stream.write(data=test_message, end_stream=True)
+                logger.info("Sent data before calling ensure_ready()")
 
-            await session.ensure_ready()
-            logger.info("Session confirmed with state: %s", session.state.value)
+                await session.ensure_ready()
+                logger.info("Session confirmed with state: %s", (await session.diagnose()).state)
 
-            response_data = await stream.read_all()
-            expected_response = b"ECHO: " + test_message
+                response_data = await stream.read_all()
+                expected_response = b"ECHO: " + test_message
 
-            if response_data == expected_response:
-                logger.info("SUCCESS: Early-written stream data was correctly delivered and echoed")
-                await session.close()
-                return True
-            else:
-                logger.error("FAILURE: Echo mismatch. Expected: %r, Got: %r", expected_response, response_data)
-                return False
+                if response_data == expected_response:
+                    logger.info("SUCCESS: Early-written stream data was correctly delivered and echoed")
+                    return True
+                else:
+                    logger.error("FAILURE: Echo mismatch. Expected: %r, Got: %r", expected_response, response_data)
+                    return False
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)
         return False
@@ -152,34 +154,27 @@ async def test_optimistic_early_datagram_send() -> bool:
 
     try:
         async with WebTransportClient(config=config) as client:
-            session = await client.connect_optimistic(url=OPTIMISTIC_SERVER_URL)
-            logger.info("Session state before send: %s", session.state.value)
+            async with await client.connect_optimistic(url=SERVER_URL + "acceptance-delay") as session:
+                logger.info("Session state before send: %s", (await session.diagnose()).state)
 
-            test_message = b"Hello, unconfirmed datagram!"
-            expected_response = b"ECHO: " + test_message
+                test_message = b"Hello, unconfirmed datagram!"
+                expected_response = b"ECHO: " + test_message
 
-            wait_task = asyncio.create_task(
-                coro=session.events.wait_for(event_type=EventType.DATAGRAM_RECEIVED, timeout=5.0)
-            )
+                await session.send_datagram(data=test_message)
+                logger.info("Sent datagram before calling ensure_ready()")
 
-            await session.send_datagram(data=test_message)
-            logger.info("Sent datagram before calling ensure_ready()")
+                await session.ensure_ready()
+                logger.info("Session confirmed with state: %s", (await session.diagnose()).state)
 
-            await session.ensure_ready()
-            logger.info("Session confirmed with state: %s", session.state.value)
+                async with asyncio.timeout(delay=5.0):
+                    response = await session.read_datagram()
 
-            event: Event = await wait_task
-            response = None
-            if isinstance(event.data, dict):
-                response = event.data.get("data")
-
-            if response == expected_response:
-                logger.info("SUCCESS: Early-sent datagram was correctly delivered and echoed")
-                await session.close()
-                return True
-            else:
-                logger.error("FAILURE: Datagram echo mismatch. Got: %r", response)
-                return False
+                if response == expected_response:
+                    logger.info("SUCCESS: Early-sent datagram was correctly delivered and echoed")
+                    return True
+                else:
+                    logger.error("FAILURE: Datagram echo mismatch. Got: %r", response)
+                    return False
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)
         return False
@@ -194,20 +189,18 @@ async def test_optimistic_rejection_via_ensure_ready() -> bool:
 
     try:
         async with WebTransportClient(config=config) as client:
-            session = await client.connect_optimistic(url=NEGOTIATION_URL, wt_available_protocols=["unknown-proto"])
-            logger.info("connect_optimistic returned without raising, state: %s", session.state.value)
+            async with await client.connect_optimistic(
+                url=SERVER_URL + "protocol-negotiation", wt_available_protocols=["unknown-proto"]
+            ) as session:
+                logger.info("connect_optimistic returned without raising")
 
-            if session.state != SessionState.CONNECTING:
-                logger.error("FAILURE: Session should still be CONNECTING immediately after connect_optimistic")
-                return False
-
-            try:
-                await session.ensure_ready()
-                logger.error("FAILURE: ensure_ready should have raised for a rejected session")
-                return False
-            except SessionError as e:
-                logger.info("SUCCESS: ensure_ready correctly raised SessionError for rejection: %s", e)
-                return True
+                try:
+                    await session.ensure_ready()
+                    logger.error("FAILURE: ensure_ready should have raised for a rejected session")
+                    return False
+                except SessionError as e:
+                    logger.info("SUCCESS: ensure_ready correctly raised SessionError for rejection: %s", e)
+                    return True
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)
         return False
@@ -222,25 +215,26 @@ async def test_optimistic_early_send_before_rejection() -> bool:
 
     try:
         async with WebTransportClient(config=config) as client:
-            session = await client.connect_optimistic(url=NEGOTIATION_URL, wt_available_protocols=["unknown-proto"])
+            async with await client.connect_optimistic(
+                url=SERVER_URL + "protocol-negotiation", wt_available_protocols=["unknown-proto"]
+            ) as session:
+                try:
+                    await session.send_datagram(data=b"This will never be seen")
+                    logger.info("Datagram send before rejection did not raise immediately")
+                except Exception as e:
+                    logger.info("Datagram send before rejection raised early (acceptable): %s", e)
 
-            try:
-                await session.send_datagram(data=b"This will never be seen")
-                logger.info("Datagram send before rejection did not raise immediately")
-            except Exception as e:
-                logger.info("Datagram send before rejection raised early (acceptable): %s", e)
-
-            try:
-                async with asyncio.timeout(delay=5.0):
-                    await session.ensure_ready()
-                logger.error("FAILURE: ensure_ready should have raised for a rejected session")
-                return False
-            except SessionError as e:
-                logger.info("SUCCESS: ensure_ready correctly raised SessionError after early send: %s", e)
-                return True
-            except asyncio.TimeoutError:
-                logger.error("FAILURE: ensure_ready hung instead of raising promptly")
-                return False
+                try:
+                    async with asyncio.timeout(delay=5.0):
+                        await session.ensure_ready()
+                    logger.error("FAILURE: ensure_ready should have raised for a rejected session")
+                    return False
+                except SessionError as e:
+                    logger.info("SUCCESS: ensure_ready correctly raised SessionError after early send: %s", e)
+                    return True
+                except asyncio.TimeoutError:
+                    logger.error("FAILURE: ensure_ready hung instead of raising promptly")
+                    return False
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)
         return False
@@ -255,26 +249,25 @@ async def test_server_buffers_early_stream_data() -> bool:
 
     try:
         async with WebTransportClient(config=config) as client:
-            session = await client.connect_optimistic(url=OPTIMISTIC_SERVER_URL)
-            logger.info("Session state before write: %s", session.state.value)
+            async with await client.connect_optimistic(url=SERVER_URL + "acceptance-delay") as session:
+                logger.info("Session state before write: %s", (await session.diagnose()).state)
 
-            test_message = b"Data sent before the server accepted."
-            stream = await session.create_bidirectional_stream()
-            await stream.write(data=test_message, end_stream=True)
-            logger.info("Sent data while the server is still delaying acceptance")
+                test_message = b"Data sent before the server accepted."
+                stream = await session.create_bidirectional_stream()
+                await stream.write(data=test_message, end_stream=True)
+                logger.info("Sent data while the server is still delaying acceptance")
 
-            async with asyncio.timeout(delay=10.0):
-                response_data = await stream.read_all()
+                async with asyncio.timeout(delay=10.0):
+                    response_data = await stream.read_all()
 
-            expected_response = b"ECHO: " + test_message
-            if response_data == expected_response:
-                logger.info("SUCCESS: Server correctly buffered and processed pre-acceptance stream data")
-                await session.ensure_ready()
-                await session.close()
-                return True
-            else:
-                logger.error("FAILURE: Echo mismatch. Expected: %r, Got: %r", expected_response, response_data)
-                return False
+                expected_response = b"ECHO: " + test_message
+                if response_data == expected_response:
+                    logger.info("SUCCESS: Server correctly buffered and processed pre-acceptance stream data")
+                    await session.ensure_ready()
+                    return True
+                else:
+                    logger.error("FAILURE: Echo mismatch. Expected: %r, Got: %r", expected_response, response_data)
+                    return False
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)
         return False
@@ -289,54 +282,48 @@ async def test_server_stream_overflow_drop() -> bool:
     probe_count = 8
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
-    async def _open_filler_stream(*, session: WebTransportSession) -> None:
+    async def open_filler_stream(*, session: WebTransportSession) -> None:
         try:
             stream = await session.create_unidirectional_stream()
             await stream.write(data=b"Filler", end_stream=True)
         except Exception as e:
             logger.debug("Unidirectional filler stream raised (acceptable): %s", e)
 
-    async def _open_probe_stream(*, session: WebTransportSession) -> WebTransportStream:
-        stream = await session.create_bidirectional_stream()
-        await stream.write(data=b"Overflow", end_stream=True)
-        return stream
+    async def open_probe_stream(*, session: WebTransportSession) -> bool:
+        try:
+            stream = await session.create_bidirectional_stream()
+            await stream.write(data=b"Overflow", end_stream=True)
+            async with asyncio.timeout(delay=5.0):
+                response_data = await stream.read_all()
+        except Exception as e:
+            logger.debug("Bidirectional probe stream rejected: %s", e)
+            return False
+        return response_data == b"ECHO: Overflow"
 
     try:
         async with WebTransportClient(config=config) as client:
-            session = await client.connect_optimistic(url=OPTIMISTIC_SERVER_URL)
+            async with await client.connect_optimistic(url=SERVER_URL + "acceptance-delay") as session:
+                logger.info("Filling the pending stream buffer with %d unidirectional streams...", filler_count)
+                await asyncio.gather(*[open_filler_stream(session=session) for _ in range(filler_count)])
 
-            logger.info("Filling the pending stream buffer with %d unidirectional streams...", filler_count)
-            await asyncio.gather(*[_open_filler_stream(session=session) for _ in range(filler_count)])
+                logger.info("Opening %d bidirectional streams to push past the buffer limit...", probe_count)
+                probe_results = await asyncio.gather(*[open_probe_stream(session=session) for _ in range(probe_count)])
 
-            logger.info("Opening %d bidirectional streams to push past the buffer limit...", probe_count)
-            probe_streams = await asyncio.gather(*[_open_probe_stream(session=session) for _ in range(probe_count)])
+                succeeded = sum(probe_results)
+                rejected = probe_count - succeeded
 
-            succeeded = 0
-            rejected = 0
-            for stream in probe_streams:
-                try:
-                    async with asyncio.timeout(delay=5.0):
-                        response_data = await stream.read_all()
-                    if response_data == b"ECHO: Overflow":
-                        succeeded += 1
-                    else:
-                        rejected += 1
-                except Exception:
-                    rejected += 1
+                await session.ensure_ready()
 
-            await session.ensure_ready()
-
-            if 0 < succeeded < probe_count and rejected > 0:
-                logger.info("SUCCESS: Session correctly survived the stream buffer overflow")
-                logger.info(
-                    "   - Bidirectional streams: %d/%d succeeded, %d rejected", succeeded, probe_count, rejected
-                )
-                await session.close()
-                return True
-            else:
-                logger.error("FAILURE: Overflow did not reject some but not all bidirectional streams")
-                logger.error("   - Succeeded: %d, Rejected: %d/%d", succeeded, rejected, probe_count)
-                return False
+                if 0 < succeeded < probe_count and rejected > 0:
+                    logger.info("SUCCESS: Session correctly survived the stream buffer overflow")
+                    logger.info(
+                        "   - Bidirectional streams: %d/%d succeeded, %d rejected", succeeded, probe_count, rejected
+                    )
+                    return True
+                else:
+                    logger.error("FAILURE: Overflow did not reject some but not all bidirectional streams")
+                    logger.error("   - Succeeded: %d, Rejected: %d/%d", succeeded, rejected, probe_count)
+                    return False
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)
         return False
@@ -352,46 +339,39 @@ async def test_server_datagram_overflow_drop() -> bool:
 
     try:
         async with WebTransportClient(config=config) as client:
-            session = await client.connect_optimistic(url=OPTIMISTIC_SERVER_URL)
-            logger.info("Sending a burst of %d datagrams before the server accepts...", burst_size)
+            async with await client.connect_optimistic(url=SERVER_URL + "acceptance-delay") as session:
+                logger.info("Sending a burst of %d datagrams before the server accepts...", burst_size)
 
-            received_events: list[bytes] = []
+                tasks = [session.send_datagram(data=f"Overflow {i}".encode()) for i in range(burst_size)]
+                await asyncio.gather(*tasks)
 
-            async def datagram_handler(event: Event) -> None:
-                data = None
-                if isinstance(event.data, dict):
-                    data = event.data.get("data")
-                if isinstance(data, bytes):
-                    received_events.append(data)
+                try:
+                    async with asyncio.timeout(delay=10.0):
+                        await session.ensure_ready()
+                except Exception as e:
+                    logger.error("FAILURE: Session did not become ready after the datagram burst: %s", e)
+                    return False
 
-            session.events.on(event_type=EventType.DATAGRAM_RECEIVED, handler=datagram_handler)
+                received_datagrams: list[bytes] = []
+                try:
+                    async with asyncio.timeout(delay=1.0):
+                        while True:
+                            received_datagrams.append(await session.read_datagram())
+                except asyncio.TimeoutError:
+                    pass
 
-            tasks = [session.send_datagram(data=f"Overflow {i}".encode()) for i in range(burst_size)]
-            await asyncio.gather(*tasks)
+                if session.is_closed:
+                    logger.error("FAILURE: Session was unexpectedly closed after the overflow burst")
+                    return False
 
-            try:
-                async with asyncio.timeout(delay=10.0):
-                    await session.ensure_ready()
-            except Exception as e:
-                logger.error("FAILURE: Session did not become ready after the datagram burst: %s", e)
-                return False
-
-            await asyncio.sleep(delay=1.0)
-            session.events.off(event_type=EventType.DATAGRAM_RECEIVED, handler=datagram_handler)
-
-            if session.is_closed:
-                logger.error("FAILURE: Session was unexpectedly closed after the overflow burst")
-                return False
-
-            if 0 < len(received_events) < burst_size:
-                logger.info("SUCCESS: Session correctly survived the datagram buffer overflow")
-                logger.info("   - Datagrams echoed: %d/%d", len(received_events), burst_size)
-                await session.close()
-                return True
-            else:
-                logger.error("FAILURE: Overflow did not drop some but not all datagrams")
-                logger.error("   - Echoed: %d/%d", len(received_events), burst_size)
-                return False
+                if 0 < len(received_datagrams) < burst_size:
+                    logger.info("SUCCESS: Session correctly survived the datagram buffer overflow")
+                    logger.info("   - Datagrams echoed: %d/%d", len(received_datagrams), burst_size)
+                    return True
+                else:
+                    logger.error("FAILURE: Overflow did not drop some but not all datagrams")
+                    logger.error("   - Echoed: %d/%d", len(received_datagrams), burst_size)
+                    return False
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)
         return False

@@ -1,12 +1,15 @@
 //! Unit tests for the `crate::tls::certificate` module.
 
+use std::env;
 use std::fs;
-use std::io;
+use std::io::ErrorKind;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use rstest::*;
+use rcgen::SanType;
+use rstest::rstest;
+use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 
 use super::*;
 
@@ -14,68 +17,68 @@ use super::*;
 #[case("localhost")]
 #[case("valid-host.com")]
 #[case("webtransport.server")]
-fn test_build_cert_params_hostname_acceptance_success(#[case] hostname: &str) {
-    let res = build_cert_params(hostname, 1);
+fn test_build_cert_parameters_hostname_acceptance_success(#[case] hostname: &str) {
+    let result = build_cert_parameters(hostname, 1);
 
-    assert!(res.is_ok(), "should succeed");
+    assert!(result.is_ok(), "should succeed");
 }
 
 #[test]
-fn test_build_cert_params_ip_address_hostname_success() {
+fn test_build_cert_parameters_ip_address_hostname_success() {
     let hostname = "127.0.0.1";
 
-    let res = build_cert_params(hostname, 1);
+    let result = build_cert_parameters(hostname, 1);
 
-    assert!(res.is_ok(), "should succeed");
+    assert!(result.is_ok(), "should succeed");
 
-    let Ok(params) = res else { return };
+    let Ok(parameters) = result else { return };
 
     assert!(matches!(
-        params.subject_alt_names.first(),
+        parameters.subject_alt_names.first(),
         Some(SanType::IpAddress(_))
     ));
 }
 
 #[test]
-fn test_build_cert_params_logic_defaults_success() {
+fn test_build_cert_parameters_logic_defaults_success() {
     let hostname = "example.com";
     let validity_days = 30;
 
-    let res = build_cert_params(hostname, validity_days);
+    let result = build_cert_parameters(hostname, validity_days);
 
-    assert!(res.is_ok(), "should succeed");
+    assert!(result.is_ok(), "should succeed");
 
-    let Ok(params) = res else { return };
+    let Ok(parameters) = result else { return };
 
-    assert!(!format!("{:?}", params.distinguished_name).is_empty());
-    assert_eq!(params.subject_alt_names.len(), 1);
-    assert!(params.not_after > params.not_before);
+    assert!(!format!("{:?}", parameters.distinguished_name).is_empty());
+    assert_eq!(parameters.subject_alt_names.len(), 1);
+    assert!(parameters.not_after > parameters.not_before);
 }
 
 #[test]
-fn test_build_cert_params_utf8_hostname_rejection_failure() {
+fn test_build_cert_parameters_utf8_hostname_rejection_failure() {
     let hostname = "测试.com";
 
-    let res = build_cert_params(hostname, 1);
+    let result = build_cert_parameters(hostname, 1);
 
-    assert!(res.is_err(), "should fail");
+    assert!(result.is_err(), "should fail");
 
-    if let Err(e) = res {
-        assert_eq!(e.kind(), io::ErrorKind::InvalidInput);
+    if let Err(e) = result {
+        assert_eq!(e.kind(), ErrorKind::InvalidInput);
     }
 }
 
 #[test]
 fn test_generate_self_signed_cert_io_operations_success() {
-    let temp_dir = std::env::temp_dir().join("pywebtransport_cert_gen_test");
+    let temp_dir = env::temp_dir().join("pywebtransport_cert_gen_test");
     drop(fs::remove_dir_all(&temp_dir));
     let hostname = "test-node";
 
-    let res = generate_self_signed_cert(hostname, &temp_dir, 1);
+    let result = generate_self_signed_cert(hostname, &temp_dir, 1);
 
-    assert!(res.is_ok(), "should succeed");
+    assert!(result.is_ok(), "should succeed");
 
-    let Ok((ca_path_str, cert_path_str, key_path_str)) = res else {
+    let Ok((ca_path_str, cert_path_str, key_path_str)) = result else {
         return;
     };
     let ca_path = Path::new(&ca_path_str);
@@ -100,22 +103,24 @@ fn test_generate_self_signed_cert_io_operations_success() {
 #[cfg(unix)]
 #[test]
 fn test_generate_self_signed_cert_key_permissions_unix_success() {
-    let temp_dir = std::env::temp_dir().join("pywebtransport_perm_test");
+    let temp_dir = env::temp_dir().join("pywebtransport_perm_test");
     drop(fs::remove_dir_all(&temp_dir));
     let hostname = "secure-node";
 
-    let res = generate_self_signed_cert(hostname, &temp_dir, 1);
+    let result = generate_self_signed_cert(hostname, &temp_dir, 1);
 
-    assert!(res.is_ok(), "should succeed");
+    assert!(result.is_ok(), "should succeed");
 
-    let Ok((_, _, key_path_str)) = res else {
+    let Ok((_, _, key_path_str)) = result else {
         return;
     };
-    let metadata_res = fs::metadata(key_path_str);
+    let metadata_result = fs::metadata(key_path_str);
 
-    assert!(metadata_res.is_ok(), "should succeed");
+    assert!(metadata_result.is_ok(), "should succeed");
 
-    let Ok(metadata) = metadata_res else { return };
+    let Ok(metadata) = metadata_result else {
+        return;
+    };
     let mode = metadata.permissions().mode();
 
     assert_eq!(mode & 0o777, 0o600);
@@ -137,7 +142,7 @@ fn test_load_certs_fails_with_invalid_path() {
 
 #[test]
 fn test_load_certs_succeeds_with_valid_pem() {
-    let temp_dir = std::env::temp_dir().join("pywebtransport_load_certs_test");
+    let temp_dir = env::temp_dir().join("pywebtransport_load_certs_test");
     drop(fs::remove_dir_all(&temp_dir));
     let hostname = "load-certs-node";
 

@@ -1,4 +1,4 @@
-//! Internal utility functions for flow control, stream ID logic, error mapping, and encoding.
+//! Protocol utilities.
 
 use std::borrow::Cow;
 use std::io::Cursor;
@@ -9,23 +9,14 @@ use tracing::debug;
 use crate::common::constants::{
     ERR_H3_FRAME_ERROR, ERR_LIB_INTERNAL_ERROR, ERR_WT_APPLICATION_ERROR_FIRST,
     ERR_WT_APPLICATION_ERROR_LAST, QUIC_STREAM_DIRECTION_MASK, QUIC_STREAM_INITIATOR_MASK,
+    WT_AVAILABLE_PROTOCOLS, WT_PROTOCOL,
 };
 use crate::common::types::{ErrorCode, Headers, StreamDirection, StreamId};
 
-// H3 error mapping constant reserved offset.
-const H3_ERROR_RESERVED_OFFSET: u64 = 0x21;
-// H3 error mapping constant reserved modulo.
 const H3_ERROR_RESERVED_MODULO: u64 = 0x1F;
-// WebTransport error mapping constant divisor.
+const H3_ERROR_RESERVED_OFFSET: u64 = 0x21;
 const WT_ERROR_MAP_DIVISOR: u64 = 0x1E;
 
-// Header value search and UTF-8 decoding.
-pub(crate) fn find_header_str(headers: &Headers, key: &str) -> Option<String> {
-    let val = find_header(headers, key)?;
-    String::from_utf8(val.to_vec()).ok()
-}
-
-// Stream reception capability check.
 pub(super) fn can_receive_on_stream(stream_id: StreamId, is_client: bool) -> bool {
     if is_bidirectional_stream(stream_id) {
         return true;
@@ -35,7 +26,6 @@ pub(super) fn can_receive_on_stream(stream_id: StreamId, is_client: bool) -> boo
         || (!is_client && is_client_initiated_stream(stream_id))
 }
 
-// Stream transmission capability check.
 pub(super) fn can_send_on_stream(stream_id: StreamId, is_client: bool) -> bool {
     if is_bidirectional_stream(stream_id) {
         return true;
@@ -45,46 +35,48 @@ pub(super) fn can_send_on_stream(stream_id: StreamId, is_client: bool) -> bool {
         || (!is_client && is_server_initiated_stream(stream_id))
 }
 
-// Encodes a list of protocols into a Structured Fields String List.
 pub(super) fn encode_wt_protocol_list(protocols: &[String]) -> Result<Bytes, Cow<'static, str>> {
-    let mut buf = BytesMut::new();
-    for (i, p) in protocols.iter().enumerate() {
-        if i > 0 {
-            buf.put_slice(b", ");
+    let mut buffer = BytesMut::new();
+    for (index, protocol) in protocols.iter().enumerate() {
+        if index > 0 {
+            buffer.put_slice(b", ");
         }
-        buf.put_u8(b'"');
-        for &b in p.as_bytes() {
-            if b == b'\\' || b == b'"' {
-                buf.put_u8(b'\\');
+        buffer.put_u8(b'"');
+        for &byte in protocol.as_bytes() {
+            if byte == b'\\' || byte == b'"' {
+                buffer.put_u8(b'\\');
             }
-            if (0x20..=0x7E).contains(&b) {
-                buf.put_u8(b);
+            if (0x20..=0x7E).contains(&byte) {
+                buffer.put_u8(byte);
             } else {
-                debug!("wt_protocol validate invalid actual={b} expected=printable_ascii");
+                debug!("wt_protocol validate invalid actual={byte} expected=printable_ascii");
                 return Err("wt_protocol validate invalid".into());
             }
         }
-        buf.put_u8(b'"');
+        buffer.put_u8(b'"');
     }
 
-    Ok(buf.freeze())
+    Ok(buffer.freeze())
 }
 
-// Case-insensitive header search.
 pub(super) fn find_header(headers: &Headers, key: &str) -> Option<Bytes> {
     let key_bytes = key.as_bytes();
 
-    for (k, v) in headers {
-        if k.len() == key_bytes.len() && k.eq_ignore_ascii_case(key_bytes) {
-            return Some(v.clone());
+    for (header_key, header_value) in headers {
+        if header_key.len() == key_bytes.len() && header_key.eq_ignore_ascii_case(key_bytes) {
+            return Some(header_value.clone());
         }
     }
 
     None
 }
 
-// HTTP/3 to WebTransport error code mapping.
-pub(super) fn http_to_wt_error(http_error_code: ErrorCode) -> Option<u32> {
+pub(super) fn find_header_str(headers: &Headers, key: &str) -> Option<String> {
+    let value = find_header(headers, key)?;
+    String::from_utf8(value.to_vec()).ok()
+}
+
+pub(super) fn http_code_to_webtransport_code(http_error_code: ErrorCode) -> Option<u32> {
     if !(ERR_WT_APPLICATION_ERROR_FIRST..=ERR_WT_APPLICATION_ERROR_LAST).contains(&http_error_code)
     {
         return None;
@@ -100,12 +92,21 @@ pub(super) fn http_to_wt_error(http_error_code: ErrorCode) -> Option<u32> {
     u32::try_from(result).ok()
 }
 
-// Bidirectional stream check.
 pub(super) fn is_bidirectional_stream(stream_id: StreamId) -> bool {
     (stream_id & QUIC_STREAM_DIRECTION_MASK) == 0
 }
 
-// Peer-initiated stream check.
+pub(super) fn is_connection_specific_header(key: &[u8], value: &[u8], is_request: bool) -> bool {
+    if key == b"te" {
+        return !(is_request && value.eq_ignore_ascii_case(b"trailers"));
+    }
+
+    matches!(
+        key,
+        b"connection" | b"keep-alive" | b"proxy-connection" | b"transfer-encoding" | b"upgrade"
+    )
+}
+
 pub(super) fn is_peer_initiated_stream(stream_id: StreamId, is_client: bool) -> bool {
     if is_client {
         is_server_initiated_stream(stream_id)
@@ -114,17 +115,61 @@ pub(super) fn is_peer_initiated_stream(stream_id: StreamId, is_client: bool) -> 
     }
 }
 
-// Request-response stream identification.
 pub(super) fn is_request_response_stream(stream_id: StreamId) -> bool {
     is_bidirectional_stream(stream_id) && is_client_initiated_stream(stream_id)
 }
 
-// Unidirectional stream check.
 pub(super) fn is_unidirectional_stream(stream_id: StreamId) -> bool {
     (stream_id & QUIC_STREAM_DIRECTION_MASK) != 0
 }
 
-// Data limit auto-scaling calculation.
+pub(super) fn is_valid_header(key: &[u8], value: &[u8]) -> bool {
+    let name = key.strip_prefix(b":").unwrap_or(key);
+
+    !name.is_empty()
+        && name.iter().all(|&byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
+        && !matches!(value, [b' ' | b'\t', ..] | [.., b' ' | b'\t'])
+        && value
+            .iter()
+            .all(|&byte| matches!(byte, b'\t' | b' '..=b'~' | 0x80..=0xFF))
+}
+
+pub(super) fn is_valid_user_headers(headers: &Headers, is_request: bool) -> bool {
+    headers.iter().all(|(key, value)| {
+        let key = key.as_ref();
+        let value = value.as_ref();
+
+        is_valid_header(key, value)
+            && !(key.starts_with(b":")
+                || is_connection_specific_header(key, value, is_request)
+                || (is_request && key == b"host")
+                || matches!(
+                    key,
+                    b"content-length" | WT_AVAILABLE_PROTOCOLS | WT_PROTOCOL
+                ))
+    })
+}
+
 pub(super) fn next_data_limit(
     current_limit: u64,
     consumed: u64,
@@ -141,7 +186,6 @@ pub(super) fn next_data_limit(
     }
 }
 
-// Stream concurrency limit auto-scaling calculation.
 pub(super) fn next_stream_limit(
     current_limit: u64,
     closed_count: u64,
@@ -158,7 +202,6 @@ pub(super) fn next_stream_limit(
     }
 }
 
-// Parses a Structured Fields String List securely.
 pub(super) fn parse_wt_protocol_list(header: &[u8]) -> Option<Vec<String>> {
     let mut result = Vec::new();
     let mut current = String::new();
@@ -166,17 +209,17 @@ pub(super) fn parse_wt_protocol_list(header: &[u8]) -> Option<Vec<String>> {
     let mut escaping = false;
     let mut has_parsed_item = false;
 
-    for &b in header {
+    for &byte in header {
         if escaping {
-            match b {
+            match byte {
                 b'"' | b'\\' => {
-                    current.push(b as char);
+                    current.push(byte as char);
                     escaping = false;
                 }
                 _ => return None,
             }
         } else if in_string {
-            match b {
+            match byte {
                 b'\\' => escaping = true,
                 b'"' => {
                     in_string = false;
@@ -184,11 +227,11 @@ pub(super) fn parse_wt_protocol_list(header: &[u8]) -> Option<Vec<String>> {
                     current.clear();
                     has_parsed_item = true;
                 }
-                0x20..=0x7E => current.push(b as char),
+                0x20..=0x7E => current.push(byte as char),
                 _ => return None,
             }
         } else {
-            match b {
+            match byte {
                 b' ' | b'\t' => {}
                 b'"' if !has_parsed_item => in_string = true,
                 b',' if has_parsed_item => has_parsed_item = false,
@@ -204,53 +247,37 @@ pub(super) fn parse_wt_protocol_list(header: &[u8]) -> Option<Vec<String>> {
     Some(result)
 }
 
-// Parses a single Structured Fields String securely.
 pub(super) fn parse_wt_protocol_string(header: &[u8]) -> Option<String> {
     let mut list = parse_wt_protocol_list(header)?;
     if list.len() == 1 { list.pop() } else { None }
 }
 
-// Variable-length integer decoding.
-pub(super) fn read_varint(buf: &mut Cursor<&[u8]>) -> Result<u64, ErrorCode> {
-    if !buf.has_remaining() {
+pub(super) fn read_varint(buffer: &mut Cursor<&[u8]>) -> Result<u64, ErrorCode> {
+    if !buffer.has_remaining() {
         return Err(ERR_H3_FRAME_ERROR);
     }
 
-    let chunk = buf.chunk();
+    let chunk = buffer.chunk();
     let first = *chunk.first().ok_or(ERR_H3_FRAME_ERROR)?;
     let prefix = first >> 6;
-    let length = 1 << prefix;
+    let len = 1 << prefix;
 
-    if buf.remaining() < length {
+    if buffer.remaining() < len {
         return Err(ERR_H3_FRAME_ERROR);
     }
 
-    let val = match length {
-        1 => u64::from(buf.get_u8() & 0x3f),
-        2 => u64::from(buf.get_u16() & 0x3fff),
-        4 => u64::from(buf.get_u32() & 0x3fff_ffff),
-        8 => buf.get_u64() & 0x3fff_ffff_ffff_ffff,
+    let value = match len {
+        1 => u64::from(buffer.get_u8() & 0x3f),
+        2 => u64::from(buffer.get_u16() & 0x3fff),
+        4 => u64::from(buffer.get_u32() & 0x3fff_ffff),
+        8 => buffer.get_u64() & 0x3fff_ffff_ffff_ffff,
         _ => return Err(ERR_H3_FRAME_ERROR),
     };
 
-    Ok(val)
+    Ok(value)
 }
 
-// Variable-length integer byte length calculation.
-pub(crate) fn varint_size(value: u64) -> usize {
-    if value <= 63 {
-        1
-    } else if value <= 16383 {
-        2
-    } else if value <= 1_073_741_823 {
-        4
-    } else {
-        8
-    }
-}
-
-// Stream direction resolution from ID.
-pub(super) fn stream_dir_from_id(stream_id: StreamId, is_client: bool) -> StreamDirection {
+pub(super) fn stream_direction_from_id(stream_id: StreamId, is_client: bool) -> StreamDirection {
     match (
         can_send_on_stream(stream_id, is_client),
         can_receive_on_stream(stream_id, is_client),
@@ -262,28 +289,38 @@ pub(super) fn stream_dir_from_id(stream_id: StreamId, is_client: bool) -> Stream
     }
 }
 
-// WebTransport to HTTP/3 error code mapping.
-pub(super) fn wt_to_http_error(app_error_code: u32) -> ErrorCode {
-    let app_error_code = u64::from(app_error_code);
+pub(super) fn varint_size(value: u64) -> usize {
+    if value <= 63 {
+        1
+    } else if value <= 16383 {
+        2
+    } else if value <= 1_073_741_823 {
+        4
+    } else {
+        8
+    }
+}
+
+pub(super) fn webtransport_code_to_http_code(application_error_code: u32) -> ErrorCode {
+    let application_error_code = u64::from(application_error_code);
     let base = ERR_WT_APPLICATION_ERROR_FIRST;
     let divisor = WT_ERROR_MAP_DIVISOR;
 
-    let shifted = base + app_error_code;
-    let offset = app_error_code / divisor;
+    let shifted = base + application_error_code;
+    let offset = application_error_code / divisor;
 
     shifted + offset
 }
 
-// Variable-length integer encoding.
-pub(super) fn write_varint(buf: &mut BytesMut, value: u64) -> Result<(), ErrorCode> {
+pub(super) fn write_varint(buffer: &mut BytesMut, value: u64) -> Result<(), ErrorCode> {
     if value <= 63 {
-        buf.put_u8(u8::try_from(value).map_err(|_e| ERR_LIB_INTERNAL_ERROR)?);
+        buffer.put_u8(u8::try_from(value).map_err(|_e| ERR_LIB_INTERNAL_ERROR)?);
     } else if value <= 16383 {
-        buf.put_u16(u16::try_from(value).map_err(|_e| ERR_LIB_INTERNAL_ERROR)? | 0x4000);
+        buffer.put_u16(u16::try_from(value).map_err(|_e| ERR_LIB_INTERNAL_ERROR)? | 0x4000);
     } else if value <= 1_073_741_823 {
-        buf.put_u32(u32::try_from(value).map_err(|_e| ERR_LIB_INTERNAL_ERROR)? | 0x8000_0000);
+        buffer.put_u32(u32::try_from(value).map_err(|_e| ERR_LIB_INTERNAL_ERROR)? | 0x8000_0000);
     } else if value <= 4_611_686_018_427_387_903 {
-        buf.put_u64(value | 0xC000_0000_0000_0000);
+        buffer.put_u64(value | 0xC000_0000_0000_0000);
     } else {
         return Err(ERR_LIB_INTERNAL_ERROR);
     }
@@ -291,12 +328,10 @@ pub(super) fn write_varint(buf: &mut BytesMut, value: u64) -> Result<(), ErrorCo
     Ok(())
 }
 
-// Client initiated stream ID check.
 fn is_client_initiated_stream(stream_id: StreamId) -> bool {
     (stream_id & QUIC_STREAM_INITIATOR_MASK) == 0
 }
 
-// Server initiated stream ID check.
 fn is_server_initiated_stream(stream_id: StreamId) -> bool {
     (stream_id & QUIC_STREAM_INITIATOR_MASK) != 0
 }

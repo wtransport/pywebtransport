@@ -9,7 +9,6 @@ from collections.abc import Generator
 from typing import Any, Final, cast
 
 import pytest
-import uvloop
 from pytest_benchmark.fixture import BenchmarkFixture
 
 from pywebtransport import ClientConfig, WebTransportClient, WebTransportSession
@@ -20,7 +19,7 @@ BURST_COUNT: Final[int] = 30000
 PAYLOAD_SIZE: Final[int] = 64
 STATIC_VIEW: Final[memoryview] = memoryview(b"x" * PAYLOAD_SIZE)
 
-logging.basicConfig(level=logging.CRITICAL)
+logging.basicConfig(level=logging.CRITICAL, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 
 @pytest.fixture(scope="module")
@@ -52,20 +51,18 @@ class TestDatagramPerformance:
 
     @contextlib.contextmanager
     def _sync_session(
-        self, config: ClientConfig, url: str
+        self, *, config: ClientConfig, url: str
     ) -> Generator[tuple[asyncio.AbstractEventLoop, WebTransportSession], None, None]:
-        loop = uvloop.new_event_loop()
+        loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         stack = contextlib.AsyncExitStack()
-        session: WebTransportSession | None = None
 
         try:
             client = loop.run_until_complete(stack.enter_async_context(WebTransportClient(config=config)))
             session = loop.run_until_complete(client.connect(url=url))
+            loop.run_until_complete(stack.enter_async_context(session))
             yield loop, session
         finally:
-            if session is not None:
-                loop.run_until_complete(session.close())
             loop.run_until_complete(stack.aclose())
             loop.close()
             asyncio.set_event_loop(None)

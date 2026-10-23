@@ -131,21 +131,21 @@ fn test_find_header_str_missing_key() {
 #[case(ERR_WT_APPLICATION_ERROR_FIRST, Some(0))]
 #[case(ERR_WT_APPLICATION_ERROR_FIRST + 1, Some(1))]
 #[case(ERR_WT_APPLICATION_ERROR_FIRST + 31, Some(30))]
-fn test_http_to_wt_error_mapping_logic(
+fn test_http_code_to_webtransport_code_mapping_logic(
     #[case] http_code: ErrorCode,
     #[case] expected: Option<u32>,
 ) {
-    let result = http_to_wt_error(http_code);
+    let result = http_code_to_webtransport_code(http_code);
 
     assert_eq!(result, expected);
 }
 
 #[test]
-fn test_http_to_wt_error_mapping_reserved_code() {
+fn test_http_code_to_webtransport_code_mapping_reserved_code() {
     let reserved = get_reserved_http_code();
 
     if reserved > ERR_WT_APPLICATION_ERROR_FIRST {
-        let result = http_to_wt_error(reserved);
+        let result = http_code_to_webtransport_code(reserved);
         assert_eq!(result, None);
     }
 }
@@ -168,6 +168,28 @@ fn test_is_bidirectional_stream_logic(#[case] stream_id: u64, #[case] expected: 
 #[case(3, false)]
 fn test_is_client_initiated_stream_private_logic(#[case] stream_id: u64, #[case] expected: bool) {
     let result = is_client_initiated_stream(stream_id);
+
+    assert_eq!(result, expected);
+}
+
+#[rstest]
+#[case(b"connection", b"close", true, true)]
+#[case(b"keep-alive", b"timeout=5", false, true)]
+#[case(b"proxy-connection", b"keep-alive", true, true)]
+#[case(b"te", b"Trailers", true, false)]
+#[case(b"te", b"gzip", true, true)]
+#[case(b"te", b"trailers", false, true)]
+#[case(b"te", b"trailers", true, false)]
+#[case(b"transfer-encoding", b"chunked", false, true)]
+#[case(b"upgrade", b"websocket", true, true)]
+#[case(b"user-agent", b"pywebtransport", true, false)]
+fn test_is_connection_specific_header_classification(
+    #[case] key: &[u8],
+    #[case] value: &[u8],
+    #[case] is_request: bool,
+    #[case] expected: bool,
+) {
+    let result = is_connection_specific_header(key, value, is_request);
 
     assert_eq!(result, expected);
 }
@@ -216,6 +238,62 @@ fn test_is_server_initiated_stream_private_logic(#[case] stream_id: u64, #[case]
 #[case(3, true)]
 fn test_is_unidirectional_stream_logic(#[case] stream_id: u64, #[case] expected: bool) {
     let result = is_unidirectional_stream(stream_id);
+
+    assert_eq!(result, expected);
+}
+
+#[rstest]
+#[case(b"", b"value", false)]
+#[case(b":", b"value", false)]
+#[case(b":path", b"/", true)]
+#[case(b"Content-Type", b"text/plain", false)]
+#[case(b"bad name", b"value", false)]
+#[case(b"bad:name", b"value", false)]
+#[case(b"content-type", b"text/plain", true)]
+#[case(b"x-delete", b"\x7f", false)]
+#[case(b"x-empty", b"", true)]
+#[case(b"x-inner-whitespace", b"a b\tc", true)]
+#[case(b"x-leading", b" value", false)]
+#[case(b"x-line-break", b"line\r\nbreak", false)]
+#[case(b"x-obs-text", b"caf\xe9", true)]
+#[case(b"x-trailing", b"value\t", false)]
+fn test_is_valid_header_syntax(#[case] key: &[u8], #[case] value: &[u8], #[case] expected: bool) {
+    let result = is_valid_header(key, value);
+
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn test_is_valid_user_headers_checks_every_line() {
+    let headers = vec![
+        (Bytes::from("user-agent"), Bytes::from("pywebtransport")),
+        (Bytes::from("content-length"), Bytes::from("0")),
+    ];
+
+    let result = is_valid_user_headers(&headers, false);
+
+    assert!(!result);
+}
+
+#[rstest]
+#[case(b":authority", b"example.com", true, false)]
+#[case(b"Retry-After", b"120", false, false)]
+#[case(b"connection", b"close", false, false)]
+#[case(b"content-length", b"0", false, false)]
+#[case(b"host", b"example.com", false, true)]
+#[case(b"host", b"example.com", true, false)]
+#[case(b"user-agent", b"pywebtransport", true, true)]
+#[case(b"wt-available-protocols", b"\"h3\"", true, false)]
+#[case(b"wt-protocol", b"\"h3\"", false, false)]
+fn test_is_valid_user_headers_classification(
+    #[case] key: &[u8],
+    #[case] value: &[u8],
+    #[case] is_request: bool,
+    #[case] expected: bool,
+) {
+    let headers = vec![(Bytes::copy_from_slice(key), Bytes::copy_from_slice(value))];
+
+    let result = is_valid_user_headers(&headers, is_request);
 
     assert_eq!(result, expected);
 }
@@ -307,11 +385,11 @@ fn test_read_varint_eof_errors() {
     let empty = &[];
     let partial = &[0x40];
 
-    let res_empty = read_varint(&mut Cursor::new(empty));
-    let res_partial = read_varint(&mut Cursor::new(partial));
+    let result_empty = read_varint(&mut Cursor::new(empty));
+    let result_partial = read_varint(&mut Cursor::new(partial));
 
-    assert_eq!(res_empty, Err(ERR_H3_FRAME_ERROR));
-    assert_eq!(res_partial, Err(ERR_H3_FRAME_ERROR));
+    assert_eq!(result_empty, Err(ERR_H3_FRAME_ERROR));
+    assert_eq!(result_partial, Err(ERR_H3_FRAME_ERROR));
 }
 
 #[rstest]
@@ -332,14 +410,14 @@ fn test_read_varint_valid_decoding(#[case] input: &[u8], #[case] expected: u64) 
 #[case(0, true, StreamDirection::Bidirectional)]
 #[case(2, true, StreamDirection::SendOnly)]
 #[case(3, true, StreamDirection::ReceiveOnly)]
-fn test_stream_dir_from_id_resolution(
+fn test_stream_direction_from_id_resolution(
     #[case] stream_id: u64,
     #[case] is_client: bool,
     #[case] expected: StreamDirection,
 ) {
-    let result = stream_dir_from_id(stream_id, is_client);
+    let result = stream_direction_from_id(stream_id, is_client);
 
-    assert!(matches!(result, _x if result == expected));
+    assert_eq!(result, expected);
 }
 
 #[rstest]
@@ -358,12 +436,25 @@ fn test_varint_size_calculation(#[case] value: u64, #[case] expected: usize) {
     assert_eq!(result, expected);
 }
 
+#[rstest]
+#[case(0, ERR_WT_APPLICATION_ERROR_FIRST)]
+#[case(1, ERR_WT_APPLICATION_ERROR_FIRST + 1)]
+#[case(30, ERR_WT_APPLICATION_ERROR_FIRST + 31)]
+fn test_webtransport_code_to_http_code_mapping_valid(
+    #[case] application_error_code: u32,
+    #[case] expected: ErrorCode,
+) {
+    let result = webtransport_code_to_http_code(application_error_code);
+
+    assert_eq!(result, expected);
+}
+
 #[test]
 fn test_write_varint_too_large() {
-    let mut buf = BytesMut::new();
-    let val = 0xC000_0000_0000_0000 + 1;
+    let mut buffer = BytesMut::new();
+    let value = 0xC000_0000_0000_0000 + 1;
 
-    let result = write_varint(&mut buf, val);
+    let result = write_varint(&mut buffer, value);
 
     assert_eq!(result, Err(ERR_LIB_INTERNAL_ERROR));
 }
@@ -373,25 +464,15 @@ fn test_write_varint_too_large() {
 #[case(16383, 2)]
 #[case(1_073_741_823, 4)]
 #[case(4_611_686_018_427_387_903, 8)]
-fn test_write_varint_valid_encoding(#[case] val: u64, #[case] expected_len: usize) {
-    let mut buf = BytesMut::new();
+fn test_write_varint_valid_encoding(#[case] value: u64, #[case] expected_len: usize) {
+    let mut buffer = BytesMut::new();
 
-    let result = write_varint(&mut buf, val);
-    let slice: &[u8] = &buf;
+    let result = write_varint(&mut buffer, value);
+    let slice: &[u8] = &buffer;
     let mut cursor = Cursor::new(slice);
     let decoded = read_varint(&mut cursor);
 
     assert_eq!(result, Ok(()));
-    assert_eq!(buf.len(), expected_len);
-    assert_eq!(decoded, Ok(val));
-}
-
-#[rstest]
-#[case(0, ERR_WT_APPLICATION_ERROR_FIRST)]
-#[case(1, ERR_WT_APPLICATION_ERROR_FIRST + 1)]
-#[case(30, ERR_WT_APPLICATION_ERROR_FIRST + 31)]
-fn test_wt_to_http_error_mapping_valid(#[case] wt_code: u32, #[case] expected: ErrorCode) {
-    let result = wt_to_http_error(wt_code);
-
-    assert_eq!(result, expected);
+    assert_eq!(buffer.len(), expected_len);
+    assert_eq!(decoded, Ok(value));
 }

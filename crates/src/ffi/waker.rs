@@ -1,5 +1,6 @@
-//! Cross-language async waker mechanism using OS-level file descriptors.
+//! FFI bindings for the waker.
 
+use std::io::ErrorKind;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -9,14 +10,14 @@ use tracing::debug;
 #[cfg(unix)]
 mod sys {
     use std::fs::File;
-    use std::io::{self, Write};
+    use std::io::{self, Error, ErrorKind, Write};
     use std::mem::ManuallyDrop;
     use std::os::fd::{FromRawFd, RawFd};
 
     #[inline]
     pub(super) fn write_waker(fd: usize) -> io::Result<()> {
         let raw_fd = RawFd::try_from(fd)
-            .map_err(|_e| io::Error::new(io::ErrorKind::InvalidInput, "sys_fd convert invalid"))?;
+            .map_err(|_e| Error::new(ErrorKind::InvalidInput, "sys_fd convert invalid"))?;
 
         let mut file = ManuallyDrop::new(unsafe { File::from_raw_fd(raw_fd) });
 
@@ -26,16 +27,15 @@ mod sys {
 
 #[cfg(windows)]
 mod sys {
-    use std::io::{self, Write};
+    use std::io::{self, Error, ErrorKind, Write};
     use std::mem::ManuallyDrop;
     use std::net::TcpStream;
     use std::os::windows::io::{FromRawSocket, RawSocket};
 
     #[inline]
     pub(super) fn write_waker(fd: usize) -> io::Result<()> {
-        let raw_socket = RawSocket::try_from(fd).map_err(|_e| {
-            io::Error::new(io::ErrorKind::InvalidInput, "sys_socket convert invalid")
-        })?;
+        let raw_socket = RawSocket::try_from(fd)
+            .map_err(|_e| Error::new(ErrorKind::InvalidInput, "sys_socket convert invalid"))?;
 
         let mut stream = ManuallyDrop::new(unsafe { TcpStream::from_raw_socket(raw_socket) });
 
@@ -43,7 +43,6 @@ mod sys {
     }
 }
 
-// Python-facing handle for managing the cross-language wake-up mechanism.
 #[pyclass(name = "Waker", module = "pywebtransport._pywebtransport")]
 pub(super) struct PyWaker {
     state: Arc<WakerState>,
@@ -52,6 +51,7 @@ pub(super) struct PyWaker {
 #[pymethods]
 impl PyWaker {
     #[new]
+    #[pyo3(signature = (*, fd))]
     fn new(fd: usize) -> Self {
         Self {
             state: Arc::new(WakerState {
@@ -71,7 +71,6 @@ impl PyWaker {
     reason = "PyO3 requires Rust-native methods to reside outside the #[pymethods] block."
 )]
 impl PyWaker {
-    // Generates a thread-safe callback for the Tokio reactor to invoke.
     pub(super) fn clone_waker_callback(&self) -> Arc<dyn Fn() + Send + Sync> {
         let state = Arc::clone(&self.state);
 
@@ -79,30 +78,26 @@ impl PyWaker {
     }
 }
 
-// Registers the FFI classes to the parent Python module.
-pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<PyWaker>()?;
+pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_class::<PyWaker>()?;
 
     Ok(())
 }
 
-// Shared state between the Python FFI plane and the Rust Tokio reactor.
 struct WakerState {
     fd: usize,
     signaled: AtomicBool,
 }
 
 impl WakerState {
-    // Clears the signaled flag to allow subsequent wake-ups.
     fn clear(&self) {
         self.signaled.store(false, Ordering::Release);
     }
 
-    // Triggers the OS-level file descriptor write if not already signaled.
     fn wake(&self) {
         if !self.signaled.swap(true, Ordering::AcqRel)
             && let Err(e) = sys::write_waker(self.fd)
-            && e.kind() != std::io::ErrorKind::WouldBlock
+            && e.kind() != ErrorKind::WouldBlock
         {
             debug!("rt_waker send failed err={e:?}");
         }

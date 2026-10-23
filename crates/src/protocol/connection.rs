@@ -1,29 +1,27 @@
-//! Connection-level state machine and session manager.
+//! Connection state machine.
 
 use std::borrow::Cow;
+use std::collections::VecDeque;
 
 use bytes::Bytes;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::debug;
 
 use crate::common::constants::{
-    ERR_H3_REQUEST_REJECTED, ERR_LIB_CONNECTION_STATE_ERROR, ERR_LIB_INTERNAL_ERROR,
-    ERR_LIB_SESSION_STATE_ERROR, ERR_LIB_STREAM_STATE_ERROR, ERR_WT_ALPN_ERROR,
-    ERR_WT_BUFFERED_STREAM_REJECTED, WT_AVAILABLE_PROTOCOLS, WT_PROTOCOL, WT_UPGRADE_TOKEN,
+    ERR_APP_NO_ERROR, ERR_H3_REQUEST_REJECTED, ERR_LIB_CONNECTION_STATE_ERROR,
+    ERR_LIB_INTERNAL_ERROR, ERR_LIB_SESSION_STATE_ERROR, ERR_LIB_STREAM_STATE_ERROR,
+    ERR_WT_ALPN_ERROR, ERR_WT_BUFFERED_STREAM_REJECTED, QUIC_STREAM_TYPE_COUNT, QUIC_VARINT_LIMIT,
+    WT_AVAILABLE_PROTOCOLS, WT_PROTOCOL, WT_UPGRADE_TOKEN,
 };
 use crate::common::types::{
     ConnectionHandle, ConnectionState, ErrorCode, ErrorSource, EventType, Headers, RequestId,
-    SessionId, SessionState, StreamDirection, StreamId,
+    SessionId, StreamDirection, StreamId,
 };
-use crate::protocol::H3Settings;
 use crate::protocol::events::{Effect, ProtocolEvent, RequestResult};
-use crate::protocol::session::{Session, SessionParams};
-use crate::protocol::utils::{
-    encode_wt_protocol_list, find_header, find_header_str, is_unidirectional_stream,
-    parse_wt_protocol_list, parse_wt_protocol_string, stream_dir_from_id,
-};
+use crate::protocol::h3::H3Settings;
+use crate::protocol::session::{Session, SessionParameters};
+use crate::protocol::utils;
 
-// Diagnostic information snapshot for a connection.
 #[derive(Clone, Debug)]
 pub(crate) struct ConnectionDiagnostics {
     pub(crate) close_code: Option<ErrorCode>,
@@ -31,8 +29,7 @@ pub(crate) struct ConnectionDiagnostics {
     pub(crate) closed_at: Option<f64>,
     pub(crate) connected_at: Option<f64>,
     pub(crate) connection_handle: ConnectionHandle,
-    pub(crate) early_event_count: usize,
-    pub(crate) handshake_complete: bool,
+    pub(crate) handshake_completed: bool,
     pub(crate) is_client: bool,
     pub(crate) local_goaway_sent: bool,
     pub(crate) peer_goaway_received: bool,
@@ -41,103 +38,103 @@ pub(crate) struct ConnectionDiagnostics {
     pub(crate) peer_initial_max_streams_uni: u64,
     pub(crate) peer_max_datagram_frame_size: Option<u64>,
     pub(crate) peer_settings_received: bool,
-    pub(crate) pending_request_count: usize,
-    pub(crate) session_count: usize,
     pub(crate) state: ConnectionState,
-    pub(crate) stream_count: usize,
 }
 
-// Representation of a WebTransport connection state machine.
 pub(super) struct Connection {
+    blocked_session_requests: VecDeque<RequestId>,
     close_code: Option<ErrorCode>,
     close_reason: Option<String>,
     closed_at: Option<f64>,
     connected_at: Option<f64>,
-    early_event_buffer: FxHashMap<StreamId, Vec<(f64, ProtocolEvent)>>,
+    early_event_buffer: FxHashMap<SessionId, Vec<(f64, ProtocolEvent)>>,
     early_event_count: usize,
     early_event_ttl: f64,
-    flow_control_window: u64,
     handle: ConnectionHandle,
-    handshake_complete: bool,
+    handshake_completed: bool,
     initial_max_data: u64,
     initial_max_streams_bidi: u64,
     initial_max_streams_uni: u64,
     is_client: bool,
     local_goaway_sent: bool,
+    max_connection_pending_events: u64,
     max_pending_capsules: u64,
     max_pending_datagrams: u64,
     max_pending_streams: u64,
     max_session_pending_events: u64,
     max_sessions: u64,
-    max_stream_read_buffer_size: u64,
-    max_stream_write_buffer_size: u64,
-    max_total_pending_events: u64,
+    max_write_buffer_size: u64,
     peer_goaway_received: bool,
     peer_initial_max_data: u64,
     peer_initial_max_streams_bidi: u64,
     peer_initial_max_streams_uni: u64,
     peer_max_datagram_frame_size: Option<u64>,
     peer_settings_received: bool,
-    pending_requests: FxHashMap<StreamId, RequestId>,
-    pending_session_configs: FxHashMap<RequestId, SessionInitData>,
-    pending_wt_available_protocols: FxHashMap<StreamId, Option<Vec<String>>>,
+    pending_session_requests: FxHashMap<StreamId, RequestId>,
+    request_id: Option<RequestId>,
+    session_receive_window: u64,
+    session_requests: FxHashMap<RequestId, SessionRequest>,
     sessions: FxHashMap<SessionId, Session>,
     state: ConnectionState,
     stream_map: FxHashMap<StreamId, SessionId>,
 }
 
 impl Connection {
-    // Connection entity initialization.
-    pub(super) fn new(handle: ConnectionHandle, is_client: bool, params: ConnectionParams) -> Self {
+    pub(super) fn new(
+        handle: ConnectionHandle,
+        request_id: Option<RequestId>,
+        is_client: bool,
+        parameters: ConnectionParameters,
+    ) -> Self {
         Self {
+            blocked_session_requests: VecDeque::new(),
             close_code: None,
             close_reason: None,
             closed_at: None,
             connected_at: None,
             early_event_buffer: FxHashMap::default(),
             early_event_count: 0,
-            early_event_ttl: params.early_event_ttl,
-            flow_control_window: params.flow_control_window,
+            early_event_ttl: parameters.early_event_ttl,
             handle,
-            handshake_complete: false,
-            initial_max_data: params.initial_max_data,
-            initial_max_streams_bidi: params.initial_max_streams_bidi,
-            initial_max_streams_uni: params.initial_max_streams_uni,
+            handshake_completed: false,
+            initial_max_data: parameters.initial_max_data,
+            initial_max_streams_bidi: parameters.initial_max_streams_bidi,
+            initial_max_streams_uni: parameters.initial_max_streams_uni,
             is_client,
             local_goaway_sent: false,
-            max_pending_capsules: params.max_pending_capsules,
-            max_pending_datagrams: params.max_pending_datagrams,
-            max_pending_streams: params.max_pending_streams,
-            max_session_pending_events: params.max_session_pending_events,
-            max_sessions: params.max_sessions,
-            max_stream_read_buffer_size: params.max_stream_read_buffer_size,
-            max_stream_write_buffer_size: params.max_stream_write_buffer_size,
-            max_total_pending_events: params.max_total_pending_events,
+            max_connection_pending_events: parameters.max_connection_pending_events,
+            max_pending_capsules: parameters.max_pending_capsules,
+            max_pending_datagrams: parameters.max_pending_datagrams,
+            max_pending_streams: parameters.max_pending_streams,
+            max_session_pending_events: parameters.max_session_pending_events,
+            max_sessions: parameters.max_sessions,
+            max_write_buffer_size: parameters.max_write_buffer_size,
             peer_goaway_received: false,
             peer_initial_max_data: 0,
             peer_initial_max_streams_bidi: 0,
             peer_initial_max_streams_uni: 0,
             peer_max_datagram_frame_size: None,
             peer_settings_received: false,
-            pending_requests: FxHashMap::default(),
-            pending_session_configs: FxHashMap::default(),
-            pending_wt_available_protocols: FxHashMap::default(),
+            pending_session_requests: FxHashMap::default(),
+            request_id,
+            session_receive_window: parameters.session_receive_window,
+            session_requests: FxHashMap::default(),
             sessions: FxHashMap::default(),
             state: ConnectionState::Idle,
             stream_map: FxHashMap::default(),
         }
     }
 
-    // User session acceptance handling (delegated).
     pub(super) fn accept_session(
         &mut self,
         session_id: SessionId,
         request_id: RequestId,
+        headers: Headers,
         wt_protocol: Option<String>,
         now: f64,
     ) -> Vec<Effect> {
         if let Some(session) = self.sessions.get_mut(&session_id) {
-            return session.accept(request_id, wt_protocol, now);
+            return session.accept(request_id, headers, wt_protocol, now);
         }
         debug!(
             "wt_session resolve failed connection_handle={} request_id={request_id} session_id={session_id}",
@@ -151,46 +148,40 @@ impl Connection {
         }]
     }
 
-    // H3 session binding.
     pub(super) fn bind_session(
         &mut self,
         stream_id: StreamId,
         request_id: RequestId,
     ) -> Vec<Effect> {
-        self.pending_requests.insert(stream_id, request_id);
+        self.pending_session_requests.insert(stream_id, request_id);
 
         let is_optimistic = self
-            .pending_session_configs
+            .session_requests
             .get(&request_id)
-            .is_some_and(|init_data| init_data.optimistic);
+            .is_some_and(|session_request| session_request.optimistic);
 
-        if is_optimistic && let Some(init_data) = self.pending_session_configs.remove(&request_id) {
-            self.pending_wt_available_protocols
-                .insert(stream_id, init_data.wt_available_protocols);
-
+        if is_optimistic && let Some(session_request) = self.session_requests.remove(&request_id) {
             let session = Session::new(
                 stream_id,
-                init_data.path.clone(),
-                init_data.headers.clone(),
-                None,
-                SessionState::Connecting,
+                session_request.path.clone(),
+                session_request.headers.clone(),
+                session_request.wt_available_protocols,
                 self.is_client,
-                SessionParams {
+                SessionParameters {
                     flow_control_negotiated: self.has_flow_control(),
-                    flow_control_window: self.flow_control_window,
                     initial_max_data: self.initial_max_data,
                     initial_max_streams_bidi: self.initial_max_streams_bidi,
                     initial_max_streams_uni: self.initial_max_streams_uni,
                     max_pending_capsules: self.max_pending_capsules,
                     max_pending_datagrams: self.max_pending_datagrams,
                     max_pending_streams: self.max_pending_streams,
-                    max_stream_read_buffer_size: self.max_stream_read_buffer_size,
-                    max_stream_write_buffer_size: self.max_stream_write_buffer_size,
+                    max_write_buffer_size: self.max_write_buffer_size,
                     peer_max_data: self.peer_initial_max_data,
                     peer_max_streams_bidi: self.peer_initial_max_streams_bidi,
                     peer_max_streams_uni: self.peer_initial_max_streams_uni,
+                    receive_window: self.session_receive_window,
                 },
-                init_data.created_at,
+                session_request.created_at,
             );
             self.sessions.insert(stream_id, session);
 
@@ -198,8 +189,8 @@ impl Connection {
                 Effect::EmitSessionEvent {
                     session_id: stream_id,
                     event_type: EventType::SessionPending,
-                    path: Some(init_data.path.clone()),
-                    headers: Some(init_data.headers.clone()),
+                    path: Some(session_request.path),
+                    headers: Some(session_request.headers),
                     wt_available_protocols: None,
                     wt_protocol: None,
                     data: None,
@@ -207,6 +198,7 @@ impl Connection {
                     max_data: None,
                     max_streams: None,
                     ready_at: None,
+                    status_code: None,
                     error_code: None,
                     reason: None,
                 },
@@ -220,7 +212,6 @@ impl Connection {
         Vec::new()
     }
 
-    // QUIC stream binding (delegated).
     pub(super) fn bind_stream(
         &mut self,
         session_id: SessionId,
@@ -231,7 +222,9 @@ impl Connection {
     ) -> Vec<Effect> {
         if let Some(session) = self.sessions.get_mut(&session_id) {
             let effects = session.bind_stream(stream_id, request_id, is_unidirectional, now);
-            self.stream_map.insert(stream_id, session_id);
+            if session.has_stream(stream_id) {
+                self.stream_map.insert(stream_id, session_id);
+            }
             return effects;
         }
         debug!(
@@ -241,15 +234,14 @@ impl Connection {
         vec![Effect::NotifyRequestFailed {
             request_id,
             source: ErrorSource::Session,
-            error_code: None,
+            error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
             reason: "wt_session resolve failed".into(),
         }]
     }
 
-    // Connection closure handling.
     pub(super) fn close(
         &mut self,
-        request_id: RequestId,
+        request_id: Option<RequestId>,
         error_code: ErrorCode,
         reason: Option<Cow<'static, str>>,
         now: f64,
@@ -260,15 +252,17 @@ impl Connection {
             self.state,
             ConnectionState::Closed | ConnectionState::Closing
         ) {
-            effects.push(Effect::NotifyRequestDone {
-                request_id,
-                result: RequestResult::None,
-            });
+            if let Some(request_id) = request_id {
+                effects.push(Effect::NotifyRequestDone {
+                    request_id,
+                    result: RequestResult::None,
+                });
+            }
             return effects;
         }
 
         debug!(
-            "wt_connection close actual={:?} connection_handle={} request_id={request_id}",
+            "wt_connection close actual={:?} connection_handle={} err={error_code}",
             self.state, self.handle
         );
         self.close_code = Some(error_code);
@@ -277,15 +271,67 @@ impl Connection {
         self.state = ConnectionState::Closing;
 
         effects.push(Effect::CloseQuicConnection { error_code, reason });
-        effects.push(Effect::NotifyRequestDone {
-            request_id,
-            result: RequestResult::None,
-        });
+
+        if let Some(request_id) = request_id {
+            effects.push(Effect::NotifyRequestDone {
+                request_id,
+                result: RequestResult::None,
+            });
+        }
 
         effects
     }
 
-    // User session closure handling (delegated).
+    pub(super) fn close_gracefully(&mut self, request_id: RequestId) -> Vec<Effect> {
+        let mut effects = Vec::new();
+
+        if self.state != ConnectionState::Connected {
+            effects.push(Effect::NotifyRequestDone {
+                request_id,
+                result: RequestResult::None,
+            });
+            return effects;
+        }
+
+        if !self.local_goaway_sent {
+            debug!(
+                "wt_connection drain actual=false connection_handle={} request_id={request_id}",
+                self.handle
+            );
+            self.local_goaway_sent = true;
+
+            let identifier = if self.is_client {
+                0
+            } else {
+                self.sessions
+                    .keys()
+                    .copied()
+                    .max()
+                    .map_or(0, |session_id| {
+                        session_id.saturating_add(QUIC_STREAM_TYPE_COUNT)
+                    })
+                    .min(QUIC_VARINT_LIMIT)
+            };
+
+            effects.push(Effect::SendH3Goaway { identifier });
+        }
+
+        let mut session_ids: Vec<SessionId> = self.sessions.keys().copied().collect();
+        session_ids.sort_unstable();
+
+        for session_id in session_ids {
+            if let Some(session) = self.sessions.get_mut(&session_id) {
+                effects.extend(session.drain());
+            }
+        }
+
+        effects.push(Effect::NotifyRequestDone {
+            request_id,
+            result: RequestResult::None,
+        });
+        effects
+    }
+
     pub(super) fn close_session(
         &mut self,
         session_id: SessionId,
@@ -307,20 +353,23 @@ impl Connection {
         }]
     }
 
-    // User session creation request handling.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "Orthogonal domain primitives post-extraction."
-    )]
+    pub(super) fn complete_stream_write(&mut self, stream_id: StreamId) -> Vec<Effect> {
+        if let Some(&session_id) = self.stream_map.get(&stream_id)
+            && let Some(session) = self.sessions.get_mut(&session_id)
+        {
+            let effects = session.complete_stream_write(stream_id);
+            if !session.has_stream(stream_id) {
+                self.stream_map.remove(&stream_id);
+            }
+            return effects;
+        }
+        Vec::new()
+    }
+
     pub(super) fn create_session(
         &mut self,
         request_id: RequestId,
-        authority: String,
-        path: String,
-        headers: Headers,
-        wt_available_protocols: Option<Vec<String>>,
-        optimistic: bool,
-        now: f64,
+        mut session_request: SessionRequest,
     ) -> Vec<Effect> {
         if !self.is_client {
             debug!(
@@ -367,7 +416,7 @@ impl Connection {
             1
         };
 
-        let current_total = (self.sessions.len() + self.pending_session_configs.len()) as u64;
+        let current_total = (self.sessions.len() + self.session_requests.len()) as u64;
 
         if active_limit > 0 && current_total >= active_limit {
             debug!(
@@ -382,15 +431,25 @@ impl Connection {
             }];
         }
 
-        let mut headers: Headers = headers
-            .into_iter()
-            .filter(|(k, _)| !k.starts_with(b":"))
-            .collect();
+        if !utils::is_valid_user_headers(&session_request.headers, true) {
+            debug!(
+                "h3_headers validate invalid connection_handle={} request_id={request_id}",
+                self.handle
+            );
+            return vec![Effect::NotifyRequestFailed {
+                request_id,
+                source: ErrorSource::Connection,
+                error_code: None,
+                reason: "h3_headers validate invalid".into(),
+            }];
+        }
 
-        if let Some(ref protos) = wt_available_protocols {
-            match encode_wt_protocol_list(protos) {
+        if let Some(ref wt_available_protocols) = session_request.wt_available_protocols {
+            match utils::encode_wt_protocol_list(wt_available_protocols) {
                 Ok(encoded) => {
-                    headers.push((Bytes::from_static(WT_AVAILABLE_PROTOCOLS), encoded));
+                    session_request
+                        .headers
+                        .push((Bytes::from_static(WT_AVAILABLE_PROTOCOLS), encoded));
                 }
                 Err(e) => {
                     debug!(
@@ -407,26 +466,17 @@ impl Connection {
             }
         }
 
-        self.pending_session_configs.insert(
-            request_id,
-            SessionInitData {
-                created_at: now,
-                headers: headers.clone(),
-                optimistic,
-                path: path.clone(),
-                wt_available_protocols,
-            },
-        );
+        self.session_requests
+            .insert(request_id, session_request.clone());
 
-        vec![Effect::CreateH3Session {
+        vec![Effect::CreateH3ConnectStream {
             request_id,
-            authority,
-            path,
-            headers,
+            authority: session_request.authority,
+            path: session_request.path,
+            headers: session_request.headers,
         }]
     }
 
-    // User stream creation request handling (delegated).
     pub(super) fn create_stream(
         &mut self,
         session_id: SessionId,
@@ -448,16 +498,82 @@ impl Connection {
         }]
     }
 
-    // Connection diagnostics event handling.
-    pub(super) fn diagnose(&self, request_id: RequestId) -> Vec<Effect> {
-        let diag = self.diagnostics_snapshot();
-        vec![Effect::NotifyRequestDone {
+    pub(super) fn defer_session(&mut self, request_id: RequestId) -> Vec<Effect> {
+        self.blocked_session_requests.push_back(request_id);
+        Vec::new()
+    }
+
+    pub(super) fn defer_stream(
+        &mut self,
+        session_id: SessionId,
+        request_id: RequestId,
+        is_unidirectional: bool,
+    ) -> Vec<Effect> {
+        if let Some(session) = self.sessions.get_mut(&session_id) {
+            return session.defer_stream(request_id, is_unidirectional);
+        }
+        debug!(
+            "wt_session resolve failed connection_handle={} request_id={request_id} session_id={session_id}",
+            self.handle
+        );
+        vec![Effect::NotifyRequestFailed {
             request_id,
-            result: RequestResult::ConnectionDiagnostics(Box::new(diag)),
+            source: ErrorSource::Session,
+            error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
+            reason: "wt_session resolve failed".into(),
         }]
     }
 
-    // TLS keying material export handling (delegated).
+    pub(super) fn diagnose(&self, request_id: RequestId) -> Vec<Effect> {
+        let diagnostics = self.diagnostics_snapshot();
+        vec![Effect::NotifyRequestDone {
+            request_id,
+            result: RequestResult::ConnectionDiagnostics(Box::new(diagnostics)),
+        }]
+    }
+
+    pub(super) fn diagnose_session(
+        &self,
+        session_id: SessionId,
+        request_id: RequestId,
+    ) -> Vec<Effect> {
+        if let Some(session) = self.sessions.get(&session_id) {
+            return session.diagnose(request_id);
+        }
+        debug!(
+            "wt_session resolve failed connection_handle={} request_id={request_id} session_id={session_id}",
+            self.handle
+        );
+        vec![Effect::NotifyRequestFailed {
+            request_id,
+            source: ErrorSource::Session,
+            error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
+            reason: "wt_session resolve failed".into(),
+        }]
+    }
+
+    pub(super) fn diagnose_stream(
+        &self,
+        stream_id: StreamId,
+        request_id: RequestId,
+    ) -> Vec<Effect> {
+        if let Some(&session_id) = self.stream_map.get(&stream_id)
+            && let Some(session) = self.sessions.get(&session_id)
+        {
+            return session.diagnose_stream(stream_id, request_id);
+        }
+        debug!(
+            "wt_stream resolve failed connection_handle={} request_id={request_id} stream_id={stream_id}",
+            self.handle
+        );
+        vec![Effect::NotifyRequestFailed {
+            request_id,
+            source: ErrorSource::Stream,
+            error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
+            reason: "wt_stream resolve failed".into(),
+        }]
+    }
+
     pub(super) fn export_keying_material(
         &self,
         session_id: SessionId,
@@ -481,7 +597,6 @@ impl Connection {
         }]
     }
 
-    // H3 session creation failure handling.
     pub(super) fn fail_session(
         &mut self,
         request_id: RequestId,
@@ -492,7 +607,7 @@ impl Connection {
             "wt_session create failed connection_handle={} request_id={request_id} err={reason}",
             self.handle
         );
-        self.pending_session_configs.remove(&request_id);
+        self.session_requests.remove(&request_id);
         vec![Effect::NotifyRequestFailed {
             request_id,
             source: ErrorSource::Session,
@@ -501,35 +616,8 @@ impl Connection {
         }]
     }
 
-    // Graceful connection shutdown handling.
-    pub(super) fn graceful_close(&mut self, request_id: RequestId) -> Vec<Effect> {
-        let mut effects = Vec::new();
-
-        if !self.local_goaway_sent {
-            debug!(
-                "wt_connection drain actual=false connection_handle={} request_id={request_id}",
-                self.handle
-            );
-            self.local_goaway_sent = true;
-            effects.push(Effect::SendH3Goaway);
-        }
-
-        effects.push(Effect::NotifyRequestDone {
-            request_id,
-            result: RequestResult::None,
-        });
-        effects
-    }
-
-    // Handshake completion handling.
-    pub(super) fn handshake_completed(&mut self, now: f64) -> Vec<Effect> {
-        let mut effects = Vec::new();
-
+    pub(super) fn handle_handshake_completed(&mut self, now: f64) -> Vec<Effect> {
         if self.state == ConnectionState::Idle {
-            debug!(
-                "wt_connection open actual={:?} connection_handle={}",
-                self.state, self.handle
-            );
             self.state = ConnectionState::Connecting;
         }
 
@@ -538,54 +626,167 @@ impl Connection {
                 "wt_connection validate failed actual={:?} connection_handle={} expected=connecting",
                 self.state, self.handle
             );
-            return effects;
+            return Vec::new();
         }
 
-        self.handshake_complete = true;
+        self.handshake_completed = true;
 
-        if !self.is_client {
-            debug!(
-                "wt_connection open actual={:?} connection_handle={}",
-                self.state, self.handle
-            );
-            self.connected_at = Some(now);
-            self.state = ConnectionState::Connected;
-            effects.push(Effect::EmitConnectionEvent {
-                connection_handle: self.handle,
-                event_type: EventType::ConnectionEstablished,
-                error_code: None,
-                reason: None,
-            });
-        } else if let Some((client_effects, _)) = self.check_connection_ready(now) {
-            effects.extend(client_effects);
+        let mut effects = vec![Effect::CreateH3LocalStreams];
+
+        if !self.is_client || self.peer_settings_received {
+            effects.extend(self.open(now));
         }
 
         effects
     }
 
-    // Flow control negotiation status verification.
-    pub(super) fn has_flow_control(&self) -> bool {
-        let local_intent = self.initial_max_data > 0
-            || self.initial_max_streams_bidi > 0
-            || self.initial_max_streams_uni > 0;
-        let peer_intent = self.peer_initial_max_data > 0
-            || self.peer_initial_max_streams_bidi > 0
-            || self.peer_initial_max_streams_uni > 0;
-
-        local_intent && peer_intent
+    pub(super) fn handle_stream_data_acknowledged(&mut self, stream_id: StreamId) -> Vec<Effect> {
+        if let Some(&session_id) = self.stream_map.get(&stream_id)
+            && let Some(session) = self.sessions.get_mut(&session_id)
+        {
+            let effects = session.handle_stream_data_acknowledged(stream_id);
+            if !session.has_stream(stream_id) {
+                self.stream_map.remove(&stream_id);
+            }
+            return effects;
+        }
+        Vec::new()
     }
 
-    // Client topological role predicate.
+    pub(super) fn handle_stream_opened(
+        &mut self,
+        session_id: SessionId,
+        stream_id: StreamId,
+        now: f64,
+    ) -> Vec<Effect> {
+        if let Some(session) = self.sessions.get_mut(&session_id) {
+            let effects = session.handle_stream_opened(stream_id, now);
+            if session.has_stream(stream_id) {
+                self.stream_map.insert(stream_id, session_id);
+            }
+            return effects;
+        }
+
+        let event = ProtocolEvent::H3WebTransportStreamOpened {
+            session_id,
+            stream_id,
+        };
+
+        if !self.buffer_early_event(session_id, event, now) {
+            debug!(
+                "wt_stream abort connection_handle={} stream_id={stream_id}",
+                self.handle
+            );
+            let mut effects = Vec::new();
+
+            if utils::is_unidirectional_stream(stream_id) {
+                effects.push(Effect::StopQuicStream {
+                    stream_id,
+                    error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
+                });
+            } else {
+                effects.push(Effect::ResetQuicStream {
+                    stream_id,
+                    error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
+                });
+                effects.push(Effect::StopQuicStream {
+                    stream_id,
+                    error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
+                });
+            }
+
+            return effects;
+        }
+
+        Vec::new()
+    }
+
+    pub(super) fn handle_terminated(
+        &mut self,
+        error_code: ErrorCode,
+        reason: Cow<'static, str>,
+        now: f64,
+    ) -> Vec<Effect> {
+        if self.state == ConnectionState::Closed {
+            return Vec::new();
+        }
+
+        let previous_state = self.state;
+
+        if self.state != ConnectionState::Closing {
+            self.close_code = Some(error_code);
+            self.close_reason = Some(reason.clone().into_owned());
+            self.closed_at = Some(now);
+        }
+        self.state = ConnectionState::Closed;
+
+        let mut effects = Vec::new();
+
+        let failure_reason = if previous_state == ConnectionState::Closing {
+            debug!(
+                "wt_connection close actual={:?} connection_handle={} err={error_code}",
+                previous_state, self.handle
+            );
+            "wt_connection close"
+        } else {
+            debug!(
+                "wt_connection abort actual={:?} connection_handle={} err={error_code}",
+                previous_state, self.handle
+            );
+            "wt_connection abort"
+        };
+
+        let mut request_ids: Vec<RequestId> = self
+            .session_requests
+            .drain()
+            .map(|(request_id, _)| request_id)
+            .chain(self.request_id.take())
+            .collect();
+        request_ids.sort_unstable();
+
+        self.blocked_session_requests.clear();
+        self.pending_session_requests.clear();
+
+        let mut session_ids: Vec<SessionId> = self.sessions.keys().copied().collect();
+        session_ids.sort_unstable();
+
+        for session_id in session_ids {
+            if let Some(session) = self.sessions.get_mut(&session_id) {
+                effects.extend(session.recv_connect_close(error_code, reason.clone(), now));
+            }
+        }
+
+        effects.push(Effect::EmitConnectionEvent {
+            connection_handle: self.handle,
+            event_type: EventType::ConnectionClosed,
+            error_code: Some(error_code),
+            reason: Some(reason),
+        });
+
+        for request_id in request_ids {
+            effects.push(Effect::NotifyRequestFailed {
+                request_id,
+                source: ErrorSource::Connection,
+                error_code: Some(ERR_LIB_CONNECTION_STATE_ERROR),
+                reason: failure_reason.into(),
+            });
+        }
+
+        effects
+    }
+
+    pub(super) fn has_stream(&self, stream_id: StreamId) -> bool {
+        self.stream_map.contains_key(&stream_id)
+    }
+
     pub(super) fn is_client(&self) -> bool {
         self.is_client
     }
 
-    // Connection established state predicate.
     pub(super) fn is_connected(&self) -> bool {
         self.state == ConnectionState::Connected
     }
 
-    // Connection pre-established state predicate.
     pub(super) fn is_pre_connected(&self) -> bool {
         matches!(
             self.state,
@@ -593,64 +794,62 @@ impl Connection {
         )
     }
 
-    // Session existence predicate by stream identifier.
+    pub(super) fn is_session_closed(&self, session_id: SessionId) -> bool {
+        self.sessions
+            .get(&session_id)
+            .is_some_and(Session::is_closed)
+    }
+
     pub(super) fn is_session_stream(&self, stream_id: StreamId) -> bool {
         self.sessions.contains_key(&stream_id)
     }
 
-    // Peer datagram frame size limit accessor.
     pub(super) fn peer_max_datagram_frame_size(&self) -> Option<u64> {
         self.peer_max_datagram_frame_size
     }
 
-    // Early events pruning.
     pub(super) fn prune_early_events(&mut self, now: f64) -> Vec<Effect> {
         let mut effects = Vec::new();
-        let mut streams_to_remove = Vec::new();
-        let mut terminated_child_streams = FxHashSet::default();
+        let mut session_ids_to_remove = Vec::new();
 
-        let mut stream_ids: Vec<StreamId> = self.early_event_buffer.keys().copied().collect();
-        stream_ids.sort_unstable();
+        let mut session_ids: Vec<SessionId> = self.early_event_buffer.keys().copied().collect();
+        session_ids.sort_unstable();
 
-        for stream_id in stream_ids {
-            if let Some(events) = self.early_event_buffer.get_mut(&stream_id) {
+        for session_id in session_ids {
+            if let Some(events) = self.early_event_buffer.get_mut(&session_id) {
                 let mut valid_events = Vec::new();
 
-                for (timestamp, evt) in events.drain(..) {
+                for (timestamp, event) in events.drain(..) {
                     if now - timestamp < self.early_event_ttl {
-                        valid_events.push((timestamp, evt));
+                        valid_events.push((timestamp, event));
                     } else {
                         self.early_event_count -= 1;
 
-                        if let ProtocolEvent::TransportStreamDataReceived {
-                            stream_id: child_id,
-                            ..
-                        } = evt
-                            && terminated_child_streams.insert(child_id)
-                        {
+                        if let ProtocolEvent::H3WebTransportStreamOpened { stream_id, .. } = event {
                             debug!(
-                                "wt_stream abort connection_handle={} stream_id={child_id}",
+                                "wt_stream abort connection_handle={} stream_id={stream_id}",
                                 self.handle
                             );
-                            let dir = stream_dir_from_id(child_id, self.is_client);
+                            let direction =
+                                utils::stream_direction_from_id(stream_id, self.is_client);
                             let can_send = matches!(
-                                dir,
+                                direction,
                                 StreamDirection::Bidirectional | StreamDirection::SendOnly
                             );
                             let can_receive = matches!(
-                                dir,
+                                direction,
                                 StreamDirection::Bidirectional | StreamDirection::ReceiveOnly
                             );
 
                             if can_send {
                                 effects.push(Effect::ResetQuicStream {
-                                    stream_id: child_id,
+                                    stream_id,
                                     error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
                                 });
                             }
                             if can_receive {
                                 effects.push(Effect::StopQuicStream {
-                                    stream_id: child_id,
+                                    stream_id,
                                     error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
                                 });
                             }
@@ -659,90 +858,112 @@ impl Connection {
                 }
 
                 if valid_events.is_empty() {
-                    streams_to_remove.push(stream_id);
+                    session_ids_to_remove.push(session_id);
                 } else {
                     *events = valid_events;
                 }
             }
         }
 
-        for stream_id in streams_to_remove {
-            self.early_event_buffer.remove(&stream_id);
+        for session_id in session_ids_to_remove {
+            self.early_event_buffer.remove(&session_id);
         }
 
         effects
     }
 
-    // Closed resources pruning.
-    pub(super) fn prune_resources(&mut self) -> Vec<Effect> {
-        let mut effects = Vec::new();
-
+    pub(super) fn prune_resources(&mut self) {
         let mut closed_session_ids: Vec<SessionId> = self
             .sessions
             .iter()
-            .filter(|(_, s)| s.is_closed())
-            .map(|(id, _)| *id)
+            .filter(|(_, session)| session.is_closed())
+            .map(|(session_id, _)| *session_id)
             .collect();
 
         closed_session_ids.sort_unstable();
         let closed_session_set: FxHashSet<SessionId> = closed_session_ids.iter().copied().collect();
 
-        for sid in closed_session_ids {
+        for session_id in closed_session_ids {
             debug!(
-                "wt_session destroy connection_handle={} session_id={sid}",
+                "wt_session destroy connection_handle={} session_id={session_id}",
                 self.handle
             );
-            self.sessions.remove(&sid);
-            self.pending_wt_available_protocols.remove(&sid);
-            effects.push(Effect::CleanupH3Stream { stream_id: sid });
+            self.sessions.remove(&session_id);
         }
 
         if !closed_session_set.is_empty() {
             self.stream_map
-                .retain(|_, sess_id| !closed_session_set.contains(sess_id));
+                .retain(|_, session_id| !closed_session_set.contains(session_id));
         }
-
-        let mut active_session_ids: Vec<SessionId> = self.sessions.keys().copied().collect();
-        active_session_ids.sort_unstable();
-
-        for session_id in active_session_ids {
-            if let Some(session) = self.sessions.get_mut(&session_id) {
-                let session_effects = session.prune_closed_streams();
-                for effect in &session_effects {
-                    if let Effect::CleanupH3Stream { stream_id } = effect {
-                        self.stream_map.remove(stream_id);
-                    }
-                }
-                effects.extend(session_effects);
-            }
-        }
-
-        effects
     }
 
-    // Capsule reception handling (delegated).
+    pub(super) fn read_datagram(
+        &mut self,
+        session_id: SessionId,
+        request_id: RequestId,
+    ) -> Vec<Effect> {
+        if let Some(session) = self.sessions.get_mut(&session_id) {
+            return session.read_datagram(request_id);
+        }
+        debug!(
+            "wt_session resolve failed connection_handle={} request_id={request_id} session_id={session_id}",
+            self.handle
+        );
+        vec![Effect::NotifyRequestFailed {
+            request_id,
+            source: ErrorSource::Session,
+            error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
+            reason: "wt_session resolve failed".into(),
+        }]
+    }
+
+    pub(super) fn read_stream(
+        &mut self,
+        stream_id: StreamId,
+        request_id: RequestId,
+        max_size: u64,
+    ) -> Vec<Effect> {
+        if let Some(&session_id) = self.stream_map.get(&stream_id)
+            && let Some(session) = self.sessions.get_mut(&session_id)
+        {
+            let effects = session.read_stream(stream_id, request_id, max_size);
+            if !session.has_stream(stream_id) {
+                self.stream_map.remove(&stream_id);
+            }
+            return effects;
+        }
+        debug!(
+            "wt_stream resolve failed connection_handle={} request_id={request_id} stream_id={stream_id}",
+            self.handle
+        );
+        vec![Effect::NotifyRequestFailed {
+            request_id,
+            source: ErrorSource::Stream,
+            error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
+            reason: "wt_stream resolve failed".into(),
+        }]
+    }
+
     pub(super) fn recv_capsule(
         &mut self,
         session_id: SessionId,
         capsule_type: u64,
-        data: &[u8],
+        capsule_value: &[u8],
         now: f64,
     ) -> Vec<Effect> {
         if let Some(session) = self.sessions.get_mut(&session_id) {
-            return session.recv_capsule(capsule_type, data, now);
+            return session.recv_capsule(capsule_type, capsule_value, now);
         }
         Vec::new()
     }
 
-    // CONNECT stream closure reception handling (delegated).
     pub(super) fn recv_connect_close(&mut self, session_id: SessionId, now: f64) -> Vec<Effect> {
         if let Some(session) = self.sessions.get_mut(&session_id) {
-            return session.recv_connect_close(now);
+            return session.recv_connect_close(ERR_APP_NO_ERROR, "".into(), now);
         }
         Vec::new()
     }
 
-    // Datagram reception handling (delegated).
     pub(super) fn recv_datagram(
         &mut self,
         session_id: SessionId,
@@ -753,18 +974,34 @@ impl Connection {
             return session.recv_datagram(data);
         }
 
-        let event = ProtocolEvent::TransportDatagramFrameReceived { data };
+        let event = ProtocolEvent::H3DatagramReceived {
+            stream_id: session_id,
+            data,
+        };
 
         self.buffer_early_event(session_id, event, now);
 
         Vec::new()
     }
 
-    // GOAWAY frame reception handling.
     pub(super) fn recv_goaway(&mut self) -> Vec<Effect> {
         let mut effects = Vec::new();
 
         self.peer_goaway_received = true;
+
+        while let Some(request_id) = self.blocked_session_requests.pop_front() {
+            debug!(
+                "wt_connection validate failed actual={} connection_handle={} expected=false request_id={request_id}",
+                self.peer_goaway_received, self.handle
+            );
+            self.session_requests.remove(&request_id);
+            effects.push(Effect::NotifyRequestFailed {
+                request_id,
+                source: ErrorSource::Connection,
+                error_code: Some(ERR_LIB_CONNECTION_STATE_ERROR),
+                reason: "wt_connection validate failed".into(),
+            });
+        }
 
         let mut session_ids: Vec<SessionId> = self.sessions.keys().copied().collect();
         session_ids.sort_unstable();
@@ -777,43 +1014,36 @@ impl Connection {
         effects
     }
 
-    // HEADERS frame reception handling.
     pub(super) fn recv_headers(
         &mut self,
         stream_id: StreamId,
         headers: Headers,
-        stream_ended: bool,
         now: f64,
     ) -> Vec<Effect> {
         let mut effects = Vec::new();
 
         if self.is_client {
-            let Some(request_id) = self.pending_requests.remove(&stream_id) else {
+            let Some(request_id) = self.pending_session_requests.remove(&stream_id) else {
                 debug!(
                     "wt_stream resolve failed connection_handle={} stream_id={stream_id}",
                     self.handle
                 );
-                if stream_ended {
-                    effects.extend(self.recv_connect_close(stream_id, now));
-                }
                 return effects;
             };
 
             let is_optimistic = self.sessions.contains_key(&stream_id);
 
             let wt_available_protocols = if is_optimistic {
-                self.pending_wt_available_protocols
-                    .remove(&stream_id)
-                    .flatten()
+                self.sessions
+                    .get(&stream_id)
+                    .and_then(Session::wt_available_protocols)
+                    .map(<[String]>::to_vec)
             } else {
-                let Some(init_data) = self.pending_session_configs.get(&request_id) else {
+                let Some(session_request) = self.session_requests.get(&request_id) else {
                     debug!(
                         "wt_session resolve failed connection_handle={} request_id={request_id}",
                         self.handle
                     );
-                    if stream_ended {
-                        effects.extend(self.recv_connect_close(stream_id, now));
-                    }
                     effects.push(Effect::NotifyRequestFailed {
                         request_id,
                         source: ErrorSource::Unspecified,
@@ -822,28 +1052,28 @@ impl Connection {
                     });
                     return effects;
                 };
-                init_data.wt_available_protocols.clone()
+                session_request.wt_available_protocols.clone()
             };
 
-            let status_str = find_header_str(&headers, ":status");
+            let status_str = utils::find_header_str(&headers, ":status");
             let status_ok = status_str.as_deref() == Some("200");
 
             if status_ok {
-                let wt_protocol = std::str::from_utf8(WT_PROTOCOL)
+                let wt_protocol = str::from_utf8(WT_PROTOCOL)
                     .ok()
-                    .and_then(|key| find_header(&headers, key))
-                    .and_then(|val| parse_wt_protocol_string(&val));
+                    .and_then(|key| utils::find_header(&headers, key))
+                    .and_then(|value| utils::parse_wt_protocol_string(&value));
 
-                if let Some(ref requested_protos) = wt_available_protocols {
+                if let Some(ref wt_available_protocols) = wt_available_protocols {
                     let is_valid = match wt_protocol {
-                        Some(ref negotiated) => requested_protos.contains(negotiated),
+                        Some(ref wt_protocol) => wt_available_protocols.contains(wt_protocol),
                         None => false,
                     };
 
                     if !is_valid {
-                        let reason = if let Some(ref negotiated) = wt_protocol {
+                        let reason = if let Some(ref wt_protocol) = wt_protocol {
                             debug!(
-                                "wt_protocol validate invalid actual={negotiated} connection_handle={} expected=wt_available_protocols",
+                                "wt_protocol validate invalid actual={wt_protocol} connection_handle={} expected=wt_available_protocols",
                                 self.handle
                             );
                             "wt_protocol validate invalid"
@@ -855,13 +1085,10 @@ impl Connection {
                             "wt_protocol validate invalid"
                         };
 
-                        if stream_ended {
-                            effects.extend(self.recv_connect_close(stream_id, now));
-                        }
                         if let Some(session) = self.sessions.get_mut(&stream_id) {
                             effects.extend(session.abort(ERR_WT_ALPN_ERROR, reason.into(), now));
                         } else {
-                            self.pending_session_configs.remove(&request_id);
+                            self.session_requests.remove(&request_id);
                             effects.push(Effect::NotifyRequestFailed {
                                 request_id,
                                 source: ErrorSource::Session,
@@ -883,78 +1110,47 @@ impl Connection {
 
                 if let Some(session) = self.sessions.get_mut(&stream_id) {
                     effects.extend(session.confirm(wt_protocol, now));
-                } else if let Some(init_data) = self.pending_session_configs.remove(&request_id) {
-                    let session = Session::new(
+                } else if let Some(session_request) = self.session_requests.remove(&request_id) {
+                    let mut session = Session::new(
                         stream_id,
-                        init_data.path.clone(),
-                        init_data.headers.clone(),
-                        wt_protocol.clone(),
-                        SessionState::Connected,
+                        session_request.path,
+                        session_request.headers,
+                        session_request.wt_available_protocols,
                         self.is_client,
-                        SessionParams {
+                        SessionParameters {
                             flow_control_negotiated: self.has_flow_control(),
-                            flow_control_window: self.flow_control_window,
                             initial_max_data: self.initial_max_data,
                             initial_max_streams_bidi: self.initial_max_streams_bidi,
                             initial_max_streams_uni: self.initial_max_streams_uni,
                             max_pending_capsules: self.max_pending_capsules,
                             max_pending_datagrams: self.max_pending_datagrams,
                             max_pending_streams: self.max_pending_streams,
-                            max_stream_read_buffer_size: self.max_stream_read_buffer_size,
-                            max_stream_write_buffer_size: self.max_stream_write_buffer_size,
+                            max_write_buffer_size: self.max_write_buffer_size,
                             peer_max_data: self.peer_initial_max_data,
                             peer_max_streams_bidi: self.peer_initial_max_streams_bidi,
                             peer_max_streams_uni: self.peer_initial_max_streams_uni,
+                            receive_window: self.session_receive_window,
                         },
-                        init_data.created_at,
+                        session_request.created_at,
                     );
+                    effects.extend(session.confirm(wt_protocol, now));
                     self.sessions.insert(stream_id, session);
 
-                    effects.push(Effect::EmitSessionEvent {
-                        session_id: stream_id,
-                        event_type: EventType::SessionReady,
-                        path: Some(init_data.path),
-                        headers: Some(init_data.headers),
-                        wt_available_protocols: None,
-                        wt_protocol,
-                        data: None,
-                        is_unidirectional: None,
-                        max_data: None,
-                        max_streams: None,
-                        ready_at: Some(now),
-                        error_code: None,
-                        reason: None,
-                    });
                     effects.push(Effect::NotifyRequestDone {
                         request_id,
                         result: RequestResult::SessionId(stream_id),
                     });
                 }
 
-                if let Some(events) = self.early_event_buffer.remove(&stream_id) {
-                    if self.early_event_count >= events.len() {
-                        self.early_event_count -= events.len();
-                    }
-                    for (_, evt) in events {
-                        effects.push(Effect::ProcessProtocolEvent {
-                            event: Box::new(evt),
-                        });
-                    }
-                }
+                effects.extend(self.replay_early_events(stream_id, now));
             } else {
-                let status_val = status_str.unwrap_or_else(|| "Unknown".to_owned());
+                let status_value = status_str.unwrap_or_else(|| "Unknown".to_owned());
                 debug!(
-                    "wt_session abort connection_handle={} err={status_val:?}",
+                    "wt_session abort connection_handle={} err={status_value:?}",
                     self.handle
                 );
 
-                if let Some(events) = self.early_event_buffer.remove(&stream_id)
-                    && self.early_event_count >= events.len()
-                {
-                    self.early_event_count -= events.len();
-                }
-
-                self.pending_session_configs.remove(&request_id);
+                self.session_requests.remove(&request_id);
 
                 if let Some(session) = self.sessions.get_mut(&stream_id) {
                     effects.extend(session.abort(
@@ -969,7 +1165,17 @@ impl Connection {
                         error_code: Some(ERR_H3_REQUEST_REJECTED),
                         reason: "wt_session abort".into(),
                     });
+                    effects.push(Effect::StopQuicStream {
+                        stream_id,
+                        error_code: ERR_H3_REQUEST_REJECTED,
+                    });
+                    effects.push(Effect::ResetQuicStream {
+                        stream_id,
+                        error_code: ERR_H3_REQUEST_REJECTED,
+                    });
                 }
+
+                effects.extend(self.replay_early_events(stream_id, now));
             }
         } else {
             if self.sessions.contains_key(&stream_id) {
@@ -977,9 +1183,6 @@ impl Connection {
                     "wt_session validate failed connection_handle={} expected=false stream_id={stream_id}",
                     self.handle
                 );
-                if stream_ended {
-                    effects.extend(self.recv_connect_close(stream_id, now));
-                }
                 return effects;
             }
 
@@ -1041,13 +1244,14 @@ impl Connection {
                 return effects;
             }
 
-            let method = find_header_str(&headers, ":method");
-            let protocol = find_header_str(&headers, ":protocol");
+            let method = utils::find_header_str(&headers, ":method");
+            let protocol = utils::find_header_str(&headers, ":protocol");
 
-            let method_connect = method.as_deref() == Some("CONNECT");
-            let proto_wt = protocol.as_deref().map(str::as_bytes) == Some(WT_UPGRADE_TOKEN);
+            let is_connect_method = method.as_deref() == Some("CONNECT");
+            let is_webtransport_upgrade =
+                protocol.as_deref().map(str::as_bytes) == Some(WT_UPGRADE_TOKEN);
 
-            if !method_connect || !proto_wt {
+            if !is_connect_method || !is_webtransport_upgrade {
                 debug!(
                     "wt_session validate invalid connection_handle={} stream_id={stream_id}",
                     self.handle
@@ -1064,35 +1268,33 @@ impl Connection {
                 return effects;
             }
 
-            let path_header = find_header_str(&headers, ":path");
+            let path_header = utils::find_header_str(&headers, ":path");
             let path = path_header.unwrap_or_else(|| "/".to_owned());
 
-            let wt_available_protocols = std::str::from_utf8(WT_AVAILABLE_PROTOCOLS)
+            let wt_available_protocols = str::from_utf8(WT_AVAILABLE_PROTOCOLS)
                 .ok()
-                .and_then(|key| find_header(&headers, key))
-                .and_then(|val| parse_wt_protocol_list(&val));
+                .and_then(|key| utils::find_header(&headers, key))
+                .and_then(|value| utils::parse_wt_protocol_list(&value));
 
             let session = Session::new(
                 stream_id,
                 path.clone(),
                 headers.clone(),
-                None,
-                SessionState::Connecting,
+                wt_available_protocols.clone(),
                 self.is_client,
-                SessionParams {
+                SessionParameters {
                     flow_control_negotiated: self.has_flow_control(),
-                    flow_control_window: self.flow_control_window,
                     initial_max_data: self.initial_max_data,
                     initial_max_streams_bidi: self.initial_max_streams_bidi,
                     initial_max_streams_uni: self.initial_max_streams_uni,
                     max_pending_capsules: self.max_pending_capsules,
                     max_pending_datagrams: self.max_pending_datagrams,
                     max_pending_streams: self.max_pending_streams,
-                    max_stream_read_buffer_size: self.max_stream_read_buffer_size,
-                    max_stream_write_buffer_size: self.max_stream_write_buffer_size,
+                    max_write_buffer_size: self.max_write_buffer_size,
                     peer_max_data: self.peer_initial_max_data,
                     peer_max_streams_bidi: self.peer_initial_max_streams_bidi,
                     peer_max_streams_uni: self.peer_initial_max_streams_uni,
+                    receive_window: self.session_receive_window,
                 },
                 now,
             );
@@ -1100,7 +1302,7 @@ impl Connection {
 
             effects.push(Effect::EmitSessionEvent {
                 session_id: stream_id,
-                event_type: EventType::SessionRequest,
+                event_type: EventType::SessionRequestReceived,
                 path: Some(path),
                 headers: Some(headers),
                 wt_available_protocols,
@@ -1110,127 +1312,126 @@ impl Connection {
                 max_data: None,
                 max_streams: None,
                 ready_at: None,
+                status_code: None,
                 error_code: None,
                 reason: None,
             });
 
-            if let Some(events) = self.early_event_buffer.remove(&stream_id) {
-                if self.early_event_count >= events.len() {
-                    self.early_event_count -= events.len();
-                }
-                for (_, evt) in events {
-                    effects.push(Effect::ProcessProtocolEvent {
-                        event: Box::new(evt),
+            effects.extend(self.replay_early_events(stream_id, now));
+        }
+
+        effects
+    }
+
+    pub(super) fn recv_max_streams(&mut self, is_unidirectional: bool) -> Vec<Effect> {
+        let mut effects = Vec::new();
+
+        if !is_unidirectional {
+            while let Some(request_id) = self.blocked_session_requests.pop_front() {
+                if let Some(session_request) = self.session_requests.get(&request_id) {
+                    effects.push(Effect::CreateH3ConnectStream {
+                        request_id,
+                        authority: session_request.authority.clone(),
+                        path: session_request.path.clone(),
+                        headers: session_request.headers.clone(),
                     });
                 }
             }
         }
 
-        if stream_ended {
-            effects.extend(self.recv_connect_close(stream_id, now));
+        let mut session_ids: Vec<SessionId> = self.sessions.keys().copied().collect();
+        session_ids.sort_unstable();
+
+        for session_id in session_ids {
+            if let Some(session) = self.sessions.get_mut(&session_id) {
+                effects.extend(session.flush_blocked_stream_requests(is_unidirectional));
+            }
         }
 
         effects
     }
 
-    // SETTINGS frame reception handling.
     pub(super) fn recv_settings(&mut self, settings: &H3Settings, now: f64) -> Vec<Effect> {
-        let mut effects = Vec::new();
         self.peer_settings_received = true;
 
-        if let Some(val) = settings.wt_initial_max_data {
-            self.peer_initial_max_data = val;
+        if let Some(peer_initial_max_data) = settings.wt_initial_max_data {
+            self.peer_initial_max_data = peer_initial_max_data;
         }
-        if let Some(val) = settings.wt_initial_max_streams_bidi {
-            self.peer_initial_max_streams_bidi = val;
+        if let Some(peer_initial_max_streams_bidi) = settings.wt_initial_max_streams_bidi {
+            self.peer_initial_max_streams_bidi = peer_initial_max_streams_bidi;
         }
-        if let Some(val) = settings.wt_initial_max_streams_uni {
-            self.peer_initial_max_streams_uni = val;
-        }
-
-        if let Some((client_effects, _)) = self.check_connection_ready(now) {
-            effects.extend(client_effects);
+        if let Some(peer_initial_max_streams_uni) = settings.wt_initial_max_streams_uni {
+            self.peer_initial_max_streams_uni = peer_initial_max_streams_uni;
         }
 
-        effects
+        if self.state == ConnectionState::Connecting && self.handshake_completed {
+            return self.open(now);
+        }
+
+        Vec::new()
     }
 
-    // Transport stream stop_sending reception handling (delegated).
     pub(super) fn recv_stop_sending(
         &mut self,
         stream_id: StreamId,
         error_code: ErrorCode,
+        now: f64,
     ) -> Vec<Effect> {
-        if let Some(session) = self.session_for_stream_mut(stream_id) {
-            return session.recv_stop_sending(stream_id, error_code);
+        if let Some(&session_id) = self.stream_map.get(&stream_id)
+            && let Some(session) = self.sessions.get_mut(&session_id)
+        {
+            let effects = session.recv_stop_sending(stream_id, error_code);
+            if !session.has_stream(stream_id) {
+                self.stream_map.remove(&stream_id);
+            }
+            return effects;
+        }
+        if let Some(session) = self.sessions.get_mut(&stream_id) {
+            return session.abort(error_code, "wt_session abort".into(), now);
         }
         Vec::new()
     }
 
-    // Stream data reception handling (delegated).
     pub(super) fn recv_stream_data(
         &mut self,
-        session_id: SessionId,
         stream_id: StreamId,
         data: Bytes,
         fin: bool,
         now: f64,
     ) -> Vec<Effect> {
-        if let Some(session) = self.sessions.get_mut(&session_id) {
-            self.stream_map.entry(stream_id).or_insert(session_id);
-            return session.recv_stream_data(stream_id, data, fin, now);
-        }
-
-        let event = ProtocolEvent::TransportStreamDataReceived {
-            stream_id,
-            data,
-            end_stream: fin,
-        };
-
-        if !self.buffer_early_event(session_id, event, now) {
-            debug!(
-                "wt_stream abort connection_handle={} stream_id={stream_id}",
-                self.handle
-            );
-
-            let mut effects = Vec::new();
-
-            if is_unidirectional_stream(stream_id) {
-                effects.push(Effect::StopQuicStream {
-                    stream_id,
-                    error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
-                });
-            } else {
-                effects.push(Effect::ResetQuicStream {
-                    stream_id,
-                    error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
-                });
-                effects.push(Effect::StopQuicStream {
-                    stream_id,
-                    error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
-                });
+        if let Some(&session_id) = self.stream_map.get(&stream_id)
+            && let Some(session) = self.sessions.get_mut(&session_id)
+        {
+            let effects = session.recv_stream_data(stream_id, data, fin, now);
+            if !session.has_stream(stream_id) {
+                self.stream_map.remove(&stream_id);
             }
-
             return effects;
         }
-
         Vec::new()
     }
 
-    // Transport stream reset reception handling (delegated).
     pub(super) fn recv_stream_reset(
         &mut self,
         stream_id: StreamId,
         error_code: ErrorCode,
         now: f64,
     ) -> Vec<Effect> {
-        if let Some(session) = self.session_for_stream_mut(stream_id) {
-            return session.recv_stream_reset(stream_id, error_code, now);
+        if let Some(&session_id) = self.stream_map.get(&stream_id)
+            && let Some(session) = self.sessions.get_mut(&session_id)
+        {
+            let effects = session.recv_stream_reset(stream_id, error_code);
+            if !session.has_stream(stream_id) {
+                self.stream_map.remove(&stream_id);
+            }
+            return effects;
+        }
+        if let Some(session) = self.sessions.get_mut(&stream_id) {
+            return session.abort(error_code, "wt_session abort".into(), now);
         }
         Vec::new()
     }
 
-    // Transport parameters reception handling.
     pub(super) fn recv_transport_parameters(
         &mut self,
         peer_max_datagram_frame_size: u64,
@@ -1243,16 +1444,16 @@ impl Connection {
         Vec::new()
     }
 
-    // User session rejection handling (delegated).
     pub(super) fn reject_session(
         &mut self,
         session_id: SessionId,
         request_id: RequestId,
+        headers: Headers,
         status_code: u16,
         now: f64,
     ) -> Vec<Effect> {
         if let Some(session) = self.sessions.get_mut(&session_id) {
-            return session.reject(request_id, status_code, now);
+            return session.reject(request_id, headers, status_code, now);
         }
         debug!(
             "wt_session resolve failed connection_handle={} request_id={request_id} session_id={session_id}",
@@ -1266,30 +1467,31 @@ impl Connection {
         }]
     }
 
-    // User stream reset command handling (delegated).
     pub(super) fn reset_stream(
         &mut self,
         stream_id: StreamId,
         request_id: RequestId,
         error_code: ErrorCode,
-        now: f64,
     ) -> Vec<Effect> {
-        if let Some(session) = self.session_for_stream_mut(stream_id) {
-            return session.reset_stream(stream_id, request_id, error_code, now);
+        if let Some(&session_id) = self.stream_map.get(&stream_id)
+            && let Some(session) = self.sessions.get_mut(&session_id)
+        {
+            let effects = session.reset_stream(stream_id, request_id, error_code);
+            if !session.has_stream(stream_id) {
+                self.stream_map.remove(&stream_id);
+            }
+            return effects;
         }
         debug!(
             "wt_stream resolve failed connection_handle={} request_id={request_id} stream_id={stream_id}",
             self.handle
         );
-        vec![Effect::NotifyRequestFailed {
+        vec![Effect::NotifyRequestDone {
             request_id,
-            source: ErrorSource::Stream,
-            error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
-            reason: "wt_stream resolve failed".into(),
+            result: RequestResult::None,
         }]
     }
 
-    // User datagram send command handling (delegated).
     pub(super) fn send_datagram(
         &mut self,
         session_id: SessionId,
@@ -1297,8 +1499,8 @@ impl Connection {
         data: Bytes,
     ) -> Vec<Effect> {
         if let Some(session) = self.sessions.get_mut(&session_id) {
-            let max = self.peer_max_datagram_frame_size.unwrap_or(0);
-            return session.send_datagram(request_id, data, max);
+            let peer_max_datagram_frame_size = self.peer_max_datagram_frame_size.unwrap_or(0);
+            return session.send_datagram(request_id, data, peer_max_datagram_frame_size);
         }
         debug!(
             "wt_session resolve failed connection_handle={} request_id={request_id} session_id={session_id}",
@@ -1312,111 +1514,57 @@ impl Connection {
         }]
     }
 
-    // User stream data send handling (delegated).
-    pub(super) fn send_stream_data(
-        &mut self,
-        stream_id: StreamId,
-        request_id: RequestId,
-        data: Bytes,
-        end_stream: bool,
-        now: f64,
-    ) -> Vec<Effect> {
-        if let Some(session) = self.session_for_stream_mut(stream_id) {
-            return session.send_stream_data(stream_id, request_id, data, end_stream, now);
-        }
-        debug!(
-            "wt_stream resolve failed connection_handle={} request_id={request_id} stream_id={stream_id}",
-            self.handle
-        );
-        vec![Effect::NotifyRequestFailed {
-            request_id,
-            source: ErrorSource::Stream,
-            error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
-            reason: "wt_stream resolve failed".into(),
-        }]
-    }
-
-    // Session diagnostics delegation.
-    pub(super) fn session_diagnostics(
-        &self,
-        session_id: SessionId,
-        request_id: RequestId,
-    ) -> Vec<Effect> {
-        if let Some(session) = self.sessions.get(&session_id) {
-            return session.diagnose(request_id);
-        }
-        debug!(
-            "wt_session resolve failed connection_handle={} request_id={request_id} session_id={session_id}",
-            self.handle
-        );
-        vec![Effect::NotifyRequestFailed {
-            request_id,
-            source: ErrorSource::Session,
-            error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
-            reason: "wt_session resolve failed".into(),
-        }]
-    }
-
-    // User stream stop command handling (delegated).
     pub(super) fn stop_stream(
         &mut self,
         stream_id: StreamId,
         request_id: RequestId,
         error_code: ErrorCode,
-        now: f64,
-    ) -> Vec<Effect> {
-        if let Some(session) = self.session_for_stream_mut(stream_id) {
-            return session.stop_stream(stream_id, request_id, error_code, now);
-        }
-        debug!(
-            "wt_stream resolve failed connection_handle={} request_id={request_id} stream_id={stream_id}",
-            self.handle
-        );
-        vec![Effect::NotifyRequestFailed {
-            request_id,
-            source: ErrorSource::Stream,
-            error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
-            reason: "wt_stream resolve failed".into(),
-        }]
-    }
-
-    // Stream diagnostics delegation.
-    pub(super) fn stream_diagnostics(
-        &self,
-        stream_id: StreamId,
-        request_id: RequestId,
     ) -> Vec<Effect> {
         if let Some(&session_id) = self.stream_map.get(&stream_id)
-            && let Some(session) = self.sessions.get(&session_id)
+            && let Some(session) = self.sessions.get_mut(&session_id)
         {
-            return session.stream_diagnostics(stream_id, request_id);
+            let effects = session.stop_stream(stream_id, request_id, error_code);
+            if !session.has_stream(stream_id) {
+                self.stream_map.remove(&stream_id);
+            }
+            return effects;
         }
         debug!(
             "wt_stream resolve failed connection_handle={} request_id={request_id} stream_id={stream_id}",
             self.handle
         );
-        vec![Effect::NotifyRequestFailed {
+        vec![Effect::NotifyRequestDone {
             request_id,
-            source: ErrorSource::Stream,
-            error_code: Some(ERR_LIB_STREAM_STATE_ERROR),
-            reason: "wt_stream resolve failed".into(),
+            result: RequestResult::None,
         }]
     }
 
-    // User stream read request handling (delegated).
-    pub(super) fn stream_read(
+    pub(super) fn write_stream(
         &mut self,
         stream_id: StreamId,
         request_id: RequestId,
-        max_bytes: u64,
+        data: Bytes,
+        end_stream: bool,
     ) -> Vec<Effect> {
-        if let Some(session) = self.session_for_stream_mut(stream_id) {
-            return session.stream_read(stream_id, request_id, max_bytes);
+        if let Some(&session_id) = self.stream_map.get(&stream_id)
+            && let Some(session) = self.sessions.get_mut(&session_id)
+        {
+            let effects = session.write_stream(stream_id, request_id, data, end_stream);
+            if !session.has_stream(stream_id) {
+                self.stream_map.remove(&stream_id);
+            }
+            return effects;
         }
         debug!(
             "wt_stream resolve failed connection_handle={} request_id={request_id} stream_id={stream_id}",
             self.handle
         );
+        if data.is_empty() && end_stream {
+            return vec![Effect::NotifyRequestDone {
+                request_id,
+                result: RequestResult::None,
+            }];
+        }
         vec![Effect::NotifyRequestFailed {
             request_id,
             source: ErrorSource::Stream,
@@ -1425,73 +1573,15 @@ impl Connection {
         }]
     }
 
-    // Connection termination handling.
-    pub(super) fn terminated(
-        &mut self,
-        error_code: ErrorCode,
-        reason: Cow<'static, str>,
-        now: f64,
-    ) -> Vec<Effect> {
-        if self.state == ConnectionState::Closed {
-            return Vec::new();
-        }
-
-        let previous_state = self.state;
-
-        if self.state != ConnectionState::Closing {
-            self.close_code = Some(error_code);
-            self.close_reason = Some(reason.clone().into_owned());
-            self.closed_at = Some(now);
-        }
-        self.state = ConnectionState::Closed;
-
-        let mut effects = Vec::new();
-
-        if previous_state == ConnectionState::Closing {
-            debug!(
-                "wt_connection close actual={:?} connection_handle={} err={reason}",
-                previous_state, self.handle
-            );
-        } else {
-            debug!(
-                "wt_connection abort actual={:?} connection_handle={} err={reason}",
-                previous_state, self.handle
-            );
-        }
-
-        self.pending_session_configs.clear();
-        self.pending_requests.clear();
-        self.pending_wt_available_protocols.clear();
-
-        let mut session_ids: Vec<SessionId> = self.sessions.keys().copied().collect();
-        session_ids.sort_unstable();
-
-        for session_id in session_ids {
-            if let Some(session) = self.sessions.get_mut(&session_id) {
-                effects.extend(session.close(0, error_code, Some(reason.clone()), now));
-            }
-        }
-
-        effects.push(Effect::EmitConnectionEvent {
-            connection_handle: self.handle,
-            event_type: EventType::ConnectionClosed,
-            error_code: Some(error_code),
-            reason: Some(reason),
-        });
-
-        effects
-    }
-
-    // Early protocol event buffering with capacity checks.
     fn buffer_early_event(
         &mut self,
         session_id: SessionId,
         event: ProtocolEvent,
         now: f64,
     ) -> bool {
-        if (self.early_event_count as u64) >= self.max_total_pending_events {
+        if (self.early_event_count as u64) >= self.max_connection_pending_events {
             debug!(
-                "wt_connection validate exceeded actual={} connection_handle={} expected=max_total_pending_events",
+                "wt_connection validate exceeded actual={} connection_handle={} expected=max_connection_pending_events",
                 self.early_event_count, self.handle
             );
             return false;
@@ -1514,31 +1604,6 @@ impl Connection {
         true
     }
 
-    // Connection readiness state verification.
-    fn check_connection_ready(&mut self, now: f64) -> Option<(Vec<Effect>, bool)> {
-        if self.state == ConnectionState::Connecting
-            && self.handshake_complete
-            && self.peer_settings_received
-        {
-            debug!(
-                "wt_connection open actual={:?} connection_handle={}",
-                self.state, self.handle
-            );
-            self.connected_at = Some(now);
-            self.state = ConnectionState::Connected;
-
-            let effects = vec![Effect::EmitConnectionEvent {
-                connection_handle: self.handle,
-                event_type: EventType::ConnectionEstablished,
-                error_code: None,
-                reason: None,
-            }];
-            return Some((effects, true));
-        }
-        None
-    }
-
-    // Connection diagnostics snapshot retrieval.
     fn diagnostics_snapshot(&self) -> ConnectionDiagnostics {
         ConnectionDiagnostics {
             close_code: self.close_code,
@@ -1546,8 +1611,7 @@ impl Connection {
             closed_at: self.closed_at,
             connected_at: self.connected_at,
             connection_handle: self.handle,
-            early_event_count: self.early_event_count,
-            handshake_complete: self.handshake_complete,
+            handshake_completed: self.handshake_completed,
             is_client: self.is_client,
             local_goaway_sent: self.local_goaway_sent,
             peer_goaway_received: self.peer_goaway_received,
@@ -1556,46 +1620,121 @@ impl Connection {
             peer_initial_max_streams_uni: self.peer_initial_max_streams_uni,
             peer_max_datagram_frame_size: self.peer_max_datagram_frame_size,
             peer_settings_received: self.peer_settings_received,
-            pending_request_count: self.pending_requests.len(),
-            session_count: self.sessions.len(),
             state: self.state,
-            stream_count: self.stream_map.len(),
         }
     }
 
-    // Helper for resolving mutable session access via stream routing table.
-    fn session_for_stream_mut(&mut self, stream_id: StreamId) -> Option<&mut Session> {
-        let session_id = *self.stream_map.get(&stream_id)?;
-        self.sessions.get_mut(&session_id)
+    fn has_flow_control(&self) -> bool {
+        let local_intent = self.initial_max_data > 0
+            || self.initial_max_streams_bidi > 0
+            || self.initial_max_streams_uni > 0;
+        let peer_intent = self.peer_initial_max_data > 0
+            || self.peer_initial_max_streams_bidi > 0
+            || self.peer_initial_max_streams_uni > 0;
+
+        local_intent && peer_intent
+    }
+
+    fn open(&mut self, now: f64) -> Vec<Effect> {
+        debug!(
+            "wt_connection open actual={:?} connection_handle={}",
+            self.state, self.handle
+        );
+        self.connected_at = Some(now);
+        self.state = ConnectionState::Connected;
+
+        let mut effects = vec![Effect::EmitConnectionEvent {
+            connection_handle: self.handle,
+            event_type: EventType::ConnectionEstablished,
+            error_code: None,
+            reason: None,
+        }];
+
+        if let Some(request_id) = self.request_id.take() {
+            effects.push(Effect::NotifyRequestDone {
+                request_id,
+                result: RequestResult::ConnectionHandle(self.handle),
+            });
+        }
+
+        effects
+    }
+
+    fn replay_early_events(&mut self, session_id: SessionId, now: f64) -> Vec<Effect> {
+        let mut effects = Vec::new();
+
+        let Some(events) = self.early_event_buffer.remove(&session_id) else {
+            return effects;
+        };
+        self.early_event_count -= events.len();
+
+        let is_session_present = self.sessions.contains_key(&session_id);
+
+        for (_, event) in events {
+            match event {
+                ProtocolEvent::H3DatagramReceived { stream_id, data } if is_session_present => {
+                    effects.extend(self.recv_datagram(stream_id, data, now));
+                }
+                ProtocolEvent::H3WebTransportStreamOpened {
+                    session_id,
+                    stream_id,
+                } => {
+                    if is_session_present {
+                        effects.extend(self.handle_stream_opened(session_id, stream_id, now));
+                    } else {
+                        debug!(
+                            "wt_stream abort connection_handle={} stream_id={stream_id}",
+                            self.handle
+                        );
+                        if utils::is_unidirectional_stream(stream_id) {
+                            effects.push(Effect::StopQuicStream {
+                                stream_id,
+                                error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
+                            });
+                        } else {
+                            effects.push(Effect::ResetQuicStream {
+                                stream_id,
+                                error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
+                            });
+                            effects.push(Effect::StopQuicStream {
+                                stream_id,
+                                error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
+                            });
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        effects
     }
 }
 
-// Connection initialization constraints and thresholds.
 #[derive(Clone, Copy, Debug)]
-pub(super) struct ConnectionParams {
+pub(super) struct ConnectionParameters {
     pub(super) early_event_ttl: f64,
-    pub(super) flow_control_window: u64,
     pub(super) initial_max_data: u64,
     pub(super) initial_max_streams_bidi: u64,
     pub(super) initial_max_streams_uni: u64,
+    pub(super) max_connection_pending_events: u64,
     pub(super) max_pending_capsules: u64,
     pub(super) max_pending_datagrams: u64,
     pub(super) max_pending_streams: u64,
     pub(super) max_session_pending_events: u64,
     pub(super) max_sessions: u64,
-    pub(super) max_stream_read_buffer_size: u64,
-    pub(super) max_stream_write_buffer_size: u64,
-    pub(super) max_total_pending_events: u64,
+    pub(super) max_write_buffer_size: u64,
+    pub(super) session_receive_window: u64,
 }
 
-// Data required to initialize a pending session.
 #[derive(Clone, Debug)]
-struct SessionInitData {
-    created_at: f64,
-    headers: Headers,
-    optimistic: bool,
-    path: String,
-    wt_available_protocols: Option<Vec<String>>,
+pub(super) struct SessionRequest {
+    pub(super) authority: String,
+    pub(super) created_at: f64,
+    pub(super) headers: Headers,
+    pub(super) optimistic: bool,
+    pub(super) path: String,
+    pub(super) wt_available_protocols: Option<Vec<String>>,
 }
 
 #[cfg(test)]

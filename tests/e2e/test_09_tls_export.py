@@ -33,39 +33,38 @@ async def test_e2e_symmetry() -> bool:
 
     try:
         async with WebTransportClient(config=config) as client:
-            session = await client.connect(url=SERVER_URL + "export-keying-material")
+            async with await client.connect(url=SERVER_URL + "keying-material-export") as session:
+                label = "EXPORTER-WebTransport-Test"
+                context = b"\xde\xad\xbe\xef"
+                length = 32
 
-            label = "EXPORTER-WebTransport-Test"
-            context = b"\xde\xad\xbe\xef"
-            length = 32
+                stream = await session.create_bidirectional_stream()
+                req_payload = json.dumps(
+                    obj={
+                        "label": label,
+                        "context_hex": context.hex(),
+                        "length": length,
+                    }
+                ).encode(encoding="utf-8")
 
-            stream = await session.create_bidirectional_stream()
-            req_payload = json.dumps(
-                obj={
-                    "label": label,
-                    "context_hex": context.hex(),
-                    "length": length,
-                }
-            ).encode(encoding="utf-8")
+                await stream.write_all(data=req_payload, end_stream=True)
 
-            await stream.write_all(data=req_payload, end_stream=True)
+                client_key = await session.export_keying_material(label=label, context=context, length=length)
+                logger.info("Client locally derived key: %s", client_key.hex())
 
-            client_key = await session.export_keying_material(label=label, context=context, length=length)
-            logger.info("Client locally derived key: %s", client_key.hex())
+                server_key = await stream.read_all()
+                logger.info("Server remotely derived key: %s", server_key.hex())
 
-            server_key = await stream.read_all()
-            logger.info("Server remotely derived key: %s", server_key.hex())
+                if len(client_key) != length:
+                    logger.error("FAILURE: Derived key length mismatch. Expected %d, got %d", length, len(client_key))
+                    return False
 
-            if len(client_key) != length:
-                logger.error("FAILURE: Derived key length mismatch. Expected %d, got %d", length, len(client_key))
-                return False
-
-            if client_key == server_key:
-                logger.info("SUCCESS: Client and server derived identical keying material")
-                return True
-            else:
-                logger.error("FAILURE: Keying material mismatch between client and server")
-                return False
+                if client_key == server_key:
+                    logger.info("SUCCESS: Client and server derived identical keying material")
+                    return True
+                else:
+                    logger.error("FAILURE: Keying material mismatch between client and server")
+                    return False
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)
         return False
@@ -80,33 +79,34 @@ async def test_context_and_label_isolation() -> bool:
 
     try:
         async with WebTransportClient(config=config) as client:
-            session = await client.connect(url=SERVER_URL)
+            async with await client.connect(url=SERVER_URL) as session:
+                base_label = "test-label-A"
+                base_context = b"context-alpha"
 
-            base_label = "test-label-A"
-            base_context = b"context-alpha"
+                key_base = await session.export_keying_material(label=base_label, context=base_context, length=16)
 
-            key_base = await session.export_keying_material(label=base_label, context=base_context, length=16)
+                key_diff_label = await session.export_keying_material(
+                    label="test-label-B", context=base_context, length=16
+                )
 
-            key_diff_label = await session.export_keying_material(label="test-label-B", context=base_context, length=16)
+                key_diff_context = await session.export_keying_material(
+                    label=base_label, context=b"context-beta", length=16
+                )
 
-            key_diff_context = await session.export_keying_material(
-                label=base_label, context=b"context-beta", length=16
-            )
+                logger.info("Base Key:           %s", key_base.hex())
+                logger.info("Diff Label Key:     %s", key_diff_label.hex())
+                logger.info("Diff Context Key:   %s", key_diff_context.hex())
 
-            logger.info("Base Key:           %s", key_base.hex())
-            logger.info("Diff Label Key:     %s", key_diff_label.hex())
-            logger.info("Diff Context Key:   %s", key_diff_context.hex())
+                if key_base == key_diff_label:
+                    logger.error("FAILURE: Different labels produced the same key material")
+                    return False
 
-            if key_base == key_diff_label:
-                logger.error("FAILURE: Different labels produced the same key material")
-                return False
+                if key_base == key_diff_context:
+                    logger.error("FAILURE: Different contexts produced the same key material")
+                    return False
 
-            if key_base == key_diff_context:
-                logger.error("FAILURE: Different contexts produced the same key material")
-                return False
-
-            logger.info("SUCCESS: Key derivation isolation verified correctly")
-            return True
+                logger.info("SUCCESS: Key derivation isolation verified correctly")
+                return True
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)
         return False
@@ -121,17 +121,16 @@ async def test_error_handling() -> bool:
 
     try:
         async with WebTransportClient(config=config) as client:
-            session = await client.connect(url=SERVER_URL)
+            async with await client.connect(url=SERVER_URL) as session:
+                await session.close()
 
-            await session.close()
-
-            try:
-                await session.export_keying_material(label="invalid-state", context=b"test", length=16)
-                logger.error("FAILURE: Exporting keying material on a closed session did not raise an exception")
-                return False
-            except (ConnectionError, SessionError) as e:
-                logger.info("SUCCESS: Properly caught exception for closed session: %s", e)
-                return True
+                try:
+                    await session.export_keying_material(label="invalid-state", context=b"test", length=16)
+                    logger.error("FAILURE: Exporting keying material on a closed session did not raise an exception")
+                    return False
+                except (ConnectionError, SessionError) as e:
+                    logger.info("SUCCESS: Properly caught exception for closed session: %s", e)
+                    return True
 
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)

@@ -1,23 +1,22 @@
 """High-performance Benchmark Server System Under Test."""
 
 import asyncio
+import http
 import logging
 from pathlib import Path
-from typing import Any, Final
-
-import uvloop
+from typing import Final
 
 from pywebtransport import (
     ConnectionError,
-    Event,
-    ServerApp,
+    DatagramError,
     ServerConfig,
-    SessionClosedError,
+    SessionError,
     StreamError,
+    WebTransportBidirectionalStream,
+    WebTransportConnection,
+    WebTransportServer,
     WebTransportSession,
-    WebTransportStream,
 )
-from pywebtransport.types import EventType
 from pywebtransport.utils import generate_self_signed_cert
 
 CERT_HOSTNAME: Final[str] = "localhost"
@@ -30,160 +29,105 @@ SERVER_PORT: Final[int] = 4433
 CHUNK_SIZE: Final[int] = 65536
 STATIC_VIEW: Final[memoryview] = memoryview(b"x" * (100 * 1024 * 1024))
 
-logging.basicConfig(level=logging.CRITICAL)
-logger = logging.getLogger(name="bench_server")
+logging.basicConfig(level=logging.CRITICAL, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 
-class BenchmarkServerApp(ServerApp):
+async def discard_stream(*, stream: WebTransportBidirectionalStream) -> None:
+    try:
+        while await stream.read(max_size=CHUNK_SIZE):
+            pass
+        await stream.write(data=b"", end_stream=True)
+    except (ConnectionError, StreamError):
+        pass
 
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self._register_routes()
 
-    async def handle_discard(self, session: WebTransportSession, **kwargs: Any) -> None:
-        async def stream_drainer(*, stream: WebTransportStream) -> None:
-            try:
-                while await stream.read(max_bytes=CHUNK_SIZE):
-                    pass
-            except Exception:
-                pass
-            finally:
-                if hasattr(stream, "close"):
-                    await stream.close()
-
-        async def on_dgram(event: Event) -> None:
+async def exchange_stream(*, stream: WebTransportBidirectionalStream) -> None:
+    async def receive() -> None:
+        while await stream.read(max_size=CHUNK_SIZE):
             pass
 
-        session.events.on(event_type=EventType.DATAGRAM_RECEIVED, handler=on_dgram)
-        try:
-            while True:
-                stream = await session.accept_bidirectional_stream()
-                asyncio.create_task(coro=stream_drainer(stream=stream))
-        except SessionClosedError:
-            pass
+    try:
+        await asyncio.gather(stream.write_all(data=STATIC_VIEW[: 1024 * 1024], end_stream=True), receive())
+    except (ConnectionError, StreamError):
+        pass
 
-    async def handle_duplex(self, session: WebTransportSession, **kwargs: Any) -> None:
-        async def stream_handler(*, stream: WebTransportStream) -> None:
+
+async def echo_datagrams(*, session: WebTransportSession) -> None:
+    try:
+        while True:
+            data = await session.read_datagram()
             try:
-
-                async def sender() -> None:
-                    await stream.write_all(data=STATIC_VIEW[: 1024 * 1024], end_stream=False)
-                    await stream.write(data=b"", end_stream=True)
-
-                async def receiver() -> None:
-                    while await stream.read(max_bytes=CHUNK_SIZE):
-                        pass
-
-                await asyncio.gather(sender(), receiver())
-            except (ConnectionError, StreamError):
+                await session.send_datagram(data=data)
+            except DatagramError:
                 pass
-            except Exception:
-                if not stream.is_closed:
-                    await stream.close()
+    except (ConnectionError, SessionError):
+        pass
 
-        try:
-            while True:
-                stream = await session.accept_bidirectional_stream()
-                asyncio.create_task(coro=stream_handler(stream=stream))
-        except SessionClosedError:
-            pass
 
-    async def handle_echo(self, session: WebTransportSession, **kwargs: Any) -> None:
-        async def datagram_loop() -> None:
-            async def on_dgram(event: Event) -> None:
-                if isinstance(event.data, dict) and (data := event.data.get("data")):
-                    try:
-                        await session.send_datagram(data=data)
-                    except Exception:
-                        pass
+async def echo_stream(*, stream: WebTransportBidirectionalStream) -> None:
+    try:
+        while data := await stream.read(max_size=CHUNK_SIZE):
+            await stream.write(data=data)
+        await stream.write(data=b"", end_stream=True)
+    except (ConnectionError, StreamError):
+        pass
 
-            session.events.on(event_type=EventType.DATAGRAM_RECEIVED, handler=on_dgram)
 
-        async def stream_handler(*, stream: WebTransportStream) -> None:
-            try:
-                while True:
-                    data = await stream.read(max_bytes=CHUNK_SIZE)
-                    if not data:
-                        break
-                    await stream.write(data=data)
+async def produce_stream(*, stream: WebTransportBidirectionalStream) -> None:
+    try:
+        size = int(await stream.read(max_size=128))
+        await stream.write_all(data=STATIC_VIEW[:size], end_stream=True)
+    except (ConnectionError, StreamError, ValueError):
+        pass
 
-                await stream.write(data=b"", end_stream=True)
-                await stream.read(max_bytes=1)
 
-            except (ConnectionError, StreamError):
-                pass
-            except Exception:
-                if not stream.is_closed:
-                    await stream.close()
+async def respond_stream(*, stream: WebTransportBidirectionalStream) -> None:
+    try:
+        await stream.write_all(data=await stream.read_all(), end_stream=True)
+    except (ConnectionError, StreamError):
+        pass
 
-        async def stream_accept_loop() -> None:
-            try:
-                while True:
-                    stream = await session.accept_bidirectional_stream()
-                    asyncio.create_task(coro=stream_handler(stream=stream))
-            except SessionClosedError:
-                pass
 
-        t1 = asyncio.create_task(coro=datagram_loop())
-        t2 = asyncio.create_task(coro=stream_accept_loop())
+async def serve_connection(*, connection: WebTransportConnection) -> None:
+    async with asyncio.TaskGroup() as task_group:
+        async for session in connection.incoming_sessions():
+            task_group.create_task(coro=serve_session(session=session))
 
-        try:
-            await session.events.wait_for(event_type=EventType.SESSION_CLOSED)
-        except Exception:
-            pass
-        finally:
-            t1.cancel()
-            t2.cancel()
 
-    async def handle_latency(self, session: WebTransportSession, **kwargs: Any) -> None:
-        async def stream_responder(*, stream: WebTransportStream) -> None:
-            try:
-                data = await stream.read_all()
-                await stream.write_all(data=data, end_stream=True)
-                await stream.read(max_bytes=1)
-            except (ConnectionError, StreamError):
-                pass
-            except Exception:
-                if not stream.is_closed:
-                    await stream.close()
-
-        try:
-            while True:
-                stream = await session.accept_bidirectional_stream()
-                asyncio.create_task(coro=stream_responder(stream=stream))
-        except SessionClosedError:
-            pass
-
-    async def handle_produce(self, session: WebTransportSession, **kwargs: Any) -> None:
-        async def stream_producer(*, stream: WebTransportStream) -> None:
-            try:
-                cmd_bytes = await stream.read(max_bytes=128)
-                try:
-                    size_to_send = int(cmd_bytes)
-                except ValueError:
-                    return
-
-                await stream.write_all(data=STATIC_VIEW[:size_to_send], end_stream=True)
-                await stream.read(max_bytes=1)
-            except (ConnectionError, StreamError):
-                pass
-            except Exception:
-                if not stream.is_closed:
-                    await stream.close()
-
-        try:
-            while True:
-                stream = await session.accept_bidirectional_stream()
-                asyncio.create_task(coro=stream_producer(stream=stream))
-        except SessionClosedError:
-            pass
-
-    def _register_routes(self) -> None:
-        self.route(path="/discard")(self.handle_discard)
-        self.route(path="/duplex")(self.handle_duplex)
-        self.route(path="/echo")(self.handle_echo)
-        self.route(path="/latency")(self.handle_latency)
-        self.route(path="/produce")(self.handle_produce)
+async def serve_session(*, session: WebTransportSession) -> None:
+    try:
+        async with session:
+            match session.path:
+                case "/discard":
+                    await session.accept()
+                    async with asyncio.TaskGroup() as task_group:
+                        async for stream in session.incoming_bidirectional_streams():
+                            task_group.create_task(coro=discard_stream(stream=stream))
+                case "/duplex":
+                    await session.accept()
+                    async with asyncio.TaskGroup() as task_group:
+                        async for stream in session.incoming_bidirectional_streams():
+                            task_group.create_task(coro=exchange_stream(stream=stream))
+                case "/echo":
+                    await session.accept()
+                    async with asyncio.TaskGroup() as task_group:
+                        task_group.create_task(coro=echo_datagrams(session=session))
+                        async for stream in session.incoming_bidirectional_streams():
+                            task_group.create_task(coro=echo_stream(stream=stream))
+                case "/latency":
+                    await session.accept()
+                    async with asyncio.TaskGroup() as task_group:
+                        async for stream in session.incoming_bidirectional_streams():
+                            task_group.create_task(coro=respond_stream(stream=stream))
+                case "/produce":
+                    await session.accept()
+                    async with asyncio.TaskGroup() as task_group:
+                        async for stream in session.incoming_bidirectional_streams():
+                            task_group.create_task(coro=produce_stream(stream=stream))
+                case _:
+                    await session.reject(headers=[("allow", "")], status_code=http.HTTPStatus.METHOD_NOT_ALLOWED)
+    except (ConnectionError, SessionError):
+        pass
 
 
 async def main() -> None:
@@ -198,14 +142,16 @@ async def main() -> None:
         max_connections=4000,
     )
 
-    app = BenchmarkServerApp(config=config)
+    async with WebTransportServer(config=config) as server:
+        await server.listen()
 
-    async with app:
-        await app.serve()
+        async with asyncio.TaskGroup() as task_group:
+            async for connection in server.incoming_connections():
+                task_group.create_task(coro=serve_connection(connection=connection))
 
 
 if __name__ == "__main__":
     try:
-        uvloop.run(main())
+        asyncio.run(main())
     except KeyboardInterrupt:
         pass

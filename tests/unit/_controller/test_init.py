@@ -27,7 +27,8 @@ class TestControllerInit:
             patch(target="pywebtransport._pywebtransport.ABI_VERSION", new=1),
         ):
             with pytest.raises(
-                expected_exception=RuntimeError, match="abi_version validate invalid actual=1 expected=py_abi_version"
+                expected_exception=RuntimeError,
+                match="abi_version validate invalid actual=1 expected=python_abi_version",
             ):
                 if "pywebtransport._controller" in sys.modules:
                     importlib.reload(sys.modules["pywebtransport._controller"])

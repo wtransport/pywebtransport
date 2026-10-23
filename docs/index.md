@@ -4,7 +4,7 @@ hide:
   - toc
 ---
 
-<div style="text-align: center">
+<div align="center">
   <h1>
     <img src="assets/favicon.svg" alt="PyWebTransport" width="120" />
   </h1>
@@ -17,15 +17,12 @@ hide:
 
 ## Overview
 
-**PyWebTransport** implements the WebTransport protocol over QUIC and HTTP/3. It provides a deterministic state machine for streams and datagrams, alongside a high-level application framework designed for standards compliance and strict concurrency safety.
+**PyWebTransport** implements WebTransport over HTTP/3. It provides a deterministic state machine for streams and datagrams, and delivers peer-initiated connections, sessions, and streams through asynchronous iterators.
 
 ## Features
 
-- **Sans-I/O Architecture**: Powered by an ownership-driven Rust state machine decoupled from an autonomous threaded reactor via a lock-free IPC boundary.
+- **Sans-I/O Architecture**: Ownership-driven Rust state machine and autonomous threaded reactor.
 - **Transport Primitives**: Full implementation of bidirectional streams, unidirectional streams, and unreliable datagrams.
-- **Structured Concurrency**: Deterministic lifecycle management for connections and streams via asynchronous context managers.
-- **Zero-Copy I/O**: End-to-end support for buffer protocols and `memoryview` to minimize data copying overhead.
-- **Application Framework**: Declarative `ServerApp` featuring path-based routing and composable stateful middleware.
 
 ## Interoperability
 
@@ -38,12 +35,11 @@ hide:
 
 - **/echo**: Bidirectional stream and datagram reflection.
 - **/stats**: Current session statistics and negotiated parameters.
-- **/status**: Global server health and aggregate metrics.
 - **/webtransport/devious-baton**: Devious Baton protocol state transition validation.
 
 ## API Reference
 
-- [**Full Reference**](api-reference/index.md): Comprehensive documentation organized into the **Application Framework**, **Transport Layer**, and **Shared Primitives**.
+- [**Full Reference**](api-reference/index.md): Technical reference for the PyWebTransport public interface.
 
 ## Community
 

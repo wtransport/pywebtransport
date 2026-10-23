@@ -22,97 +22,13 @@ _An async-native WebTransport stack_
 
 ## Features
 
-- **Sans-I/O Architecture**: Powered by an ownership-driven Rust state machine decoupled from an autonomous threaded reactor via a lock-free IPC boundary.
+- **Sans-I/O Architecture**: Ownership-driven Rust state machine and autonomous threaded reactor.
 - **Transport Primitives**: Full implementation of bidirectional streams, unidirectional streams, and unreliable datagrams.
-- **Structured Concurrency**: Deterministic lifecycle management for connections and streams via asynchronous context managers.
-- **Zero-Copy I/O**: End-to-end support for buffer protocols and `memoryview` to minimize data copying overhead.
-- **Application Framework**: Declarative `ServerApp` featuring path-based routing and composable stateful middleware.
 
 ## Installation
 
 ```bash
 pip install pywebtransport
-```
-
-## Quick Start
-
-### Server
-
-```python
-import asyncio
-
-from pywebtransport import Event, ServerApp, ServerConfig, WebTransportSession, WebTransportStream
-from pywebtransport.types import EventType
-from pywebtransport.utils import generate_self_signed_cert
-
-generate_self_signed_cert(hostname="localhost")
-
-app = ServerApp(config=ServerConfig(certfile="localhost.crt", keyfile="localhost.key"))
-
-
-@app.route(path="/")
-async def echo_handler(session: WebTransportSession) -> None:
-    async def on_datagram(event: Event) -> None:
-        if isinstance(event.data, dict) and (data := event.data.get("data")):
-            await session.send_datagram(data=b"ECHO: " + data)
-
-    session.events.on(event_type=EventType.DATAGRAM_RECEIVED, handler=on_datagram)
-
-    try:
-        async for stream in session.incoming_bidirectional_streams():
-            asyncio.create_task(handle_stream(stream))
-    finally:
-        session.events.off(event_type=EventType.DATAGRAM_RECEIVED, handler=on_datagram)
-
-
-async def handle_stream(stream: WebTransportStream) -> None:
-    try:
-        data = await stream.read_all()
-        await stream.write_all(data=b"ECHO: " + data, end_stream=True)
-    except Exception:
-        pass
-
-
-if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=4433)
-```
-
-### Client
-
-```python
-import asyncio
-import ssl
-
-from pywebtransport import ClientConfig, WebTransportClient
-from pywebtransport.types import EventType
-
-
-async def main() -> None:
-    config = ClientConfig(verify_mode=ssl.CERT_NONE)
-
-    async with WebTransportClient(config=config) as client:
-        session = await client.connect(url="https://127.0.0.1:4433/")
-
-        await session.send_datagram(data=b"Hello, Datagram!")
-
-        event = await session.events.wait_for(event_type=EventType.DATAGRAM_RECEIVED)
-        if isinstance(event.data, dict) and (data := event.data.get("data")):
-            print(f"Datagram: {data!r}")
-
-        stream = await session.create_bidirectional_stream()
-        await stream.write_all(data=b"Hello, Stream!", end_stream=True)
-
-        response = await stream.read_all()
-        print(f"Stream: {response!r}")
-
-        await session.close()
-
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
 ```
 
 ## Interoperability
@@ -126,7 +42,6 @@ if __name__ == "__main__":
 
 - **/echo**: Bidirectional stream and datagram reflection.
 - **/stats**: Current session statistics and negotiated parameters.
-- **/status**: Global server health and aggregate metrics.
 - **/webtransport/devious-baton**: Devious Baton protocol state transition validation.
 
 ## Sponsors
@@ -138,6 +53,14 @@ if __name__ == "__main__":
       src="https://raw.githubusercontent.com/wtransport/pywebtransport/main/docs/assets/sponsor-fastly.svg"
       alt="Fastly"
       width="110"
+    />
+  </a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://osuosl.org/" target="_blank" rel="noopener noreferrer">
+    <img
+      src="https://raw.githubusercontent.com/wtransport/pywebtransport/main/docs/assets/sponsor-osuosl.png"
+      alt="OSU Open Source Lab"
+      width="90"
     />
   </a>
 </div>

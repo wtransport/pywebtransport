@@ -1,5 +1,3 @@
-# PyWebTransport MkDocs Configuration
-
 site_name: PyWebTransport
 site_description: An async-native WebTransport stack.
 site_url: https://python.wtransport.org
@@ -57,17 +55,15 @@ nav:
   - API Reference:
       - Overview: api-reference/index.md
       - Client: api-reference/client.md
-      - Server: api-reference/server.md
-      - Framework: api-reference/framework.md
-      - Connection: api-reference/connection.md
-      - Session: api-reference/session.md
-      - Stream: api-reference/stream.md
-      - Manager: api-reference/manager.md
       - Configuration: api-reference/config.md
+      - Connection: api-reference/connection.md
+      - Constants: api-reference/constants.md
       - Events: api-reference/events.md
       - Exceptions: api-reference/exceptions.md
+      - Server: api-reference/server.md
+      - Session: api-reference/session.md
+      - Stream: api-reference/stream.md
       - Types: api-reference/types.md
-      - Constants: api-reference/constants.md
       - Utils: api-reference/utils.md
 
 plugins:

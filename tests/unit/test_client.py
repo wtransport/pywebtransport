@@ -14,106 +14,23 @@ from pywebtransport import (
     Headers,
     TimeoutError,
     WebTransportClient,
+    WebTransportConnection,
     WebTransportSession,
 )
 from pywebtransport.client import (
-    ClientDiagnostics,
-    ClientStats,
     _ConnectionTarget,
     _merge_headers,
     _normalize_headers,
     _parse_webtransport_url,
     _resolve_host,
 )
-from pywebtransport.connection import WebTransportConnection
-from pywebtransport.manager import ConnectionManager
-from pywebtransport.types import ConnectionState, EventType
-
-
-class TestClientDiagnostics:
-
-    @pytest.mark.parametrize(
-        argnames="stats_data, expected_issue_part",
-        argvalues=[
-            ({}, None),
-            ({"connections_attempted": 20, "success_rate": 0.5}, "expected=health_success_rate_threshold"),
-            ({"avg_connect_time": 6.5}, "expected=health_connect_time_threshold"),
-        ],
-    )
-    def test_issues_property(
-        self, mocker: MockerFixture, stats_data: dict[str, Any], expected_issue_part: str | None
-    ) -> None:
-        mock_stats = mocker.create_autospec(spec=ClientStats, instance=True)
-        mock_stats.to_dict.return_value = stats_data
-        diagnostics = ClientDiagnostics(connection_states={}, stats=mock_stats)
-
-        issues = diagnostics.issues
-
-        if expected_issue_part:
-            assert any(expected_issue_part in issue for issue in issues)
-        else:
-            assert not issues
-
-
-class TestClientStats:
-
-    def test_avg_connect_time(self) -> None:
-        stats = ClientStats(created_at=0)
-
-        assert stats.avg_connect_time == 0.0
-
-        stats.connections_successful = 2
-        stats.total_connect_time = 5.0
-
-        assert stats.avg_connect_time == 2.5
-
-    def test_initialization(self) -> None:
-        stats = ClientStats(created_at=1000.0)
-
-        assert stats.created_at == 1000.0
-        assert stats.connections_attempted == 0
-        assert stats.connections_successful == 0
-        assert stats.connections_failed == 0
-        assert stats.total_connect_time == 0.0
-        assert stats.min_connect_time == float("inf")
-        assert stats.max_connect_time == 0.0
-
-    def test_success_rate(self) -> None:
-        stats = ClientStats(created_at=0)
-
-        assert stats.success_rate == 1.0
-
-        stats.connections_attempted = 10
-        stats.connections_successful = 8
-
-        assert stats.success_rate == 0.8
-
-        stats.connections_attempted = 10
-        stats.connections_successful = 0
-
-        assert stats.success_rate == 0.0
-
-    def test_to_dict(self, mocker: MockerFixture) -> None:
-        mocker.patch(target="time.perf_counter", return_value=1010.0)
-        stats = ClientStats(created_at=1000.0)
-        stats.min_connect_time = 1.2
-
-        stats_dict = stats.to_dict()
-
-        assert stats_dict["uptime"] == 10.0
-        assert stats_dict["min_connect_time"] == 1.2
-        assert stats_dict["max_connect_time"] == 0.0
-
-        stats.min_connect_time = float("inf")
-        stats_dict = stats.to_dict()
-
-        assert stats_dict["min_connect_time"] == 0.0
+from pywebtransport.version import __version__
 
 
 class TestWebTransportClient:
 
     @pytest.fixture
-    def client(self, mock_client_config: Any, mock_connection_manager: Any) -> WebTransportClient:
+    def client(self, mock_client_config: Any) -> WebTransportClient:
         return WebTransportClient(config=mock_client_config)
 
     @pytest.fixture
@@ -122,76 +39,51 @@ class TestWebTransportClient:
         mock.connect_timeout = 10.0
         mock.connection_attempt_delay = 0.250
         mock.headers = None
-        mock.max_connections = 100
-        mock.connection_idle_timeout = 60.0
-        mock.max_event_listeners = 50
-        mock.event_history_capacity = 100
-        mock.event_queue_capacity = 100
-        mock.wt_available_protocols = None
         mock.user_agent = None
+        mock.wt_available_protocols = None
 
         return mock
 
     @pytest.fixture
-    def mock_conn_factory(self, mocker: MockerFixture, mock_session: Any) -> Callable[[], Any]:
-        def _factory() -> Any:
-            conn = mocker.create_autospec(spec=WebTransportConnection, instance=True)
-            conn.state = ConnectionState.CONNECTING
-            conn.is_closed = False
-            conn.is_connected = False
-            conn.events = mocker.MagicMock()
-            conn.events.wait_for = mocker.AsyncMock()
-            conn.create_session = mocker.AsyncMock(return_value=mock_session)
-            conn.create_session_optimistic = mocker.AsyncMock(return_value=mock_session)
-            conn.close = mocker.AsyncMock()
-            return conn
-
-        return _factory
-
-    @pytest.fixture
-    def mock_connection_cls(self, mocker: MockerFixture, mock_webtransport_connection: Any) -> Any:
+    def mock_connection_class(self, mocker: MockerFixture, mock_webtransport_connection: Any) -> Any:
         return mocker.patch(
             target="pywebtransport.client.WebTransportConnection", return_value=mock_webtransport_connection
         )
 
     @pytest.fixture
-    def mock_connection_manager(self, mocker: MockerFixture) -> Any:
-        manager = mocker.create_autospec(spec=ConnectionManager, instance=True)
-        manager.__aenter__ = mocker.AsyncMock()
-        manager.__aexit__ = mocker.AsyncMock()
-        manager.__len__.return_value = 0
-        mocker.patch(target="pywebtransport.client.ConnectionManager", return_value=manager)
+    def mock_connection_factory(self, mocker: MockerFixture, mock_session: Any) -> Callable[[], Any]:
+        def factory() -> Any:
+            connection = mocker.create_autospec(spec=WebTransportConnection, instance=True)
+            connection.create_session = mocker.AsyncMock(return_value=mock_session)
+            connection.create_session_optimistic = mocker.AsyncMock(return_value=mock_session)
+            connection.close = mocker.AsyncMock()
+            return connection
 
-        return manager
+        return factory
 
     @pytest.fixture
-    def mock_controller(self, mocker: MockerFixture) -> Any:
+    def mock_controller(self, mocker: MockerFixture, mock_webtransport_connection: Any) -> Any:
         controller = mocker.MagicMock()
-        controller.connect = mocker.AsyncMock(return_value=42)
         controller.close = mocker.AsyncMock()
+        controller.connect = mocker.AsyncMock(return_value=mock_webtransport_connection)
+        controller.get_local_addresses.return_value = [("192.0.2.1", 0)]
+        controller.start = mocker.AsyncMock()
 
         return controller
 
     @pytest.fixture
-    def mock_controller_cls(self, mocker: MockerFixture, mock_controller: Any) -> Any:
+    def mock_controller_class(self, mocker: MockerFixture, mock_controller: Any) -> Any:
         return mocker.patch(target="pywebtransport.client.EndpointController", return_value=mock_controller)
 
     @pytest.fixture
     def mock_session(self, mocker: MockerFixture) -> Any:
         session = mocker.create_autospec(spec=WebTransportSession, instance=True)
-        session.session_id = "session-123"
-        session.is_closed = False
 
         return session
 
     @pytest.fixture
     def mock_webtransport_connection(self, mocker: MockerFixture, mock_session: Any) -> Any:
         connection = mocker.create_autospec(spec=WebTransportConnection, instance=True)
-        connection.is_closed = False
-        connection.state = ConnectionState.CONNECTED
-        connection.is_connected = True
-        connection.events = mocker.MagicMock()
-        connection.events.wait_for = mocker.AsyncMock()
         connection.create_session = mocker.AsyncMock(return_value=mock_session)
         connection.create_session_optimistic = mocker.AsyncMock(return_value=mock_session)
         connection.close = mocker.AsyncMock()
@@ -204,7 +96,6 @@ class TestWebTransportClient:
             target="pywebtransport.client._parse_webtransport_url",
             return_value=_ConnectionTarget(authority="example.com", host="example.com", path="/", port=443),
         )
-        mocker.patch(target="time.perf_counter", return_value=1000.0)
         mocker.patch(
             target="pywebtransport.client._resolve_host",
             return_value=["192.0.2.1"],
@@ -212,202 +103,288 @@ class TestWebTransportClient:
         )
 
     @pytest.mark.asyncio
-    async def test_close_closes_controller(
-        self, client: WebTransportClient, mock_connection_manager: Any, mock_controller: Any
-    ) -> None:
+    async def test_close_closes_controller(self, client: WebTransportClient, mock_controller: Any) -> None:
         client._controller = mock_controller
 
         await client.close()
 
-        mock_connection_manager.shutdown.assert_awaited_once()
         mock_controller.close.assert_awaited_once()
+        assert client._controller is None
 
     @pytest.mark.asyncio
-    async def test_close_idempotency_and_concurrency(
-        self, client: WebTransportClient, mock_connection_manager: Any
-    ) -> None:
+    async def test_close_idempotency_and_concurrency(self, client: WebTransportClient) -> None:
         await asyncio.gather(client.close(), client.close())
 
         assert client.is_closed
-        mock_connection_manager.shutdown.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_close_sequential_calls(self, client: WebTransportClient, mock_connection_manager: Any) -> None:
+    async def test_close_reaches_terminal_state_on_controller_error(
+        self, client: WebTransportClient, mock_controller: Any
+    ) -> None:
+        client._controller = mock_controller
+        mock_controller.close.side_effect = RuntimeError("controller close failed")
+
+        with pytest.raises(expected_exception=RuntimeError, match="controller close failed"):
+            await client.close()
+
+        assert client.is_closed
+
+    @pytest.mark.asyncio
+    async def test_close_sequential_calls(self, client: WebTransportClient) -> None:
         await client.close()
 
         assert client.is_closed
 
         await client.close()
 
-        mock_connection_manager.shutdown.assert_awaited_once()
+    @pytest.mark.asyncio
+    async def test_close_with_done_task(self, client: WebTransportClient, mocker: MockerFixture) -> None:
+        done_task = mocker.create_autospec(spec=asyncio.Task, instance=True)
+        done_task.done.return_value = True
+        not_done_task = mocker.create_autospec(spec=asyncio.Task, instance=True)
+        not_done_task.done.return_value = False
+        client._background_tasks = {done_task, not_done_task}
+
+        async def fake_gather(*tasks: Any, **kwargs: Any) -> list[Any]:
+            for task in tasks:
+                client._background_tasks.discard(task)
+            return []
+
+        mock_gather = mocker.patch(
+            target="asyncio.gather",
+            new_callable=mocker.AsyncMock,
+            side_effect=fake_gather,
+        )
+
+        await client.close()
+
+        done_task.cancel.assert_not_called()
+        not_done_task.cancel.assert_called_once()
+        mock_gather.assert_awaited_once()
+
+        args = mock_gather.await_args[0]
+        assert set(args) == {done_task, not_done_task}
 
     @pytest.mark.asyncio
     async def test_connect_already_initialized(
-        self, client: WebTransportClient, mock_controller_cls: Any, mock_connection_cls: Any, mock_controller: Any
+        self, client: WebTransportClient, mock_controller_class: Any, mock_controller: Any
     ) -> None:
         client._controller = mock_controller
 
         await client.connect(url="https://example.com")
 
-        mock_controller_cls.assert_not_called()
-        mock_controller.connect.assert_awaited_once_with(
-            remote_host="192.0.2.1", remote_port=443, server_name="example.com"
-        )
-        mock_connection_cls.assert_called_once()
+        mock_controller_class.assert_not_called()
+        mock_controller.connect.assert_awaited_once_with(remote_address=("192.0.2.1", 443), server_name="example.com")
 
     @pytest.mark.asyncio
     async def test_connect_concurrent_initialization(
-        self, client: WebTransportClient, mock_controller_cls: Any, mock_connection_cls: Any, mock_controller: Any
+        self, client: WebTransportClient, mock_controller_class: Any, mock_controller: Any
     ) -> None:
-        await client._init_lock.acquire()
+        await client._controller_lock.acquire()
 
         task1 = asyncio.create_task(coro=client.connect(url="https://example.com/1"))
         task2 = asyncio.create_task(coro=client.connect(url="https://example.com/2"))
 
         await asyncio.sleep(delay=0.01)
 
-        client._init_lock.release()
+        client._controller_lock.release()
 
         await asyncio.gather(task1, task2)
 
-        mock_controller_cls.assert_called_once()
+        mock_controller_class.assert_called_once()
         assert mock_controller.connect.call_count == 2
-        assert mock_connection_cls.call_count == 2
 
     @pytest.mark.asyncio
     async def test_connect_controller_raises_exception(
-        self, client: WebTransportClient, mock_controller_cls: Any, mock_controller: Any
+        self, client: WebTransportClient, mock_controller_class: Any, mock_controller: Any
     ) -> None:
-        mock_controller.connect.side_effect = RuntimeError("Controller error")
+        mock_controller.connect.side_effect = RuntimeError("controller error")
 
-        with pytest.raises(expected_exception=ClientError, match="wt_connection open failed actual=example.com") as exc:
+        with pytest.raises(
+            expected_exception=ClientError, match="wt_connection open failed actual=example.com"
+        ) as exception_info:
             await client.connect(url="https://example.com")
 
-        cause_level_1 = exc.value.__cause__
+        cause_level_1 = exception_info.value.__cause__
         assert cause_level_1 is not None
         cause_level_2 = cause_level_1.__cause__
         assert cause_level_2 is not None
 
-        assert "Controller error" in str(cause_level_2)
-
-    @pytest.mark.asyncio
-    async def test_connect_controller_returns_none(self, client: WebTransportClient, mock_controller_cls: Any) -> None:
-        mock_controller_cls.return_value = None
-
-        with pytest.raises(expected_exception=ClientError, match="wt_connection open failed actual=example.com") as exc:
-            await client.connect(url="https://example.com")
-
-        assert "rt create failed" in str(exc.value.__cause__)
-
-    @pytest.mark.asyncio
-    async def test_connect_failure_certificate(
-        self, client: WebTransportClient, mock_controller_cls: Any, mock_connection_cls: Any
-    ) -> None:
-        mock_controller_cls.side_effect = Exception("certificate verify failed")
-
-        with pytest.raises(
-            expected_exception=ConnectionError, match="wt_connection validate failed actual=example.com"
-        ):
-            await client.connect(url="https://example.com")
-
-        assert client._stats.connections_failed == 1
-
-    @pytest.mark.asyncio
-    async def test_connect_failure_connection_refused(
-        self, client: WebTransportClient, mock_controller_cls: Any, mock_connection_cls: Any
-    ) -> None:
-        mock_controller_cls.side_effect = ConnectionRefusedError()
-
-        with pytest.raises(expected_exception=ConnectionError, match="wt_connection open failed actual=example.com"):
-            await client.connect(url="https://example.com")
-
-        assert client._stats.connections_failed == 1
-
-    @pytest.mark.asyncio
-    async def test_connect_failure_generic(
-        self,
-        client: WebTransportClient,
-        mock_controller_cls: Any,
-        mock_connection_cls: Any,
-        mock_webtransport_connection: Any,
-    ) -> None:
-        mock_controller_cls.side_effect = RuntimeError("Generic failure")
-
-        with pytest.raises(expected_exception=ClientError, match="wt_connection open failed actual=example.com"):
-            await client.connect(url="https://example.com")
-
-        await asyncio.sleep(delay=0.01)
-        mock_webtransport_connection.close.assert_not_awaited()
-        assert client._stats.connections_failed == 1
-
-    @pytest.mark.asyncio
-    async def test_connect_failure_timeout(
-        self, client: WebTransportClient, mock_controller_cls: Any, mock_connection_cls: Any
-    ) -> None:
-        mock_controller_cls.side_effect = asyncio.TimeoutError()
-
-        with pytest.raises(expected_exception=TimeoutError, match="wt_connection open failed actual=example.com"):
-            await client.connect(url="https://example.com")
-
-        assert client._stats.connections_failed == 1
-
-    @pytest.mark.asyncio
-    async def test_connect_failure_timeout_during_session(
-        self,
-        client: WebTransportClient,
-        mock_webtransport_connection: Any,
-        mock_controller_cls: Any,
-        mock_connection_cls: Any,
-    ) -> None:
-        mock_webtransport_connection.state = ConnectionState.CONNECTED
-        mock_webtransport_connection.is_connected = True
-        mock_webtransport_connection.create_session.side_effect = asyncio.TimeoutError()
-
-        with pytest.raises(expected_exception=TimeoutError, match="wt_session open failed actual=example.com"):
-            await client.connect(url="https://example.com")
-
-        assert client._stats.connections_failed == 1
+        assert "controller error" in str(cause_level_2)
 
     @pytest.mark.asyncio
     async def test_connect_fails_during_session_creation(
         self,
         client: WebTransportClient,
         mock_webtransport_connection: Any,
-        mock_controller_cls: Any,
-        mock_connection_cls: Any,
+        mock_controller_class: Any,
     ) -> None:
-        mock_webtransport_connection.create_session.side_effect = RuntimeError("Session init failed")
+        mock_webtransport_connection.create_session.side_effect = RuntimeError("session init failed")
 
-        with pytest.raises(expected_exception=ClientError, match="wt_connection open failed actual=example.com"):
+        with pytest.raises(
+            expected_exception=ClientError,
+            match="wt_connection open failed actual=example.com",
+        ):
             await client.connect(url="https://example.com")
 
         mock_webtransport_connection.close.assert_awaited_once()
-        assert client._stats.connections_failed == 1
 
     @pytest.mark.asyncio
-    async def test_connect_fails_initial_handshake(
+    async def test_connect_failure_certificate(self, client: WebTransportClient, mock_controller_class: Any) -> None:
+        mock_controller_class.side_effect = Exception("certificate verify failed")
+
+        with pytest.raises(
+            expected_exception=ConnectionError,
+            match="wt_connection validate failed actual=example.com",
+        ):
+            await client.connect(url="https://example.com")
+
+    @pytest.mark.asyncio
+    async def test_connect_failure_connection_refused(
+        self, client: WebTransportClient, mock_controller_class: Any
+    ) -> None:
+        mock_controller_class.side_effect = ConnectionRefusedError()
+
+        with pytest.raises(
+            expected_exception=ConnectionError,
+            match="wt_connection open failed actual=example.com",
+        ):
+            await client.connect(url="https://example.com")
+
+    @pytest.mark.asyncio
+    async def test_connect_failure_generic(
+        self,
+        client: WebTransportClient,
+        mock_controller_class: Any,
+        mock_webtransport_connection: Any,
+    ) -> None:
+        mock_controller_class.side_effect = RuntimeError("generic failure")
+
+        with pytest.raises(
+            expected_exception=ClientError,
+            match="wt_connection open failed actual=example.com",
+        ):
+            await client.connect(url="https://example.com")
+
+        mock_webtransport_connection.close.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_connect_failure_timeout(self, client: WebTransportClient, mock_controller_class: Any) -> None:
+        mock_controller_class.side_effect = asyncio.TimeoutError()
+
+        with pytest.raises(
+            expected_exception=TimeoutError,
+            match="wt_connection open failed actual=example.com",
+        ):
+            await client.connect(url="https://example.com")
+
+    @pytest.mark.asyncio
+    async def test_connect_failure_timeout_during_session(
         self,
         client: WebTransportClient,
         mock_webtransport_connection: Any,
-        mock_controller_cls: Any,
-        mock_connection_cls: Any,
+        mock_controller_class: Any,
     ) -> None:
-        mock_webtransport_connection.state = ConnectionState.CLOSED
+        async def create_session(**kwargs: Any) -> Any:
+            await asyncio.Event().wait()
 
-        with pytest.raises(expected_exception=ClientError, match="wt_connection open failed actual=example.com"):
-            await client.connect(url="https://example.com")
+        mock_webtransport_connection.create_session.side_effect = create_session
 
-        await asyncio.sleep(delay=0.01)
+        with pytest.raises(
+            expected_exception=TimeoutError,
+            match="wt_session open failed actual=example.com",
+        ):
+            await client.connect(url="https://example.com", timeout=0.01)
+
         mock_webtransport_connection.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_connect_happy_eyeballs_abandoned_attempt_fails_late(
+        self,
+        client: WebTransportClient,
+        mock_client_config: Any,
+        mock_controller_class: Any,
+        mock_controller: Any,
+        mock_session: Any,
+        mock_connection_factory: Callable[[], Any],
+        mocker: MockerFixture,
+    ) -> None:
+        mocker.patch(
+            target="pywebtransport.client._resolve_host",
+            return_value=["10.0.0.1", "10.0.0.2"],
+            new_callable=mocker.AsyncMock,
+        )
+        mock_client_config.connection_attempt_delay = 0.1
+        sync_event = asyncio.Event()
+        connection2 = mock_connection_factory()
+
+        async def connect(*, remote_address: tuple[str, int], server_name: str) -> Any:
+            if remote_address[0] == "10.0.0.1":
+                await sync_event.wait()
+                raise ConnectionError(message="late failure")
+            return connection2
+
+        mock_controller.connect.side_effect = connect
+
+        session = await client.connect(url="https://example.com")
+
+        assert session is mock_session
+        assert client._background_tasks
+
+        sync_event.set()
+        while client._background_tasks:
+            await asyncio.wait(client._background_tasks)
+
+        assert not client._background_tasks
+        connection2.close.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_connect_happy_eyeballs_abandoned_attempt_succeeds_late(
+        self,
+        client: WebTransportClient,
+        mock_client_config: Any,
+        mock_controller_class: Any,
+        mock_controller: Any,
+        mock_session: Any,
+        mock_connection_factory: Callable[[], Any],
+        mocker: MockerFixture,
+    ) -> None:
+        mocker.patch(
+            target="pywebtransport.client._resolve_host",
+            return_value=["10.0.0.1", "10.0.0.2"],
+            new_callable=mocker.AsyncMock,
+        )
+        mock_client_config.connection_attempt_delay = 0.1
+        sync_event = asyncio.Event()
+        connection1 = mock_connection_factory()
+        connection2 = mock_connection_factory()
+
+        async def connect(*, remote_address: tuple[str, int], server_name: str) -> Any:
+            if remote_address[0] == "10.0.0.1":
+                await sync_event.wait()
+                return connection1
+            return connection2
+
+        mock_controller.connect.side_effect = connect
+
+        session = await client.connect(url="https://example.com")
+
+        assert session is mock_session
+        connection1.close.assert_not_called()
+
+        sync_event.set()
+        while client._background_tasks:
+            await asyncio.wait(client._background_tasks)
+
+        connection1.close.assert_awaited_once()
+        connection2.close.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_connect_happy_eyeballs_all_fail(
         self,
         client: WebTransportClient,
-        mock_controller_cls: Any,
-        mock_connection_cls: Any,
+        mock_controller_class: Any,
         mock_controller: Any,
-        mock_conn_factory: Callable[[], Any],
         mocker: MockerFixture,
     ) -> None:
         mocker.patch(
@@ -415,32 +392,24 @@ class TestWebTransportClient:
             return_value=["2001:db8::1", "192.0.2.1"],
             new_callable=mocker.AsyncMock,
         )
+        mock_controller.connect.side_effect = ConnectionError(message="attempt failed")
 
-        conn1 = mock_conn_factory()
-        conn1.state = ConnectionState.CLOSED
-        conn2 = mock_conn_factory()
-        conn2.state = ConnectionState.CLOSED
-
-        mock_connection_cls.side_effect = [conn1, conn2]
-
-        with pytest.raises(expected_exception=ClientError, match="wt_connection open failed actual=example.com"):
+        with pytest.raises(
+            expected_exception=ClientError,
+            match="wt_connection open failed actual=example.com",
+        ):
             await client.connect(url="https://example.com")
 
-        await asyncio.sleep(delay=0.01)
-        assert mock_connection_cls.call_count == 2
-        conn1.close.assert_awaited_once()
-        conn2.close.assert_awaited_once()
+        assert mock_controller.connect.await_count == 2
 
     @pytest.mark.asyncio
     async def test_connect_happy_eyeballs_fallback(
         self,
         client: WebTransportClient,
-        mock_controller_cls: Any,
-        mock_connection_cls: Any,
+        mock_controller_class: Any,
         mock_controller: Any,
-        mock_connection_manager: Any,
         mock_session: Any,
-        mock_conn_factory: Callable[[], Any],
+        mock_connection_factory: Callable[[], Any],
         mocker: MockerFixture,
     ) -> None:
         mocker.patch(
@@ -448,32 +417,30 @@ class TestWebTransportClient:
             return_value=["2001:db8::1", "192.0.2.1"],
             new_callable=mocker.AsyncMock,
         )
+        connection2 = mock_connection_factory()
 
-        conn1 = mock_conn_factory()
-        conn1.state = ConnectionState.CLOSED
-        conn2 = mock_conn_factory()
-        conn2.state = ConnectionState.CONNECTED
-        conn2.is_connected = True
+        async def connect(*, remote_address: tuple[str, int], server_name: str) -> Any:
+            if remote_address[0] == "2001:db8::1":
+                raise ConnectionError(message="attempt failed")
+            return connection2
 
-        mock_connection_cls.side_effect = [conn1, conn2]
+        mock_controller.connect.side_effect = connect
 
         session = await client.connect(url="https://example.com")
 
         assert session is mock_session
-        await asyncio.sleep(delay=0.01)
-        assert mock_connection_cls.call_count == 2
-        conn1.close.assert_awaited_once()
+        assert mock_controller.connect.await_count == 2
+        connection2.create_session.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_connect_happy_eyeballs_outer_loop_simultaneous_success_and_failure(
         self,
         client: WebTransportClient,
-        mock_controller_cls: Any,
-        mock_connection_cls: Any,
+        mock_client_config: Any,
+        mock_controller_class: Any,
         mock_controller: Any,
-        mock_connection_manager: Any,
         mock_session: Any,
-        mock_conn_factory: Callable[[], Any],
+        mock_connection_factory: Callable[[], Any],
         mocker: MockerFixture,
     ) -> None:
         mocker.patch(
@@ -481,34 +448,26 @@ class TestWebTransportClient:
             return_value=["10.0.0.1", "10.0.0.2"],
             new_callable=mocker.AsyncMock,
         )
-        client.config.connection_attempt_delay = 0.0
+        mock_client_config.connection_attempt_delay = 0.0
         sync_event = asyncio.Event()
+        connection1 = mock_connection_factory()
 
-        conn1 = mock_conn_factory()
-        conn2 = mock_conn_factory()
-
-        async def wait_for_1(*args: Any, **kwargs: Any) -> None:
+        async def connect(*, remote_address: tuple[str, int], server_name: str) -> Any:
             await sync_event.wait()
-            conn1.state = ConnectionState.CONNECTED
-
-        async def wait_for_2(*args: Any, **kwargs: Any) -> None:
-            await sync_event.wait()
+            if remote_address[0] == "10.0.0.1":
+                return connection1
             raise ConnectionError(message="simultaneous failure")
 
-        conn1.events.wait_for.side_effect = wait_for_1
-        conn2.events.wait_for.side_effect = wait_for_2
-
-        mock_connection_cls.side_effect = [conn1, conn2]
-
+        mock_controller.connect.side_effect = connect
         original_wait = asyncio.wait
 
         async def mock_wait(fs: Any, *args: Any, **kwargs: Any) -> tuple[Any, Any]:
             done, pending = await original_wait(fs, *args, **kwargs)
 
-            def is_failure(t: asyncio.Task[Any]) -> bool:
-                if t.cancelled():
+            def is_failure(task: asyncio.Task[Any]) -> bool:
+                if task.cancelled():
                     return True
-                return t.exception() is not None
+                return task.exception() is not None
 
             ordered_done = sorted(list(done), key=is_failure)
             return ordered_done, pending
@@ -523,18 +482,17 @@ class TestWebTransportClient:
         session = await connect_task
 
         assert session is mock_session
-        await asyncio.sleep(delay=0.01)
+        connection1.create_session.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_connect_happy_eyeballs_simultaneous_success(
         self,
         client: WebTransportClient,
-        mock_controller_cls: Any,
-        mock_connection_cls: Any,
+        mock_client_config: Any,
+        mock_controller_class: Any,
         mock_controller: Any,
-        mock_connection_manager: Any,
         mock_session: Any,
-        mock_conn_factory: Callable[[], Any],
+        mock_connection_factory: Callable[[], Any],
         mocker: MockerFixture,
     ) -> None:
         mocker.patch(
@@ -542,24 +500,16 @@ class TestWebTransportClient:
             return_value=["10.0.0.1", "10.0.0.2"],
             new_callable=mocker.AsyncMock,
         )
-        client.config.connection_attempt_delay = 0.0
+        mock_client_config.connection_attempt_delay = 0.0
         sync_event = asyncio.Event()
+        connection1 = mock_connection_factory()
+        connection2 = mock_connection_factory()
 
-        conn1 = mock_conn_factory()
-        conn2 = mock_conn_factory()
-
-        async def wait_for_1(*args: Any, **kwargs: Any) -> None:
+        async def connect(*, remote_address: tuple[str, int], server_name: str) -> Any:
             await sync_event.wait()
-            conn1.state = ConnectionState.CONNECTED
+            return connection1 if remote_address[0] == "10.0.0.1" else connection2
 
-        async def wait_for_2(*args: Any, **kwargs: Any) -> None:
-            await sync_event.wait()
-            conn2.state = ConnectionState.CONNECTED
-
-        conn1.events.wait_for.side_effect = wait_for_1
-        conn2.events.wait_for.side_effect = wait_for_2
-
-        mock_connection_cls.side_effect = [conn1, conn2]
+        mock_controller.connect.side_effect = connect
 
         connect_task = asyncio.create_task(coro=client.connect(url="https://example.com"))
 
@@ -569,18 +519,17 @@ class TestWebTransportClient:
         session = await connect_task
 
         assert session is mock_session
-        await asyncio.sleep(delay=0.01)
-        assert conn1.close.call_count + conn2.close.call_count == 1
+        while client._background_tasks:
+            await asyncio.wait(client._background_tasks)
+        assert connection1.close.call_count + connection2.close.call_count == 1
 
     @pytest.mark.asyncio
     async def test_connect_happy_eyeballs_staggered_failure(
         self,
         client: WebTransportClient,
-        mock_controller_cls: Any,
-        mock_connection_cls: Any,
+        mock_client_config: Any,
+        mock_controller_class: Any,
         mock_controller: Any,
-        mock_connection_manager: Any,
-        mock_conn_factory: Callable[[], Any],
         mocker: MockerFixture,
     ) -> None:
         mocker.patch(
@@ -588,37 +537,31 @@ class TestWebTransportClient:
             return_value=["10.0.0.1", "10.0.0.2"],
             new_callable=mocker.AsyncMock,
         )
-        client.config.connection_attempt_delay = 0.1
+        mock_client_config.connection_attempt_delay = 0.1
 
-        conn1 = mock_conn_factory()
-        conn2 = mock_conn_factory()
-
-        async def wait_for_fail(*args: Any, **kwargs: Any) -> None:
+        async def connect(*, remote_address: tuple[str, int], server_name: str) -> Any:
             await asyncio.sleep(delay=0.2)
             raise ConnectionError(message="simulated failure")
 
-        conn1.events.wait_for.side_effect = wait_for_fail
-        conn2.events.wait_for.side_effect = wait_for_fail
+        mock_controller.connect.side_effect = connect
 
-        mock_connection_cls.side_effect = [conn1, conn2]
-
-        with pytest.raises(expected_exception=ClientError, match="wt_connection open failed actual=example.com"):
+        with pytest.raises(
+            expected_exception=ClientError,
+            match="wt_connection open failed actual=example.com",
+        ):
             await client.connect(url="https://example.com")
 
-        await asyncio.sleep(delay=0.01)
-        conn1.close.assert_awaited_once()
-        conn2.close.assert_awaited_once()
+        assert mock_controller.connect.await_count == 2
 
     @pytest.mark.asyncio
     async def test_connect_happy_eyeballs_staggered_success(
         self,
         client: WebTransportClient,
-        mock_controller_cls: Any,
-        mock_connection_cls: Any,
+        mock_client_config: Any,
+        mock_controller_class: Any,
         mock_controller: Any,
-        mock_connection_manager: Any,
         mock_session: Any,
-        mock_conn_factory: Callable[[], Any],
+        mock_connection_factory: Callable[[], Any],
         mocker: MockerFixture,
     ) -> None:
         mocker.patch(
@@ -626,40 +569,38 @@ class TestWebTransportClient:
             return_value=["10.0.0.1", "10.0.0.2"],
             new_callable=mocker.AsyncMock,
         )
-        client.config.connection_attempt_delay = 0.1
+        mock_client_config.connection_attempt_delay = 0.1
+        connection1 = mock_connection_factory()
+        connection2 = mock_connection_factory()
 
-        conn1 = mock_conn_factory()
-        conn2 = mock_conn_factory()
-
-        async def wait_for_1(*args: Any, **kwargs: Any) -> None:
-            await asyncio.sleep(delay=0.3)
-            conn1.state = ConnectionState.CONNECTED
-
-        async def wait_for_2(*args: Any, **kwargs: Any) -> None:
+        async def connect(*, remote_address: tuple[str, int], server_name: str) -> Any:
+            if remote_address[0] == "10.0.0.1":
+                await asyncio.sleep(delay=0.3)
+                return connection1
             await asyncio.sleep(delay=0.1)
-            conn2.state = ConnectionState.CONNECTED
+            return connection2
 
-        conn1.events.wait_for.side_effect = wait_for_1
-        conn2.events.wait_for.side_effect = wait_for_2
-
-        mock_connection_cls.side_effect = [conn1, conn2]
+        mock_controller.connect.side_effect = connect
 
         session = await client.connect(url="https://example.com")
 
         assert session is mock_session
-        await asyncio.sleep(delay=0.01)
-        conn1.close.assert_awaited_once()
+        connection2.create_session.assert_awaited_once()
+        connection1.close.assert_not_called()
+
+        while client._background_tasks:
+            await asyncio.wait(client._background_tasks)
+        connection1.close.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_connect_happy_eyeballs_while_loop_double_success(
         self,
         client: WebTransportClient,
-        mock_controller_cls: Any,
-        mock_connection_cls: Any,
+        mock_client_config: Any,
+        mock_controller_class: Any,
         mock_controller: Any,
-        mock_connection_manager: Any,
         mock_session: Any,
-        mock_conn_factory: Callable[[], Any],
+        mock_connection_factory: Callable[[], Any],
         mocker: MockerFixture,
     ) -> None:
         mocker.patch(
@@ -667,29 +608,18 @@ class TestWebTransportClient:
             return_value=["10.0.0.1", "10.0.0.2", "10.0.0.3"],
             new_callable=mocker.AsyncMock,
         )
-        client.config.connection_attempt_delay = 0.1
+        mock_client_config.connection_attempt_delay = 0.1
         sync_event = asyncio.Event()
+        connection1 = mock_connection_factory()
+        connection2 = mock_connection_factory()
 
-        conn1 = mock_conn_factory()
-        conn2 = mock_conn_factory()
-        conn3 = mock_conn_factory()
-
-        async def wait_for_1(*args: Any, **kwargs: Any) -> None:
+        async def connect(*, remote_address: tuple[str, int], server_name: str) -> Any:
+            if remote_address[0] == "10.0.0.3":
+                raise ConnectionError(message="fast failure")
             await sync_event.wait()
-            conn1.state = ConnectionState.CONNECTED
+            return connection1 if remote_address[0] == "10.0.0.1" else connection2
 
-        async def wait_for_2(*args: Any, **kwargs: Any) -> None:
-            await sync_event.wait()
-            conn2.state = ConnectionState.CONNECTED
-
-        async def wait_for_3(*args: Any, **kwargs: Any) -> None:
-            raise ConnectionError(message="fast failure")
-
-        conn1.events.wait_for.side_effect = wait_for_1
-        conn2.events.wait_for.side_effect = wait_for_2
-        conn3.events.wait_for.side_effect = wait_for_3
-
-        mock_connection_cls.side_effect = [conn1, conn2, conn3]
+        mock_controller.connect.side_effect = connect
 
         async def trigger_event() -> None:
             await asyncio.sleep(delay=0.3)
@@ -700,20 +630,20 @@ class TestWebTransportClient:
         session = await client.connect(url="https://example.com")
 
         assert session is mock_session
-        await asyncio.sleep(delay=0.01)
-        assert conn1.close.call_count + conn2.close.call_count == 1
-        conn3.close.assert_awaited_once()
+        while client._background_tasks:
+            await asyncio.wait(client._background_tasks)
+        assert mock_controller.connect.await_count == 3
+        assert connection1.close.call_count + connection2.close.call_count == 1
 
     @pytest.mark.asyncio
     async def test_connect_happy_eyeballs_while_loop_simultaneous_success_and_failure(
         self,
         client: WebTransportClient,
-        mock_controller_cls: Any,
-        mock_connection_cls: Any,
+        mock_client_config: Any,
+        mock_controller_class: Any,
         mock_controller: Any,
-        mock_connection_manager: Any,
         mock_session: Any,
-        mock_conn_factory: Callable[[], Any],
+        mock_connection_factory: Callable[[], Any],
         mocker: MockerFixture,
     ) -> None:
         mocker.patch(
@@ -721,39 +651,28 @@ class TestWebTransportClient:
             return_value=["10.0.0.1", "10.0.0.2", "10.0.0.3"],
             new_callable=mocker.AsyncMock,
         )
-        client.config.connection_attempt_delay = 0.1
+        mock_client_config.connection_attempt_delay = 0.1
         sync_event = asyncio.Event()
+        connection1 = mock_connection_factory()
 
-        conn1 = mock_conn_factory()
-        conn2 = mock_conn_factory()
-        conn3 = mock_conn_factory()
-
-        async def wait_for_1(*args: Any, **kwargs: Any) -> None:
+        async def connect(*, remote_address: tuple[str, int], server_name: str) -> Any:
+            if remote_address[0] == "10.0.0.3":
+                raise ConnectionError(message="fast failure")
             await sync_event.wait()
-            conn1.state = ConnectionState.CONNECTED
-
-        async def wait_for_2(*args: Any, **kwargs: Any) -> None:
-            await sync_event.wait()
+            if remote_address[0] == "10.0.0.1":
+                return connection1
             raise ConnectionError(message="simultaneous failure")
 
-        async def wait_for_3(*args: Any, **kwargs: Any) -> None:
-            raise ConnectionError(message="fast failure")
-
-        conn1.events.wait_for.side_effect = wait_for_1
-        conn2.events.wait_for.side_effect = wait_for_2
-        conn3.events.wait_for.side_effect = wait_for_3
-
-        mock_connection_cls.side_effect = [conn1, conn2, conn3]
-
+        mock_controller.connect.side_effect = connect
         original_wait = asyncio.wait
 
         async def mock_wait(fs: Any, *args: Any, **kwargs: Any) -> tuple[Any, Any]:
             done, pending = await original_wait(fs, *args, **kwargs)
 
-            def is_failure(t: asyncio.Task[Any]) -> bool:
-                if t.cancelled():
+            def is_failure(task: asyncio.Task[Any]) -> bool:
+                if task.cancelled():
                     return True
-                return t.exception() is not None
+                return task.exception() is not None
 
             ordered_done = sorted(list(done), key=is_failure)
             return ordered_done, pending
@@ -769,30 +688,22 @@ class TestWebTransportClient:
         session = await client.connect(url="https://example.com")
 
         assert session is mock_session
-        await asyncio.sleep(delay=0.01)
-        conn3.close.assert_awaited_once()
+        assert mock_controller.connect.await_count == 3
+        connection1.create_session.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_connect_optimistic_success(
         self,
         client: WebTransportClient,
-        mock_controller_cls: Any,
-        mock_connection_cls: Any,
+        mock_controller_class: Any,
         mock_controller: Any,
-        mock_connection_manager: Any,
         mock_webtransport_connection: Any,
         mock_session: Any,
-        mocker: MockerFixture,
     ) -> None:
-        mocker.patch(target="time.perf_counter", side_effect=[2000.0, 2001.23])
-
         session = await client.connect_optimistic(url="https://example.com")
 
-        mock_controller_cls.assert_called_once()
-        mock_controller.connect.assert_awaited_once_with(
-            remote_host="192.0.2.1", remote_port=443, server_name="example.com"
-        )
-        mock_connection_cls.assert_called_once()
+        mock_controller_class.assert_called_once()
+        mock_controller.connect.assert_awaited_once_with(remote_address=("192.0.2.1", 443), server_name="example.com")
 
         mock_webtransport_connection.create_session_optimistic.assert_awaited_once()
         mock_webtransport_connection.create_session.assert_not_called()
@@ -802,38 +713,21 @@ class TestWebTransportClient:
         assert session_kwargs["path"] == "/"
 
         assert session is mock_session
-        stats = client._stats
-        assert stats.connections_successful == 1
-        assert stats.total_connect_time == pytest.approx(expected=1.23)
 
     @pytest.mark.asyncio
     async def test_connect_success(
         self,
         client: WebTransportClient,
-        mock_controller_cls: Any,
-        mock_connection_cls: Any,
+        mock_controller_class: Any,
         mock_controller: Any,
-        mock_connection_manager: Any,
         mock_webtransport_connection: Any,
         mock_session: Any,
-        mocker: MockerFixture,
     ) -> None:
-        mocker.patch(target="time.perf_counter", side_effect=[2000.0, 2001.23])
-
         session = await client.connect(url="https://example.com")
 
-        mock_controller_cls.assert_called_once()
-        mock_controller.connect.assert_awaited_once_with(
-            remote_host="192.0.2.1", remote_port=443, server_name="example.com"
-        )
-        mock_connection_cls.assert_called_once()
-
-        args, kwargs = mock_connection_cls.call_args
-        assert kwargs["controller"] is mock_controller
-        assert kwargs["handle"] == 42
-        assert kwargs["is_client"] is True
-
-        mock_connection_manager.add_connection.assert_awaited_once_with(connection=mock_webtransport_connection)
+        mock_controller_class.assert_called_once()
+        assert mock_controller_class.call_args.kwargs["connection_factory"] == client._create_connection
+        mock_controller.connect.assert_awaited_once_with(remote_address=("192.0.2.1", 443), server_name="example.com")
         mock_webtransport_connection.create_session.assert_awaited_once()
 
         _, session_kwargs = mock_webtransport_connection.create_session.call_args
@@ -841,31 +735,19 @@ class TestWebTransportClient:
         assert session_kwargs["path"] == "/"
         assert session_kwargs["wt_available_protocols"] is None
 
-        headers = session_kwargs["headers"]
-        if isinstance(headers, dict):
-            assert "user-agent" in headers
-        else:
-            assert any(k == "user-agent" for k, v in headers)
+        assert session_kwargs["headers"] == [("user-agent", f"PyWebTransport/{__version__}")]
 
         assert session is mock_session
-        stats = client._stats
-        assert stats.connections_successful == 1
-        assert stats.total_connect_time == pytest.approx(expected=1.23)
 
     @pytest.mark.asyncio
     async def test_connect_success_with_wt_available_protocols(
         self,
         client: WebTransportClient,
-        mock_controller_cls: Any,
-        mock_connection_cls: Any,
+        mock_controller_class: Any,
         mock_controller: Any,
-        mock_connection_manager: Any,
         mock_webtransport_connection: Any,
         mock_session: Any,
-        mocker: MockerFixture,
     ) -> None:
-        mocker.patch(target="time.perf_counter", side_effect=[2000.0, 2001.23])
-
         session = await client.connect(url="https://example.com", wt_available_protocols=["h3", "dummy"])
 
         assert session is mock_session
@@ -879,16 +761,12 @@ class TestWebTransportClient:
         self,
         client: WebTransportClient,
         mock_client_config: Any,
-        mock_controller_cls: Any,
-        mock_connection_cls: Any,
+        mock_controller_class: Any,
         mock_controller: Any,
-        mock_connection_manager: Any,
         mock_webtransport_connection: Any,
         mock_session: Any,
-        mocker: MockerFixture,
     ) -> None:
-        mock_client_config.wt_available_protocols = ["config-proto"]
-        mocker.patch(target="time.perf_counter", side_effect=[2000.0, 2001.23])
+        mock_client_config.wt_available_protocols = ("config-proto",)
 
         session = await client.connect(url="https://example.com")
 
@@ -897,14 +775,14 @@ class TestWebTransportClient:
 
         _, session_kwargs = mock_webtransport_connection.create_session.call_args
         assert session_kwargs["wt_available_protocols"] == ["config-proto"]
+        assert isinstance(session_kwargs["wt_available_protocols"], list)
 
     @pytest.mark.asyncio
-    async def test_connect_ua_from_config(
+    async def test_connect_user_agent_from_config(
         self,
         client: WebTransportClient,
         mock_client_config: Any,
-        mock_controller_cls: Any,
-        mock_connection_cls: Any,
+        mock_controller_class: Any,
         mock_webtransport_connection: Any,
     ) -> None:
         mock_client_config.user_agent = "CustomClient/1.2.3"
@@ -914,75 +792,28 @@ class TestWebTransportClient:
         mock_webtransport_connection.create_session.assert_awaited_once()
         passed_headers = mock_webtransport_connection.create_session.call_args.kwargs["headers"]
 
-        if isinstance(passed_headers, dict):
-            assert passed_headers["user-agent"] == "CustomClient/1.2.3"
-        else:
-            ua_header = next((v for k, v in passed_headers if k == "user-agent"), None)
-            assert ua_header == "CustomClient/1.2.3"
+        assert passed_headers == [("user-agent", "CustomClient/1.2.3")]
 
     @pytest.mark.asyncio
-    async def test_connect_ua_injection_dict_mode(
+    async def test_connect_user_agent_injection_dict_mode(
         self,
         client: WebTransportClient,
-        mock_controller_cls: Any,
-        mock_connection_cls: Any,
+        mock_controller_class: Any,
         mock_client_config: Any,
         mock_webtransport_connection: Any,
         mocker: MockerFixture,
     ) -> None:
-        mocker.patch(target="pywebtransport.client._normalize_headers", return_value={"host": "example.com"})
+        mocker.patch(
+            target="pywebtransport.client._normalize_headers",
+            return_value={"host": "example.com"},
+        )
 
         await client.connect(url="https://example.com")
 
         mock_webtransport_connection.create_session.assert_awaited_once()
         passed_headers = mock_webtransport_connection.create_session.call_args.kwargs["headers"]
 
-        assert isinstance(passed_headers, dict)
-        assert "user-agent" in passed_headers
-        assert "PyWebTransport" in passed_headers["user-agent"]
-
-    @pytest.mark.asyncio
-    async def test_connect_waits_for_events_if_not_connected(
-        self,
-        client: WebTransportClient,
-        mock_webtransport_connection: Any,
-        mock_controller_cls: Any,
-        mock_connection_cls: Any,
-    ) -> None:
-        mock_webtransport_connection.state = ConnectionState.CONNECTING
-
-        async def simulate_connect(*args: Any, **kwargs: Any) -> None:
-            mock_webtransport_connection.state = ConnectionState.CONNECTED
-
-        mock_webtransport_connection.events.wait_for.side_effect = simulate_connect
-
-        await client.connect(url="https://example.com")
-
-        mock_webtransport_connection.events.wait_for.assert_awaited_once()
-        call_args = mock_webtransport_connection.events.wait_for.call_args[1]
-
-        assert EventType.CONNECTION_ESTABLISHED in call_args["event_type"]
-        assert EventType.CONNECTION_CLOSED in call_args["event_type"]
-
-    @pytest.mark.asyncio
-    async def test_connect_waits_for_events_raises_exception(
-        self,
-        client: WebTransportClient,
-        mock_controller_cls: Any,
-        mock_connection_cls: Any,
-        mock_controller: Any,
-        mock_connection_manager: Any,
-        mock_conn_factory: Callable[[], Any],
-    ) -> None:
-        conn = mock_conn_factory()
-        conn.events.wait_for.side_effect = asyncio.TimeoutError("Wait timeout")
-        mock_connection_cls.return_value = conn
-
-        with pytest.raises(expected_exception=ClientError, match="wt_connection open failed actual=example.com"):
-            await client.connect(url="https://example.com")
-
-        await asyncio.sleep(delay=0.01)
-        conn.close.assert_awaited_once()
+        assert passed_headers == {"host": "example.com", "user-agent": f"PyWebTransport/{__version__}"}
 
     @pytest.mark.asyncio
     async def test_connect_when_closed(self, client: WebTransportClient) -> None:
@@ -995,30 +826,24 @@ class TestWebTransportClient:
     async def test_connect_with_explicit_user_agent_header(
         self,
         client: WebTransportClient,
-        mock_controller_cls: Any,
-        mock_connection_cls: Any,
+        mock_controller_class: Any,
         mock_client_config: Any,
         mock_webtransport_connection: Any,
     ) -> None:
-        custom_ua = "ExplicitUA/1.0"
+        custom_user_agent = "ExplicitUA/1.0"
 
-        await client.connect(url="https://example.com", headers={"user-agent": custom_ua})
+        await client.connect(url="https://example.com", headers={"user-agent": custom_user_agent})
 
         mock_webtransport_connection.create_session.assert_awaited_once()
         passed_headers = mock_webtransport_connection.create_session.call_args.kwargs["headers"]
 
-        if isinstance(passed_headers, dict):
-            assert passed_headers["user-agent"] == custom_ua
-        else:
-            ua_values = [v for k, v in passed_headers if k == "user-agent"]
-            assert custom_ua in ua_values
+        assert passed_headers == [("user-agent", custom_user_agent)]
 
     @pytest.mark.asyncio
     async def test_connect_with_headers_merging(
         self,
         client: WebTransportClient,
-        mock_controller_cls: Any,
-        mock_connection_cls: Any,
+        mock_controller_class: Any,
         mock_client_config: Any,
         mock_webtransport_connection: Any,
     ) -> None:
@@ -1030,58 +855,79 @@ class TestWebTransportClient:
         mock_webtransport_connection.create_session.assert_awaited_once()
         passed_headers = mock_webtransport_connection.create_session.call_args.kwargs["headers"]
 
-        if isinstance(passed_headers, dict):
-            assert passed_headers["global"] == "1"
-            assert passed_headers["default"] == "2"
-            assert passed_headers["local"] == "3"
-        else:
-            header_dict = dict(passed_headers)
-            assert header_dict["global"] == "1"
-            assert header_dict["default"] == "2"
-            assert header_dict["local"] == "3"
+        assert passed_headers == [
+            ("global", "1"),
+            ("default", "2"),
+            ("local", "3"),
+            ("user-agent", f"PyWebTransport/{__version__}"),
+        ]
 
     @pytest.mark.asyncio
-    async def test_context_manager(self, client: WebTransportClient, mock_connection_manager: Any) -> None:
-        async with client:
-            mock_connection_manager.__aenter__.assert_awaited_once()
-
-        mock_connection_manager.shutdown.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_diagnostics(
-        self, client: WebTransportClient, mock_connection_manager: Any, mocker: MockerFixture
+    async def test_connect_with_headers_merging_real_config(
+        self,
+        mock_controller_class: Any,
+        mock_controller: Any,
+        mock_webtransport_connection: Any,
     ) -> None:
-        mock_conn = mocker.MagicMock()
-        mock_conn.state = ConnectionState.CONNECTED
-        mock_connection_manager.get_all_resources = mocker.AsyncMock(return_value=[mock_conn])
+        config = ClientConfig(headers={"global": "1"})
+        client = WebTransportClient(config=config)
 
-        diagnostics = await client.diagnostics()
+        await client.connect(url="https://example.com", headers={"local": "2"})
 
-        assert isinstance(diagnostics, ClientDiagnostics)
-        assert diagnostics.connection_states == {ConnectionState.CONNECTED: 1}
-        assert diagnostics.stats is client._stats
+        mock_webtransport_connection.create_session.assert_awaited_once()
+        passed_headers = mock_webtransport_connection.create_session.call_args.kwargs["headers"]
+
+        assert passed_headers == [("global", "1"), ("local", "2"), ("user-agent", f"PyWebTransport/{__version__}")]
+
+    @pytest.mark.asyncio
+    async def test_context_manager(self, client: WebTransportClient) -> None:
+        async with client as entered_client:
+            assert entered_client is client
+            assert not client.is_closed
+
+        assert client.is_closed
+
+    def test_create_connection_success(
+        self, client: WebTransportClient, mock_controller: Any, mock_connection_class: Any
+    ) -> None:
+        result = client._create_connection(mock_controller, 7)
+
+        assert result is mock_connection_class.return_value
+        mock_connection_class.assert_called_once_with(
+            handle=7, controller=mock_controller, config=client.config, is_client=True
+        )
 
     def test_initialization_custom_config(self, mocker: MockerFixture) -> None:
         mock_config = mocker.Mock(spec=ClientConfig)
-        mock_config.max_connections = 15
-        mock_config.connection_idle_timeout = 30.0
-        mock_config.max_event_listeners = 20
-        mock_config.event_history_capacity = 50
-        mock_config.event_queue_capacity = 50
-        mock_cm = mocker.patch(target="pywebtransport.client.ConnectionManager", autospec=True)
 
         client = WebTransportClient(config=mock_config)
 
         assert client.config is mock_config
         assert client._controller is None
-        mock_cm.assert_called_once_with(max_connections=15)
+        assert not client.is_closed
 
-    def test_initialization_default(self, mocker: MockerFixture) -> None:
-        mock_cm_constructor = mocker.patch(target="pywebtransport.client.ConnectionManager", autospec=True)
+    def test_initialization_default(self) -> None:
+        client = WebTransportClient()
 
-        WebTransportClient()
+        assert isinstance(client.config, ClientConfig)
+        assert client._controller is None
+        assert not client.is_closed
 
-        mock_cm_constructor.assert_called_once_with(max_connections=100)
+    def test_local_addresses_empty(self, client: WebTransportClient, mock_controller: Any) -> None:
+        client._controller = mock_controller
+        mock_controller.get_local_addresses.return_value = []
+
+        assert client.local_addresses == []
+
+    def test_local_addresses_no_controller(self, client: WebTransportClient) -> None:
+        client._controller = None
+
+        assert client.local_addresses == []
+
+    def test_local_addresses_with_controller(self, client: WebTransportClient, mock_controller: Any) -> None:
+        client._controller = mock_controller
+
+        assert client.local_addresses == [("192.0.2.1", 0)]
 
     @pytest.mark.asyncio
     async def test_race_addresses_controller_not_initialized(
@@ -1089,13 +935,13 @@ class TestWebTransportClient:
     ) -> None:
         client._controller = None
 
-        with pytest.raises(expected_exception=ConnectionError) as exc_info:
+        with pytest.raises(expected_exception=ConnectionError) as exception_info:
             await client._race_addresses(
-                addresses=["127.0.0.1"], host="example.com", port=443, conn_config=mock_client_config
+                addresses=["127.0.0.1"], host="example.com", port=443, connection_config=mock_client_config
             )
 
-        assert isinstance(exc_info.value.__cause__, ClientError)
-        assert "app_client validate failed" in str(exc_info.value.__cause__)
+        assert isinstance(exception_info.value.__cause__, ClientError)
+        assert "app_client validate failed" in str(exception_info.value.__cause__)
 
     @pytest.mark.asyncio
     async def test_race_addresses_empty_list(
@@ -1105,19 +951,12 @@ class TestWebTransportClient:
 
         with pytest.raises(
             expected_exception=ConnectionError, match="wt_connection open failed actual=example.com"
-        ) as exc_info:
-            await client._race_addresses(addresses=[], host="example.com", port=443, conn_config=mock_client_config)
+        ) as exception_info:
+            await client._race_addresses(
+                addresses=[], host="example.com", port=443, connection_config=mock_client_config
+            )
 
-        assert exc_info.value.__cause__ is None
-
-    def test_str_representation(self, client: WebTransportClient, mock_connection_manager: Any) -> None:
-        mock_connection_manager.__len__.return_value = 5
-
-        assert str(client) == "WebTransportClient(status=open, connections=5)"
-
-        client._closed = True
-
-        assert str(client) == "WebTransportClient(status=closed, connections=5)"
+        assert exception_info.value.__cause__ is None
 
 
 def test_merge_headers_dict() -> None:
@@ -1174,28 +1013,33 @@ def test_normalize_headers_list() -> None:
 
 
 @pytest.mark.parametrize(
-    argnames="url, error_msg",
+    argnames="url, expected_message",
     argvalues=[
         ("ftp://example.com", "wt_url validate invalid actual=ftp expected=https"),
         ("http://example.com", "wt_url validate invalid actual=http expected=https"),
         ("https://", "wt_url validate invalid"),
     ],
 )
-def test_parse_webtransport_url_raises_error(url: str, error_msg: str) -> None:
-    with pytest.raises(expected_exception=ValueError, match=error_msg):
+def test_parse_webtransport_url_raises_error(url: str, expected_message: str) -> None:
+    with pytest.raises(expected_exception=ClientError, match=expected_message):
         _parse_webtransport_url(url=url)
+
+
+def test_parse_webtransport_url_raises_error_on_malformed_port() -> None:
+    with pytest.raises(expected_exception=ClientError, match="wt_url validate invalid actual="):
+        _parse_webtransport_url(url="https://example.com:notaport")
 
 
 @pytest.mark.parametrize(
     argnames="url, expected",
     argvalues=[
+        ("https://[::1]:9090/q?a=1#f", _ConnectionTarget(authority="[::1]:9090", host="::1", path="/q?a=1", port=9090)),
         ("https://example.com", _ConnectionTarget(authority="example.com", host="example.com", path="/", port=443)),
         ("https://example.com:0", _ConnectionTarget(authority="example.com:0", host="example.com", path="/", port=0)),
         (
             "https://localhost:8080/path",
             _ConnectionTarget(authority="localhost:8080", host="localhost", path="/path", port=8080),
         ),
-        ("https://[::1]:9090/q?a=1#f", _ConnectionTarget(authority="[::1]:9090", host="::1", path="/q?a=1", port=9090)),
         (
             "https://user:pass@test.com:4433",
             _ConnectionTarget(authority="test.com:4433", host="test.com", path="/", port=4433),

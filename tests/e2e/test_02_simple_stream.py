@@ -33,19 +33,19 @@ async def test_stream_creation() -> bool:
     try:
         async with WebTransportClient(config=config) as client:
             logger.info("Connecting to %s...", SERVER_URL)
-            session = await client.connect(url=SERVER_URL)
-            logger.info("Connected, session ID: %d", session.session_id)
+            async with await client.connect(url=SERVER_URL) as session:
+                logger.info("Connected, session ID: %d", session.session_id)
 
-            logger.info("Creating bidirectional stream...")
-            stream = await session.create_bidirectional_stream()
+                logger.info("Creating bidirectional stream...")
+                stream = await session.create_bidirectional_stream()
 
-            logger.info("Stream created successfully")
-            logger.info("   - Stream ID: %d", stream.stream_id)
+                logger.info("Stream created successfully")
+                logger.info("   - Stream ID: %d", stream.stream_id)
 
-            await stream.close()
-            logger.info("Stream closed")
-            logger.info("SUCCESS: Stream creation succeeded")
-            return True
+                await stream.close()
+                logger.info("Stream closed")
+                logger.info("SUCCESS: Stream creation succeeded")
+                return True
     except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Connection failed: %s", e)
         return False
@@ -66,27 +66,27 @@ async def test_simple_echo() -> bool:
 
     try:
         async with WebTransportClient(config=config) as client:
-            session = await client.connect(url=SERVER_URL)
-            stream = await session.create_bidirectional_stream()
-            logger.info("Stream %d created for echo test", stream.stream_id)
+            async with await client.connect(url=SERVER_URL) as session:
+                stream = await session.create_bidirectional_stream()
+                logger.info("Stream %d created for echo test", stream.stream_id)
 
-            test_message = b"Hello, WebTransport!"
-            logger.info("Sending: %r", test_message)
-            await stream.write(data=test_message, end_stream=True)
+                test_message = b"Hello, WebTransport!"
+                logger.info("Sending: %r", test_message)
+                await stream.write(data=test_message, end_stream=True)
 
-            logger.info("Waiting for echo response...")
-            response_data = await stream.read_all()
-            logger.info("Received response: %r", response_data)
+                logger.info("Waiting for echo response...")
+                response_data = await stream.read_all()
+                logger.info("Received response: %r", response_data)
 
-            expected_response = b"ECHO: " + test_message
-            if response_data == expected_response:
-                logger.info("SUCCESS: Echo response matches expected content")
-                return True
-            else:
-                logger.error("FAILURE: Echo response mismatch")
-                logger.error("   - Expected: %r", expected_response)
-                logger.error("   - Received: %r", response_data)
-                return False
+                expected_response = b"ECHO: " + test_message
+                if response_data == expected_response:
+                    logger.info("SUCCESS: Echo response matches expected content")
+                    return True
+                else:
+                    logger.error("FAILURE: Echo response mismatch")
+                    logger.error("   - Expected: %r", expected_response)
+                    logger.error("   - Received: %r", response_data)
+                    return False
     except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Test failed due to connection or timeout issue: %s", e)
         return False
@@ -104,31 +104,31 @@ async def test_multiple_messages() -> bool:
 
     try:
         async with WebTransportClient(config=config) as client:
-            session = await client.connect(url=SERVER_URL)
-            messages = [b"Message 1", b"Message 2", b"Message 3"]
-            success_count = 0
+            async with await client.connect(url=SERVER_URL) as session:
+                messages = [b"Message 1", b"Message 2", b"Message 3"]
+                success_count = 0
 
-            for i, message in enumerate(messages):
-                logger.info("Processing message %d/%d: %r", i + 1, len(messages), message)
-                stream = await session.create_bidirectional_stream()
-                try:
-                    await stream.write(data=message, end_stream=True)
-                    response_data = await stream.read_all()
-                    expected = b"ECHO: " + message
-                    if response_data == expected:
-                        logger.info("   - Echo for message %d successful", i + 1)
-                        success_count += 1
-                    else:
-                        logger.error("   - FAILURE: Echo for message %d mismatch", i + 1)
-                finally:
-                    await stream.close()
+                for i, message in enumerate(messages):
+                    logger.info("Processing message %d/%d: %r", i + 1, len(messages), message)
+                    stream = await session.create_bidirectional_stream()
+                    try:
+                        await stream.write(data=message, end_stream=True)
+                        response_data = await stream.read_all()
+                        expected = b"ECHO: " + message
+                        if response_data == expected:
+                            logger.info("   - Echo for message %d successful", i + 1)
+                            success_count += 1
+                        else:
+                            logger.error("   - FAILURE: Echo for message %d mismatch", i + 1)
+                    finally:
+                        await stream.close()
 
-            if success_count == len(messages):
-                logger.info("SUCCESS: All %d messages echoed correctly", len(messages))
-                return True
-            else:
-                logger.error("FAILURE: Only %d/%d messages were successful", success_count, len(messages))
-                return False
+                if success_count == len(messages):
+                    logger.info("SUCCESS: All %d messages echoed correctly", len(messages))
+                    return True
+                else:
+                    logger.error("FAILURE: Only %d/%d messages were successful", success_count, len(messages))
+                    return False
     except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Test failed due to connection or timeout issue: %s", e)
         return False

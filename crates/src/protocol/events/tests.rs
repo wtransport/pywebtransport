@@ -1,18 +1,19 @@
 //! Unit tests for the `crate::protocol::events` module.
 
 use std::borrow::Cow;
-use std::collections::VecDeque;
 
 use bytes::Bytes;
-use rstest::*;
+use rstest::{fixture, rstest};
 
 use super::*;
 use crate::common::types::{
     ConnectionState, ErrorCode, ErrorSource, EventType, Headers, RequestId, SessionId,
-    SessionState, StreamDirection, StreamId, StreamState,
+    SessionState, StreamDirection, StreamId, StreamReceiveState, StreamSendState,
 };
-use crate::protocol::H3Settings;
-use crate::protocol::{ConnectionDiagnostics, SessionDiagnostics, StreamDiagnostics};
+use crate::protocol::connection::ConnectionDiagnostics;
+use crate::protocol::h3::H3Settings;
+use crate::protocol::session::SessionDiagnostics;
+use crate::protocol::stream::StreamDiagnostics;
 
 #[fixture]
 fn fixture_bytes() -> Bytes {
@@ -58,8 +59,11 @@ fn fixture_stream_id() -> StreamId {
 }
 
 #[rstest]
-fn test_effect_create_h3_session_success(fixture_request_id: RequestId, fixture_headers: Headers) {
-    let effect = Effect::CreateH3Session {
+fn test_effect_create_h3_connect_stream_success(
+    fixture_request_id: RequestId,
+    fixture_headers: Headers,
+) {
+    let effect = Effect::CreateH3ConnectStream {
         request_id: fixture_request_id,
         authority: "example.com".to_owned(),
         path: "/".to_owned(),
@@ -67,7 +71,7 @@ fn test_effect_create_h3_session_success(fixture_request_id: RequestId, fixture_
     };
 
     let debug_output = format!("{effect:?}");
-    assert!(debug_output.contains("CreateH3Session"));
+    assert!(debug_output.contains("CreateH3ConnectStream"));
     assert!(debug_output.contains("example.com"));
 }
 
@@ -85,6 +89,7 @@ fn test_effect_emit_session_event_optional_fields_none_success(fixture_session_i
         max_data: None,
         max_streams: None,
         ready_at: None,
+        status_code: None,
         error_code: None,
         reason: None,
     };
@@ -95,6 +100,7 @@ fn test_effect_emit_session_event_optional_fields_none_success(fixture_session_i
         headers,
         wt_available_protocols,
         wt_protocol,
+        status_code,
         error_code,
         reason,
         ..
@@ -103,6 +109,7 @@ fn test_effect_emit_session_event_optional_fields_none_success(fixture_session_i
         assert!(headers.is_none());
         assert!(wt_available_protocols.is_none());
         assert!(wt_protocol.is_none());
+        assert!(status_code.is_none());
         assert!(error_code.is_none());
         assert!(reason.is_none());
     }
@@ -127,6 +134,7 @@ fn test_effect_emit_session_event_optional_fields_some_success(
         max_data: Some(4 * 1024 * 1024),
         max_streams: Some(10),
         ready_at: Some(1.5),
+        status_code: Some(403),
         error_code: Some(fixture_error_code),
         reason: Some(Cow::Borrowed("OK")),
     };
@@ -235,20 +243,20 @@ fn test_effect_send_h3_headers_lifecycle_success(
 
     if let (
         Effect::SendH3Headers {
-            stream_id: s1,
-            headers: h1,
-            end_stream: e1,
+            stream_id: original_stream_id,
+            headers: original_headers,
+            end_stream: original_end_stream,
         },
         Effect::SendH3Headers {
-            stream_id: s2,
-            headers: h2,
-            end_stream: e2,
+            stream_id: cloned_stream_id,
+            headers: cloned_headers,
+            end_stream: cloned_end_stream,
         },
     ) = (effect, cloned)
     {
-        assert_eq!(s1, s2);
-        assert_eq!(h1, h2);
-        assert_eq!(e1, e2);
+        assert_eq!(original_stream_id, cloned_stream_id);
+        assert_eq!(original_headers, cloned_headers);
+        assert_eq!(original_end_stream, cloned_end_stream);
     }
 }
 
@@ -289,17 +297,17 @@ fn test_protocol_event_clone_integrity_success(fixture_stream_id: StreamId, fixt
 
     if let (
         ProtocolEvent::H3DatagramReceived {
-            stream_id: id1,
-            data: d1,
+            stream_id: original_stream_id,
+            data: original_data,
         },
         ProtocolEvent::H3DatagramReceived {
-            stream_id: id2,
-            data: d2,
+            stream_id: cloned_stream_id,
+            data: cloned_data,
         },
     ) = (original, cloned)
     {
-        assert_eq!(id1, id2);
-        assert_eq!(d1, d2);
+        assert_eq!(original_stream_id, cloned_stream_id);
+        assert_eq!(original_data, cloned_data);
     }
 }
 
@@ -348,11 +356,11 @@ fn test_protocol_event_transport_connection_terminated_properties_success(
 
     if let ProtocolEvent::TransportConnectionTerminated {
         error_code,
-        reason: r,
+        reason: event_reason,
     } = event
     {
         assert_eq!(error_code, fixture_error_code);
-        assert_eq!(r, reason);
+        assert_eq!(event_reason, reason);
     }
 }
 
@@ -375,15 +383,18 @@ fn test_protocol_event_transport_stop_sending_received_success(
 fn test_protocol_event_user_accept_session_success(
     fixture_request_id: RequestId,
     fixture_session_id: SessionId,
+    fixture_headers: Headers,
 ) {
     let event = ProtocolEvent::UserAcceptSession {
         request_id: fixture_request_id,
         session_id: fixture_session_id,
+        headers: fixture_headers,
         wt_protocol: Some("webtransport".to_owned()),
     };
 
     let debug_output = format!("{event:?}");
     assert!(debug_output.contains("UserAcceptSession"));
+    assert!(debug_output.contains("user-agent"));
     assert!(debug_output.contains("webtransport"));
 }
 
@@ -445,6 +456,25 @@ fn test_protocol_event_user_export_keying_material_success(
 }
 
 #[rstest]
+fn test_protocol_event_user_reject_session_success(
+    fixture_request_id: RequestId,
+    fixture_session_id: SessionId,
+    fixture_headers: Headers,
+) {
+    let event = ProtocolEvent::UserRejectSession {
+        request_id: fixture_request_id,
+        session_id: fixture_session_id,
+        headers: fixture_headers,
+        status_code: 403,
+    };
+
+    let debug_output = format!("{event:?}");
+    assert!(debug_output.contains("UserRejectSession"));
+    assert!(debug_output.contains("user-agent"));
+    assert!(debug_output.contains("403"));
+}
+
+#[rstest]
 fn test_protocol_event_user_stop_sending_success(
     fixture_request_id: RequestId,
     fixture_stream_id: StreamId,
@@ -473,59 +503,45 @@ fn test_request_result_read_data_content_success(fixture_bytes: Bytes) {
 }
 
 #[rstest]
-#[case::conn_diag(RequestResult::ConnectionDiagnostics(Box::new(ConnectionDiagnostics {
-    connection_handle: 42,
-    is_client: true,
+#[case::connection_diagnostics(RequestResult::ConnectionDiagnostics(Box::new(ConnectionDiagnostics {
     close_code: None,
     close_reason: None,
     closed_at: None,
     connected_at: None,
-    handshake_complete: true,
+    connection_handle: 42,
+    handshake_completed: true,
+    is_client: true,
     local_goaway_sent: false,
     peer_goaway_received: false,
-    peer_settings_received: true,
-    state: ConnectionState::Connected,
-    early_event_count: 0,
     peer_initial_max_data: 0,
     peer_initial_max_streams_bidi: 0,
     peer_initial_max_streams_uni: 0,
     peer_max_datagram_frame_size: None,
-    pending_request_count: 0,
-    session_count: 0,
-    stream_count: 0,
+    peer_settings_received: true,
+    state: ConnectionState::Connected,
 })))]
-#[case::key_mat(RequestResult::KeyingMaterial(Bytes::from_static(b"key")))]
+#[case::connection_handle(RequestResult::ConnectionHandle(42))]
+#[case::datagram(RequestResult::Datagram(Bytes::from_static(b"datagram")))]
+#[case::keying_material(RequestResult::KeyingMaterial(Bytes::from_static(b"key")))]
 #[case::none(RequestResult::None)]
 #[case::read_data(RequestResult::ReadData(Bytes::from_static(b"data")))]
-#[case::sess_diag(RequestResult::SessionDiagnostics(Box::new(SessionDiagnostics {
-    headers: vec![],
-    is_client: false,
-    path: "/".to_owned(),
-    session_id: 1,
-    wt_protocol: None,
+#[case::session_diagnostics(RequestResult::SessionDiagnostics(Box::new(SessionDiagnostics {
     close_code: None,
     close_reason: None,
     closed_at: None,
     created_at: 0.0,
+    data_consumed: 0,
+    data_received: 0,
+    data_sent: 0,
     flow_control_negotiated: true,
-    ready_at: None,
-    state: SessionState::Connected,
-    active_streams: Default::default(),
-    blocked_streams: Default::default(),
-    pending_bidi_stream_requests: VecDeque::new(),
-    pending_uni_stream_requests: VecDeque::new(),
-    datagram_bytes_received: 0,
-    datagram_bytes_sent: 0,
-    datagrams_received: 0,
-    datagrams_sent: 0,
-    local_data_consumed: 0,
-    local_data_received: 0,
-    local_data_sent: 0,
+    headers: vec![],
+    is_client: false,
     local_max_data: 0,
     local_max_streams_bidi: 0,
     local_max_streams_uni: 0,
     local_streams_bidi_opened: 0,
     local_streams_uni_opened: 0,
+    path: "/".to_owned(),
     peer_max_data: 0,
     peer_max_streams_bidi: 0,
     peer_max_streams_uni: 0,
@@ -533,26 +549,27 @@ fn test_request_result_read_data_content_success(fixture_bytes: Bytes) {
     peer_streams_bidi_opened: 0,
     peer_streams_uni_closed: 0,
     peer_streams_uni_opened: 0,
+    ready_at: None,
+    session_id: 1,
+    state: SessionState::Connected,
+    wt_available_protocols: None,
+    wt_protocol: None,
 })))]
-#[case::session(RequestResult::SessionId(1))]
-#[case::stream_diag(RequestResult::StreamDiagnostics(Box::new(StreamDiagnostics {
+#[case::session_id(RequestResult::SessionId(1))]
+#[case::stream_diagnostics(RequestResult::StreamDiagnostics(Box::new(StreamDiagnostics {
+    created_at: 0.0,
     direction: StreamDirection::Bidirectional,
     is_peer_initiated: false,
+    receive_error_code: None,
+    receive_state: Some(StreamReceiveState::Receive),
+    send_error_code: None,
+    send_state: Some(StreamSendState::Ready),
     session_id: 1,
     stream_id: 1,
-    close_code: None,
-    close_reason: None,
-    closed_at: None,
-    created_at: 0.0,
-    state: StreamState::Open,
-    bytes_received: 0,
-    bytes_sent: 0,
-    read_buffer_size: 0,
-    write_buffer_size: 0,
 })))]
-#[case::stream(RequestResult::StreamId(2))]
+#[case::stream_id(RequestResult::StreamId(2))]
 fn test_request_result_variants_instantiation_success(#[case] result: RequestResult) {
-    let debug_str = format!("{result:?}");
+    let debug_output = format!("{result:?}");
 
-    assert!(!debug_str.is_empty());
+    assert!(!debug_output.is_empty());
 }

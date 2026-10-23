@@ -2,21 +2,21 @@
 
 use std::net::{Ipv4Addr, SocketAddr};
 
-use quinn_proto::ConnectionHandle;
+use quinn_proto::ConnectionHandle as QuicConnectionHandle;
 
 use super::*;
 use crate::common::types::{ErrorCode, RequestId};
 use crate::protocol::events::ProtocolEvent;
 
-fn create_dummy_socket_addr() -> SocketAddr {
+fn create_dummy_socket_address() -> SocketAddr {
     SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 443)
 }
 
 #[test]
-fn test_ipc_channels_creation_and_messaging() {
-    let mut channels = IpcChannels::new();
-    let command = RuntimeCommand::Shutdown;
-    let event = RuntimeEvent::ReactorShutDown;
+fn test_runtime_channels_creation_and_messaging() {
+    let mut channels = RuntimeChannels::new();
+    let command = RuntimeCommand::ShutdownReactor;
+    let event = RuntimeEvent::ReactorShutdown;
 
     let Ok(()) = channels.command_tx.try_send(command) else {
         assert_eq!("ok", "err");
@@ -35,56 +35,51 @@ fn test_ipc_channels_creation_and_messaging() {
         unreachable!()
     };
 
-    assert!(matches!(received_command, RuntimeCommand::Shutdown));
-    assert!(matches!(received_event, RuntimeEvent::ReactorShutDown));
+    assert!(matches!(received_command, RuntimeCommand::ShutdownReactor));
+    assert!(matches!(received_event, RuntimeEvent::ReactorShutdown));
 }
 
 #[test]
 fn test_runtime_command_variants_debug() {
-    let addr = create_dummy_socket_addr();
-    let cmd_create = RuntimeCommand::CreateConnection {
+    let remote_address = create_dummy_socket_address();
+    let command_create = RuntimeCommand::CreateConnection {
         request_id: RequestId::from(1u64),
-        remote_address: addr,
+        remote_address,
         server_name: "localhost".into(),
     };
-    let cmd_protocol = RuntimeCommand::Protocol {
-        handle: ConnectionHandle(0),
+    let command_protocol = RuntimeCommand::ProtocolEvent {
+        request_id: RequestId::from(2u64),
+        handle: QuicConnectionHandle(0),
         event: ProtocolEvent::InternalCleanupResources,
     };
-    let cmd_shutdown = RuntimeCommand::Shutdown;
+    let command_shutdown = RuntimeCommand::ShutdownReactor;
 
-    assert!(!format!("{cmd_create:?}").is_empty());
-    assert!(!format!("{cmd_protocol:?}").is_empty());
-    assert!(!format!("{cmd_shutdown:?}").is_empty());
+    assert!(!format!("{command_create:?}").is_empty());
+    assert!(!format!("{command_protocol:?}").is_empty());
+    assert!(!format!("{command_shutdown:?}").is_empty());
 }
 
 #[test]
 fn test_runtime_event_variants_debug() {
-    let addr = create_dummy_socket_addr();
-    let evt_completed = RuntimeEvent::CommandCompleted {
-        request_id: RequestId::from(1u64),
-        handle: ConnectionHandle(0),
-        remote_address: addr,
-    };
-    let evt_failed = RuntimeEvent::CommandFailed {
+    let remote_address = create_dummy_socket_address();
+    let event_failed = RuntimeEvent::CommandFailed {
         request_id: RequestId::from(2u64),
         error_code: Some(ErrorCode::from(0u64)),
         reason: "error".into(),
     };
-    let evt_effects = RuntimeEvent::ConnectionEffects {
-        handle: ConnectionHandle(0),
+    let event_effects = RuntimeEvent::ConnectionEffects {
+        handle: QuicConnectionHandle(0),
         effects: vec![],
     };
-    let evt_spawned = RuntimeEvent::ConnectionSpawned {
-        handle: ConnectionHandle(1),
-        remote_address: addr,
+    let event_spawned = RuntimeEvent::ConnectionSpawned {
+        handle: QuicConnectionHandle(1),
+        remote_address,
         effects: vec![],
     };
-    let evt_shutdown = RuntimeEvent::ReactorShutDown;
+    let event_shutdown = RuntimeEvent::ReactorShutdown;
 
-    assert!(!format!("{evt_completed:?}").is_empty());
-    assert!(!format!("{evt_failed:?}").is_empty());
-    assert!(!format!("{evt_effects:?}").is_empty());
-    assert!(!format!("{evt_spawned:?}").is_empty());
-    assert!(!format!("{evt_shutdown:?}").is_empty());
+    assert!(!format!("{event_failed:?}").is_empty());
+    assert!(!format!("{event_effects:?}").is_empty());
+    assert!(!format!("{event_spawned:?}").is_empty());
+    assert!(!format!("{event_shutdown:?}").is_empty());
 }

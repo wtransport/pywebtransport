@@ -1,21 +1,22 @@
-//! Tracing initialization and subscriber setup for the FFI boundary.
+//! FFI bindings for tracing initialization.
+
+use std::io;
 
 use pyo3::prelude::*;
+use tracing_subscriber::EnvFilter;
 
-// Registers the tracing FFI functions into the Python module.
-pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(init_tracing, m)?)?;
+pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_function(wrap_pyfunction!(init_tracing, module)?)?;
 
     Ok(())
 }
 
-// Initializes the global tracing subscriber driven by the RUST_LOG environment variable.
 #[pyfunction]
 #[pyo3(signature = ())]
 fn init_tracing() {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_writer(std::io::stderr)
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_writer(io::stderr)
         .try_init()
         .ok();
 }

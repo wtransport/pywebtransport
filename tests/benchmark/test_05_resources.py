@@ -9,7 +9,6 @@ from typing import Final
 
 import psutil
 import pytest
-import uvloop
 from pytest_benchmark.fixture import BenchmarkFixture
 
 from pywebtransport import ClientConfig, WebTransportClient, WebTransportSession
@@ -18,7 +17,7 @@ SERVER_URL_BASE: Final[str] = "https://127.0.0.1:4433"
 CONNECTION_COUNT: Final[int] = 3000
 STABILIZATION_SECONDS: Final[float] = 5.0
 
-logging.basicConfig(level=logging.CRITICAL)
+logging.basicConfig(level=logging.CRITICAL, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 
 @pytest.fixture(scope="module")
@@ -60,17 +59,16 @@ class TestResources:
 
                     finally:
                         if sessions:
-                            close_sem = asyncio.Semaphore(value=100)
+                            close_semaphore = asyncio.Semaphore(value=100)
 
-                            async def close_one(s: WebTransportSession) -> None:
-                                async with close_sem:
-                                    if not s.is_closed:
-                                        await s.close()
+                            async def close_one(session: WebTransportSession) -> None:
+                                async with close_semaphore:
+                                    await session.close()
 
-                            tasks = [asyncio.create_task(coro=close_one(s)) for s in sessions]
+                            tasks = [asyncio.create_task(coro=close_one(session)) for session in sessions]
                             await asyncio.gather(*tasks)
 
-            return uvloop.run(run_full_cycle())
+            return asyncio.run(run_full_cycle())
 
         memory_increase = benchmark.pedantic(
             target=run_measurement, iterations=1, rounds=1

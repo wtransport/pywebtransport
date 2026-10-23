@@ -1,4 +1,4 @@
-//! Common shared components and definitions.
+//! Common module declarations.
 
 pub(crate) mod config;
 pub(crate) mod constants;

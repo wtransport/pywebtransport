@@ -1,4 +1,4 @@
-//! Single QUIC connection orchestrator bridging WebTransport engine and QUIC state machine.
+//! QUIC connection coordinator.
 
 use std::borrow::Cow;
 use std::collections::VecDeque;
@@ -6,81 +6,88 @@ use std::time::{Duration, Instant};
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use quinn_proto::{
-    Connection as QuinnConnection, ConnectionEvent, Dir as QuinnDir, EndpointEvent,
-    Event as QuinnEvent, ReadError, StreamEvent, StreamId as QuinnStreamId, Transmit, VarInt,
-    WriteError,
+    Connection as QuicConnection, ConnectionError as QuicConnectionError,
+    ConnectionEvent as QuicConnectionEvent, Dir as QuicDir, EndpointEvent as QuicEndpointEvent,
+    Event as QuicEvent, ReadError as QuicReadError, StreamEvent as QuicStreamEvent,
+    StreamId as QuicStreamId, Transmit as QuicTransmit, VarInt as QuicVarInt,
+    WriteError as QuicWriteError,
 };
 use rustc_hash::FxHashMap;
 use tracing::debug;
 
 use crate::common::constants::{
-    ERR_H3_INTERNAL_ERROR, ERR_H3_STREAM_CREATION_ERROR, ERR_LIB_INTERNAL_ERROR,
-    UDP_TRANSMIT_BATCH_CAPACITY,
+    ERR_LIB_CONNECTION_STATE_ERROR, ERR_LIB_INTERNAL_ERROR, UDP_TRANSMIT_BATCH_CAPACITY,
 };
-use crate::common::types::ErrorSource;
+use crate::common::types::{ErrorCode, ErrorSource};
 use crate::protocol::engine::WebTransportEngine;
 use crate::protocol::events::{Effect, ProtocolEvent, RequestResult};
 
-// Complete state machine for a single WebTransport connection.
 pub(super) struct TransportConnection {
+    connection: QuicConnection,
     early_event_ttl: Option<Duration>,
     engine: WebTransportEngine,
-    gc_interval: Option<Duration>,
     next_early_event_time: Option<Instant>,
-    next_gc_time: Option<Instant>,
-    pending_bidi_stream_requests: VecDeque<Effect>,
+    next_resource_cleanup_time: Option<Instant>,
     pending_effects: VecDeque<Effect>,
-    pending_session_requests: VecDeque<Effect>,
-    pending_uni_stream_requests: VecDeque<Effect>,
-    quic: QuinnConnection,
-    send_buffers: FxHashMap<QuinnStreamId, SendBuffer>,
+    pending_receives: FxHashMap<QuicStreamId, u64>,
+    resource_cleanup_interval: Option<Duration>,
+    send_buffers: FxHashMap<QuicStreamId, SendBuffer>,
 }
 
 impl TransportConnection {
-    // Initializes a new connection orchestrator with associated timers.
     pub(super) fn new(
-        quic: QuinnConnection,
+        connection: QuicConnection,
         engine: WebTransportEngine,
-        gc_interval: Option<Duration>,
+        resource_cleanup_interval: Option<Duration>,
         early_event_ttl: Option<Duration>,
         now_instant: Instant,
     ) -> Self {
         Self {
+            connection,
             early_event_ttl,
             engine,
-            gc_interval,
             next_early_event_time: early_event_ttl.map(|interval| now_instant + interval),
-            next_gc_time: gc_interval.map(|interval| now_instant + interval),
-            pending_bidi_stream_requests: VecDeque::new(),
+            next_resource_cleanup_time: resource_cleanup_interval
+                .map(|interval| now_instant + interval),
             pending_effects: VecDeque::new(),
-            pending_session_requests: VecDeque::new(),
-            pending_uni_stream_requests: VecDeque::new(),
-            quic,
+            pending_receives: FxHashMap::default(),
+            resource_cleanup_interval,
             send_buffers: FxHashMap::default(),
         }
     }
 
-    // Processes incoming network events from the UDP multiplexer.
-    pub(super) fn handle_connection_event(
+    pub(super) fn handle_protocol_event(
         &mut self,
-        event: ConnectionEvent,
+        event: ProtocolEvent,
         now: f64,
         now_instant: Instant,
     ) {
-        self.quic.handle_event(event);
+        self.dispatch_protocol_event(event, now, now_instant);
 
-        self.poll_quic_events(now, now_instant);
+        self.process_quic_events(now, now_instant);
     }
 
-    // Handles network and application timeouts.
+    pub(super) fn handle_quic_connection_event(
+        &mut self,
+        event: QuicConnectionEvent,
+        now: f64,
+        now_instant: Instant,
+    ) {
+        self.connection.handle_event(event);
+
+        self.process_quic_events(now, now_instant);
+    }
+
     pub(super) fn handle_timeout(&mut self, now: f64, now_instant: Instant) {
         if self
-            .next_gc_time
-            .is_some_and(|gc_time| now_instant >= gc_time)
+            .next_resource_cleanup_time
+            .is_some_and(|resource_cleanup_time| now_instant >= resource_cleanup_time)
         {
             self.dispatch_protocol_event(ProtocolEvent::InternalCleanupResources, now, now_instant);
 
-            self.next_gc_time = self.gc_interval.map(|interval| now_instant + interval);
+            self.next_resource_cleanup_time = self
+                .resource_cleanup_interval
+                .map(|interval| now_instant + interval);
         }
 
         if self
@@ -97,59 +104,45 @@ impl TransportConnection {
                 self.early_event_ttl.map(|interval| now_instant + interval);
         }
 
-        self.quic.handle_timeout(now_instant);
+        self.connection.handle_timeout(now_instant);
 
-        self.poll_quic_events(now, now_instant);
+        self.process_quic_events(now, now_instant);
     }
 
-    // Processes user-layer actions pushed from the application.
-    pub(super) fn handle_user_event(
-        &mut self,
-        event: ProtocolEvent,
-        now: f64,
-        now_instant: Instant,
-    ) {
-        self.dispatch_protocol_event(event, now, now_instant);
-
-        self.poll_quic_events(now, now_instant);
-    }
-
-    // Retrieves control-plane events destined for the endpoint multiplexer.
-    pub(super) fn poll_endpoint_events(&mut self) -> Option<EndpointEvent> {
-        self.quic.poll_endpoint_events()
-    }
-
-    // Retrieves pending application-level effects.
-    pub(super) fn poll_events(&mut self) -> Option<Effect> {
+    pub(super) fn poll_effects(&mut self) -> Option<Effect> {
         self.pending_effects.pop_front()
     }
 
-    // Retrieves network transmission datagrams using the provided workspace buffer.
-    pub(super) fn poll_transmit(
-        &mut self,
-        workspace: &mut Vec<u8>,
-        now_instant: Instant,
-    ) -> Option<Transmit> {
-        self.quic
-            .poll_transmit(now_instant, UDP_TRANSMIT_BATCH_CAPACITY, workspace)
+    pub(super) fn poll_endpoint_events(&mut self) -> Option<QuicEndpointEvent> {
+        self.connection.poll_endpoint_events()
     }
 
-    // Polls the earliest timeout across network and application layers.
-    pub(super) fn timeout(&mut self) -> Option<Instant> {
-        let mut earliest = self.quic.poll_timeout();
+    pub(super) fn poll_timeout(&mut self) -> Option<Instant> {
+        let mut earliest = self.connection.poll_timeout();
 
-        if let Some(gc_time) = self.next_gc_time {
-            earliest = Some(earliest.map_or(gc_time, |t| t.min(gc_time)));
+        if let Some(resource_cleanup_time) = self.next_resource_cleanup_time {
+            earliest = Some(earliest.map_or(resource_cleanup_time, |earliest_timeout| {
+                earliest_timeout.min(resource_cleanup_time)
+            }));
         }
 
         if let Some(ttl_time) = self.next_early_event_time {
-            earliest = Some(earliest.map_or(ttl_time, |t| t.min(ttl_time)));
+            earliest =
+                Some(earliest.map_or(ttl_time, |earliest_timeout| earliest_timeout.min(ttl_time)));
         }
 
         earliest
     }
 
-    // Evaluates protocol effects through a flattened trampoline loop.
+    pub(super) fn poll_transmit(
+        &mut self,
+        workspace: &mut Vec<u8>,
+        now_instant: Instant,
+    ) -> Option<QuicTransmit> {
+        self.connection
+            .poll_transmit(now_instant, UDP_TRANSMIT_BATCH_CAPACITY, workspace)
+    }
+
     fn dispatch_effects(&mut self, initial_effects: Vec<Effect>, now: f64, now_instant: Instant) {
         let mut event_queue = VecDeque::new();
         self.process_effects(initial_effects, &mut event_queue, now_instant);
@@ -160,232 +153,124 @@ impl TransportConnection {
         }
     }
 
-    // Internal dispatcher for protocol events.
     fn dispatch_protocol_event(&mut self, event: ProtocolEvent, now: f64, now_instant: Instant) {
         let effects = self.engine.handle_event(event, now);
 
         self.dispatch_effects(effects, now, now_instant);
     }
 
-    // Flushes pending bytes for a flow-controlled QUIC stream.
-    fn flush_stream(&mut self, stream_id: QuinnStreamId) {
-        let mut should_remove = false;
+    fn flush_stream(&mut self, stream_id: QuicStreamId) -> Option<ProtocolEvent> {
+        let buffer = self.send_buffers.get_mut(&stream_id)?;
+        let mut stream = self.connection.send_stream(stream_id);
 
-        if let Some(buf) = self.send_buffers.get_mut(&stream_id) {
-            let mut stream = self.quic.send_stream(stream_id);
-
-            while let Some(chunk) = buf.chunks.front() {
-                match stream.write(chunk) {
-                    Ok(written) => {
-                        if written == chunk.len() {
-                            buf.chunks.pop_front();
-                        } else {
-                            let Some(mut remaining) = buf.chunks.pop_front() else {
-                                break;
-                            };
-
-                            remaining.advance(written);
-                            buf.chunks.push_front(remaining);
-                        }
-                    }
-                    Err(WriteError::Blocked) => {
-                        break;
-                    }
-                    Err(WriteError::Stopped(_) | WriteError::ClosedStream) => {
-                        buf.chunks.clear();
-                        should_remove = true;
-
-                        break;
-                    }
+        while let Some(chunk) = buffer.chunks.front_mut() {
+            match stream.write(chunk) {
+                Ok(written) if written == chunk.len() => {
+                    buffer.chunks.pop_front();
                 }
-            }
-
-            if buf.chunks.is_empty() && buf.finished {
-                stream.finish().ok();
-                should_remove = true;
-            }
-        }
-
-        if should_remove {
-            self.send_buffers.remove(&stream_id);
-        }
-    }
-
-    // Extracts and dispatches QUIC network events.
-    fn poll_quic_events(&mut self, now: f64, now_instant: Instant) {
-        while let Some(event) = self.quic.poll() {
-            match event {
-                QuinnEvent::Connected => {
-                    self.dispatch_protocol_event(
-                        ProtocolEvent::TransportHandshakeCompleted,
-                        now,
-                        now_instant,
-                    );
-
-                    if let Some(max_size) = self.quic.datagrams().max_size() {
-                        self.dispatch_protocol_event(
-                            ProtocolEvent::TransportQuicParametersReceived {
-                                peer_max_datagram_frame_size: max_size as u64,
-                            },
-                            now,
-                            now_instant,
-                        );
-                    }
-
-                    if let (Some(c_id), Some(e_id), Some(d_id)) = (
-                        self.quic.streams().open(QuinnDir::Uni),
-                        self.quic.streams().open(QuinnDir::Uni),
-                        self.quic.streams().open(QuinnDir::Uni),
-                    ) {
-                        match self.engine.initialize_h3_transport(
-                            u64::from(c_id),
-                            u64::from(e_id),
-                            u64::from(d_id),
-                        ) {
-                            Ok(effects) => self.dispatch_effects(effects, now, now_instant),
-                            Err(e) => {
-                                debug!("h3_stream open failed err={e:?}");
-                                self.quic.close(
-                                    now_instant,
-                                    VarInt::try_from(ERR_H3_INTERNAL_ERROR)
-                                        .unwrap_or(VarInt::from(0u32)),
-                                    Bytes::from_static(b"h3_stream open failed"),
-                                );
-                            }
-                        }
-                    } else {
-                        debug!("quic_stream create failed");
-                        self.quic.close(
-                            now_instant,
-                            VarInt::try_from(ERR_H3_STREAM_CREATION_ERROR)
-                                .unwrap_or(VarInt::from(0u32)),
-                            Bytes::from_static(b"quic_stream create failed"),
-                        );
-                    }
+                Ok(written) => {
+                    chunk.advance(written);
                 }
-                QuinnEvent::ConnectionLost { reason } => {
-                    self.dispatch_protocol_event(
-                        ProtocolEvent::TransportConnectionTerminated {
-                            error_code: 0,
-                            reason: reason.to_string().into(),
-                        },
-                        now,
-                        now_instant,
-                    );
+                Err(QuicWriteError::Blocked) => {
+                    return None;
                 }
-                QuinnEvent::DatagramReceived => {
-                    self.read_datagrams(now, now_instant);
-                }
-                QuinnEvent::Stream(StreamEvent::Available { dir }) => {
-                    let mut effects_to_retry = Vec::new();
-
-                    if dir == QuinnDir::Bi {
-                        while let Some(effect) = self.pending_session_requests.pop_front() {
-                            effects_to_retry.push(effect);
-                        }
-                        while let Some(effect) = self.pending_bidi_stream_requests.pop_front() {
-                            effects_to_retry.push(effect);
-                        }
-                    } else {
-                        while let Some(effect) = self.pending_uni_stream_requests.pop_front() {
-                            effects_to_retry.push(effect);
-                        }
-                    }
-
-                    if !effects_to_retry.is_empty() {
-                        self.dispatch_effects(effects_to_retry, now, now_instant);
-                    }
-                }
-                QuinnEvent::Stream(StreamEvent::Opened { dir }) => {
-                    while let Some(stream_id) = self.quic.streams().accept(dir) {
-                        self.read_stream_data(stream_id, now, now_instant);
-                    }
-                }
-                QuinnEvent::Stream(StreamEvent::Readable { id: stream_id }) => {
-                    self.read_stream_data(stream_id, now, now_instant);
-                }
-                QuinnEvent::Stream(StreamEvent::Stopped {
-                    id: stream_id,
-                    error_code,
-                }) => {
+                Err(QuicWriteError::Stopped(_) | QuicWriteError::ClosedStream) => {
                     self.send_buffers.remove(&stream_id);
-                    self.dispatch_protocol_event(
-                        ProtocolEvent::TransportStopSendingReceived {
-                            stream_id: u64::from(stream_id),
-                            error_code: error_code.into_inner(),
-                        },
-                        now,
-                        now_instant,
-                    );
-
-                    let effects = self.engine.cleanup_stream(u64::from(stream_id));
-                    self.dispatch_effects(effects, now, now_instant);
+                    return None;
                 }
-                QuinnEvent::Stream(StreamEvent::Writable { id: stream_id }) => {
-                    self.flush_stream(stream_id);
-                }
-                _ => {}
             }
         }
+
+        if buffer.finished {
+            stream.finish().ok();
+        }
+        self.send_buffers.remove(&stream_id);
+
+        Some(ProtocolEvent::InternalCompleteQuicData {
+            stream_id: u64::from(stream_id),
+        })
     }
 
-    // Executes internal operations or forwards application effects.
     fn process_effects(
         &mut self,
         effects: Vec<Effect>,
-        local_event_queue: &mut VecDeque<ProtocolEvent>,
+        event_queue: &mut VecDeque<ProtocolEvent>,
         now_instant: Instant,
     ) {
         for effect in effects {
             match effect {
                 Effect::CloseQuicConnection { error_code, reason } => {
-                    let reason = match reason {
-                        Some(Cow::Borrowed(s)) => Bytes::from_static(s.as_bytes()),
-                        Some(Cow::Owned(s)) => Bytes::from(s),
-                        None => Bytes::new(),
-                    };
-                    let error_code = VarInt::try_from(error_code).unwrap_or(VarInt::from(0u32));
+                    if self.connection.is_closed() {
+                        continue;
+                    }
 
-                    self.quic.close(now_instant, error_code, reason);
+                    self.connection.close(
+                        now_instant,
+                        QuicVarInt::try_from(error_code).unwrap_or(QuicVarInt::from(0u32)),
+                        match &reason {
+                            Some(Cow::Borrowed(string)) => Bytes::from_static(string.as_bytes()),
+                            Some(Cow::Owned(string)) => Bytes::from(string.clone()),
+                            None => Bytes::new(),
+                        },
+                    );
+
+                    event_queue.push_back(ProtocolEvent::TransportConnectionTerminated {
+                        error_code,
+                        reason: reason.unwrap_or_default(),
+                    });
                 }
-                Effect::CreateH3Session {
+                Effect::CreateH3ConnectStream {
                     request_id,
                     authority,
                     path,
                     headers,
                 } => {
-                    if let Some(q_id) = self.quic.streams().open(QuinnDir::Bi) {
-                        let stream_id = u64::from(q_id);
+                    if let Some(quic_stream_id) = self.connection.streams().open(QuicDir::Bi) {
+                        let stream_id = u64::from(quic_stream_id);
 
                         match self
                             .engine
-                            .encode_session_request(stream_id, authority, path, &headers)
+                            .encode_connect_request(stream_id, authority, path, &headers)
                         {
-                            Ok(h3_effects) => {
-                                self.process_effects(h3_effects, local_event_queue, now_instant);
+                            Ok(effects) => {
+                                self.process_effects(effects, event_queue, now_instant);
 
-                                local_event_queue.push_back(ProtocolEvent::InternalBindH3Session {
+                                event_queue.push_back(ProtocolEvent::InternalBindH3ConnectStream {
                                     request_id,
                                     stream_id,
                                 });
                             }
                             Err(e) => {
                                 debug!("wt_session encode failed err={e:?}");
-                                local_event_queue.push_back(ProtocolEvent::InternalFailH3Session {
+                                event_queue.push_back(ProtocolEvent::InternalFailH3ConnectStream {
                                     request_id,
                                     error_code: None,
-                                    reason: e.to_string().into(),
+                                    reason: "wt_session encode failed".into(),
                                 });
                             }
                         }
                     } else {
-                        self.pending_session_requests
-                            .push_back(Effect::CreateH3Session {
-                                request_id,
-                                authority,
-                                path,
-                                headers,
-                            });
+                        event_queue
+                            .push_back(ProtocolEvent::InternalDeferH3ConnectStream { request_id });
+                    }
+                }
+                Effect::CreateH3LocalStreams => {
+                    if let (
+                        Some(control_stream_id),
+                        Some(encoder_stream_id),
+                        Some(decoder_stream_id),
+                    ) = (
+                        self.connection.streams().open(QuicDir::Uni),
+                        self.connection.streams().open(QuicDir::Uni),
+                        self.connection.streams().open(QuicDir::Uni),
+                    ) {
+                        event_queue.push_back(ProtocolEvent::InternalBindH3LocalStreams {
+                            control_stream_id: u64::from(control_stream_id),
+                            encoder_stream_id: u64::from(encoder_stream_id),
+                            decoder_stream_id: u64::from(decoder_stream_id),
+                        });
+                    } else {
+                        event_queue.push_back(ProtocolEvent::InternalFailH3LocalStreams);
                     }
                 }
                 Effect::CreateQuicStream {
@@ -393,39 +278,34 @@ impl TransportConnection {
                     session_id,
                     is_unidirectional,
                 } => {
-                    let dir = if is_unidirectional {
-                        QuinnDir::Uni
+                    let direction = if is_unidirectional {
+                        QuicDir::Uni
                     } else {
-                        QuinnDir::Bi
+                        QuicDir::Bi
                     };
 
-                    if let Some(q_id) = self.quic.streams().open(dir) {
-                        let stream_id = u64::from(q_id);
-                        let h3_effects = self.engine.encode_stream_creation(
+                    if let Some(quic_stream_id) = self.connection.streams().open(direction) {
+                        let stream_id = u64::from(quic_stream_id);
+                        let effects = WebTransportEngine::encode_stream_header(
                             stream_id,
                             session_id,
                             is_unidirectional,
                         );
 
-                        self.process_effects(h3_effects, local_event_queue, now_instant);
+                        self.process_effects(effects, event_queue, now_instant);
 
-                        local_event_queue.push_back(ProtocolEvent::InternalBindQuicStream {
+                        event_queue.push_back(ProtocolEvent::InternalBindQuicStream {
                             request_id,
                             stream_id,
                             session_id,
                             is_unidirectional,
                         });
                     } else {
-                        let pending_effect = Effect::CreateQuicStream {
+                        event_queue.push_back(ProtocolEvent::InternalDeferQuicStream {
                             request_id,
                             session_id,
                             is_unidirectional,
-                        };
-                        if is_unidirectional {
-                            self.pending_uni_stream_requests.push_back(pending_effect);
-                        } else {
-                            self.pending_bidi_stream_requests.push_back(pending_effect);
-                        }
+                        });
                     }
                 }
                 Effect::ExportTlsKeyingMaterial {
@@ -434,16 +314,16 @@ impl TransportConnection {
                     context,
                     length,
                 } => {
-                    let mut buf = vec![0u8; length as usize];
-                    match self.quic.crypto_session().export_keying_material(
-                        &mut buf,
+                    let mut buffer = vec![0u8; length as usize];
+                    match self.connection.crypto_session().export_keying_material(
+                        &mut buffer,
                         label.as_bytes(),
                         &context,
                     ) {
                         Ok(()) => {
                             self.pending_effects.push_back(Effect::NotifyRequestDone {
                                 request_id,
-                                result: RequestResult::KeyingMaterial(Bytes::from(buf)),
+                                result: RequestResult::KeyingMaterial(Bytes::from(buffer)),
                             });
                         }
                         Err(e) => {
@@ -457,39 +337,52 @@ impl TransportConnection {
                         }
                     }
                 }
-                Effect::ProcessProtocolEvent { event } => {
-                    local_event_queue.push_back(*event);
+                Effect::ReceiveQuicData {
+                    stream_id,
+                    max_size,
+                } => {
+                    let Ok(varint) = QuicVarInt::try_from(stream_id) else {
+                        continue;
+                    };
+
+                    let quic_stream_id = QuicStreamId::from(varint);
+                    self.pending_receives.insert(quic_stream_id, max_size);
+
+                    if let Some(event) = self.recv_stream_data(quic_stream_id) {
+                        event_queue.push_back(event);
+                    }
                 }
                 Effect::ResetQuicStream {
                     stream_id,
                     error_code,
                 } => {
-                    let Ok(var_int) = VarInt::try_from(stream_id) else {
+                    let Ok(varint) = QuicVarInt::try_from(stream_id) else {
                         continue;
                     };
 
-                    let q_id = QuinnStreamId::from(var_int);
-                    let code = VarInt::try_from(error_code).unwrap_or(VarInt::from(0u32));
-                    let mut stream = self.quic.send_stream(q_id);
+                    let quic_stream_id = QuicStreamId::from(varint);
+                    let error_code =
+                        QuicVarInt::try_from(error_code).unwrap_or(QuicVarInt::from(0u32));
+                    let mut stream = self.connection.send_stream(quic_stream_id);
 
-                    stream.reset(code).ok();
+                    stream.reset(error_code).ok();
 
-                    self.send_buffers.remove(&q_id);
+                    self.send_buffers.remove(&quic_stream_id);
                 }
                 Effect::SendH3Capsule {
                     stream_id,
                     capsule_type,
-                    capsule_data,
+                    capsule_value,
                     end_stream,
                 } => {
                     match WebTransportEngine::encode_capsule(
                         stream_id,
                         capsule_type,
-                        capsule_data,
+                        capsule_value,
                         end_stream,
                     ) {
-                        Ok(h3_effects) => {
-                            self.process_effects(h3_effects, local_event_queue, now_instant);
+                        Ok(effects) => {
+                            self.process_effects(effects, event_queue, now_instant);
                         }
                         Err(e) => {
                             debug!("wt_capsule encode failed err={e:?}");
@@ -498,26 +391,26 @@ impl TransportConnection {
                 }
                 Effect::SendH3Datagram { stream_id, data } => {
                     match WebTransportEngine::encode_datagram(stream_id, data) {
-                        Ok(h3_effects) => {
-                            self.process_effects(h3_effects, local_event_queue, now_instant);
+                        Ok(effects) => {
+                            self.process_effects(effects, event_queue, now_instant);
                         }
                         Err(e) => {
                             debug!("wt_datagram encode failed err={e:?}");
                         }
                     }
                 }
-                Effect::SendH3Goaway => {
-                    let h3_effects = self.engine.encode_goaway();
+                Effect::SendH3Goaway { identifier } => {
+                    let effects = self.engine.encode_goaway(identifier);
 
-                    self.process_effects(h3_effects, local_event_queue, now_instant);
+                    self.process_effects(effects, event_queue, now_instant);
                 }
                 Effect::SendH3Headers {
                     stream_id,
                     headers,
                     end_stream,
                 } => match self.engine.encode_headers(stream_id, &headers, end_stream) {
-                    Ok(h3_effects) => {
-                        self.process_effects(h3_effects, local_event_queue, now_instant);
+                    Ok(effects) => {
+                        self.process_effects(effects, event_queue, now_instant);
                     }
                     Err(e) => {
                         debug!("h3_headers encode failed err={e:?}");
@@ -528,28 +421,30 @@ impl TransportConnection {
                     data,
                     end_stream,
                 } => {
-                    let Ok(var_int) = VarInt::try_from(stream_id) else {
+                    let Ok(varint) = QuicVarInt::try_from(stream_id) else {
                         continue;
                     };
 
-                    let q_id = QuinnStreamId::from(var_int);
-                    let buf = self.send_buffers.entry(q_id).or_default();
+                    let quic_stream_id = QuicStreamId::from(varint);
+                    let buffer = self.send_buffers.entry(quic_stream_id).or_default();
 
                     if !data.is_empty() {
-                        buf.chunks.push_back(data);
+                        buffer.chunks.push_back(data);
                     }
 
                     if end_stream {
-                        buf.finished = true;
+                        buffer.finished = true;
                     }
 
-                    self.flush_stream(q_id);
+                    if let Some(event) = self.flush_stream(quic_stream_id) {
+                        event_queue.push_back(event);
+                    }
                 }
                 Effect::SendQuicDatagram { header, payload } => {
-                    let mut buf = BytesMut::with_capacity(header.len() + payload.len());
-                    buf.put(header);
-                    buf.put(payload);
-                    if let Err(e) = self.quic.datagrams().send(buf.freeze(), false) {
+                    let mut buffer = BytesMut::with_capacity(header.len() + payload.len());
+                    buffer.put(header);
+                    buffer.put(payload);
+                    if let Err(e) = self.connection.datagrams().send(buffer.freeze(), false) {
                         debug!("quic_datagram send failed err={e:?}");
                     }
                 }
@@ -557,116 +452,214 @@ impl TransportConnection {
                     stream_id,
                     error_code,
                 } => {
-                    let Ok(var_int) = VarInt::try_from(stream_id) else {
+                    let Ok(varint) = QuicVarInt::try_from(stream_id) else {
                         continue;
                     };
 
-                    let q_id = QuinnStreamId::from(var_int);
-                    let code = VarInt::try_from(error_code).unwrap_or(VarInt::from(0u32));
-                    let mut stream = self.quic.recv_stream(q_id);
-
-                    stream.stop(code).ok();
+                    let quic_stream_id = QuicStreamId::from(varint);
+                    let error_code =
+                        QuicVarInt::try_from(error_code).unwrap_or(QuicVarInt::from(0u32));
+                    self.pending_receives.remove(&quic_stream_id);
+                    self.connection
+                        .recv_stream(quic_stream_id)
+                        .stop(error_code)
+                        .ok();
                 }
-                app_effect => {
-                    self.pending_effects.push_back(app_effect);
+                effect => {
+                    self.pending_effects.push_back(effect);
                 }
             }
         }
     }
 
-    // Ingests incoming QUIC datagrams into the protocol engine.
-    fn read_datagrams(&mut self, now: f64, now_instant: Instant) {
-        let mut dgrams = Vec::new();
+    fn process_quic_events(&mut self, now: f64, now_instant: Instant) {
+        while let Some(event) = self.connection.poll() {
+            match event {
+                QuicEvent::Connected => {
+                    self.dispatch_protocol_event(
+                        ProtocolEvent::TransportHandshakeCompleted,
+                        now,
+                        now_instant,
+                    );
 
-        while let Some(dgram) = self.quic.datagrams().recv() {
-            dgrams.push(dgram);
-        }
-
-        for data in dgrams {
-            self.dispatch_protocol_event(
-                ProtocolEvent::TransportDatagramFrameReceived { data },
-                now,
-                now_instant,
-            );
-        }
-    }
-
-    // Reads incoming QUIC streams utilizing zero-copy architecture.
-    fn read_stream_data(&mut self, stream_id: QuinnStreamId, now: f64, now_instant: Instant) {
-        let mut chunks = Vec::new();
-        let mut is_finished = false;
-        let mut is_reset = None;
-
-        {
-            let mut recv = self.quic.recv_stream(stream_id);
-
-            if let Ok(mut chunks_reader) = recv.read(false) {
-                loop {
-                    match chunks_reader.next(usize::MAX) {
-                        Ok(Some(chunk)) => {
-                            chunks.push(chunk.bytes);
-                        }
-                        Ok(None) => {
-                            is_finished = true;
-
-                            break;
-                        }
-                        Err(ReadError::Reset(error_code)) => {
-                            is_reset = Some(error_code.into_inner());
-
-                            break;
-                        }
-                        Err(ReadError::Blocked) => {
-                            break;
-                        }
+                    if let Some(max_size) = self.connection.datagrams().max_size() {
+                        self.dispatch_protocol_event(
+                            ProtocolEvent::TransportQuicParametersReceived {
+                                peer_max_datagram_frame_size: max_size as u64,
+                            },
+                            now,
+                            now_instant,
+                        );
                     }
                 }
+                QuicEvent::ConnectionLost { reason } => {
+                    let error_code: ErrorCode = match &reason {
+                        QuicConnectionError::ApplicationClosed(e) => u64::from(e.error_code),
+                        QuicConnectionError::CidsExhausted
+                        | QuicConnectionError::LocallyClosed
+                        | QuicConnectionError::Reset
+                        | QuicConnectionError::TimedOut
+                        | QuicConnectionError::VersionMismatch => ERR_LIB_CONNECTION_STATE_ERROR,
+                        QuicConnectionError::ConnectionClosed(e) => u64::from(e.error_code),
+                        QuicConnectionError::TransportError(e) => u64::from(e.code),
+                    };
 
-                let _transmit = chunks_reader.finalize();
+                    self.dispatch_protocol_event(
+                        ProtocolEvent::TransportConnectionTerminated {
+                            error_code,
+                            reason: reason.to_string().into(),
+                        },
+                        now,
+                        now_instant,
+                    );
+                }
+                QuicEvent::DatagramReceived => {
+                    self.recv_datagrams(now, now_instant);
+                }
+                QuicEvent::Stream(QuicStreamEvent::Available { dir: direction }) => {
+                    self.dispatch_protocol_event(
+                        ProtocolEvent::TransportMaxStreamsReceived {
+                            is_unidirectional: direction == QuicDir::Uni,
+                        },
+                        now,
+                        now_instant,
+                    );
+                }
+                QuicEvent::Stream(QuicStreamEvent::Finished { id: stream_id }) => {
+                    self.dispatch_protocol_event(
+                        ProtocolEvent::TransportStreamDataAcknowledged {
+                            stream_id: u64::from(stream_id),
+                        },
+                        now,
+                        now_instant,
+                    );
+                }
+                QuicEvent::Stream(QuicStreamEvent::Opened { dir: direction }) => {
+                    while let Some(stream_id) = self.connection.streams().accept(direction) {
+                        self.dispatch_protocol_event(
+                            ProtocolEvent::TransportStreamOpened {
+                                stream_id: u64::from(stream_id),
+                            },
+                            now,
+                            now_instant,
+                        );
+                    }
+                }
+                QuicEvent::Stream(QuicStreamEvent::Readable { id: stream_id }) => {
+                    if let Some(event) = self.recv_stream_data(stream_id) {
+                        self.dispatch_protocol_event(event, now, now_instant);
+                    }
+                }
+                QuicEvent::Stream(QuicStreamEvent::Stopped {
+                    id: stream_id,
+                    error_code,
+                }) => {
+                    self.send_buffers.remove(&stream_id);
+                    self.dispatch_protocol_event(
+                        ProtocolEvent::TransportStopSendingReceived {
+                            stream_id: u64::from(stream_id),
+                            error_code: error_code.into_inner(),
+                        },
+                        now,
+                        now_instant,
+                    );
+                }
+                QuicEvent::Stream(QuicStreamEvent::Writable { id: stream_id }) => {
+                    if let Some(event) = self.flush_stream(stream_id) {
+                        self.dispatch_protocol_event(event, now, now_instant);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn recv_datagrams(&mut self, now: f64, now_instant: Instant) {
+        let mut datagrams = Vec::new();
+
+        while let Some(datagram) = self.connection.datagrams().recv() {
+            datagrams.push(datagram);
+        }
+
+        for data in datagrams {
+            self.dispatch_protocol_event(
+                ProtocolEvent::TransportDatagramReceived { data },
+                now,
+                now_instant,
+            );
+        }
+    }
+
+    fn recv_stream_data(&mut self, stream_id: QuicStreamId) -> Option<ProtocolEvent> {
+        let max_size = *self.pending_receives.get(&stream_id)?;
+        let limit = usize::try_from(max_size).unwrap_or(usize::MAX);
+
+        let mut chunks = Vec::new();
+        let mut size = 0;
+        let mut is_finished = false;
+        let mut reset_error_code = None;
+
+        let mut stream = self.connection.recv_stream(stream_id);
+        let Ok(mut chunks_reader) = stream.read(true) else {
+            self.pending_receives.remove(&stream_id);
+            return None;
+        };
+
+        while size < limit {
+            match chunks_reader.next(limit - size) {
+                Ok(Some(chunk)) => {
+                    size += chunk.bytes.len();
+                    chunks.push(chunk.bytes);
+                }
+                Ok(None) => {
+                    is_finished = true;
+                    break;
+                }
+                Err(QuicReadError::Reset(error_code)) => {
+                    reset_error_code = Some(error_code.into_inner());
+                    break;
+                }
+                Err(QuicReadError::Blocked) => {
+                    break;
+                }
             }
         }
 
-        for chunk in chunks {
-            self.dispatch_protocol_event(
-                ProtocolEvent::TransportStreamDataReceived {
-                    stream_id: u64::from(stream_id),
-                    data: chunk,
-                    end_stream: false,
-                },
-                now,
-                now_instant,
-            );
+        let _transmit = chunks_reader.finalize();
+
+        if let Some(error_code) = reset_error_code {
+            self.pending_receives.remove(&stream_id);
+
+            return Some(ProtocolEvent::TransportResetStreamReceived {
+                stream_id: u64::from(stream_id),
+                error_code,
+            });
         }
 
-        if is_finished {
-            self.dispatch_protocol_event(
-                ProtocolEvent::TransportStreamDataReceived {
-                    stream_id: u64::from(stream_id),
-                    data: Bytes::new(),
-                    end_stream: true,
-                },
-                now,
-                now_instant,
-            );
+        if size == 0 && !is_finished {
+            return None;
         }
 
-        if let Some(code) = is_reset {
-            self.dispatch_protocol_event(
-                ProtocolEvent::TransportStreamResetReceived {
-                    stream_id: u64::from(stream_id),
-                    error_code: code,
-                },
-                now,
-                now_instant,
-            );
+        self.pending_receives.remove(&stream_id);
 
-            let effects = self.engine.cleanup_stream(u64::from(stream_id));
-            self.dispatch_effects(effects, now, now_instant);
-        }
+        let data = if chunks.len() == 1 {
+            chunks.pop().unwrap_or_default()
+        } else {
+            let mut buffer = BytesMut::with_capacity(size);
+            for chunk in chunks {
+                buffer.put(chunk);
+            }
+            buffer.freeze()
+        };
+
+        Some(ProtocolEvent::TransportStreamDataReceived {
+            stream_id: u64::from(stream_id),
+            data,
+            end_stream: is_finished,
+        })
     }
 }
 
-// Internal send buffer for flow-controlled QUIC streams.
 #[derive(Default)]
 struct SendBuffer {
     chunks: VecDeque<Bytes>,

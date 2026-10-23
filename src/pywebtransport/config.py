@@ -1,448 +1,428 @@
-"""Structured configuration objects for clients and servers."""
+"""Common configuration."""
 
 from __future__ import annotations
 
-import copy
 import ssl
-import types
 from abc import ABC
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Final, Self, Union, get_args, get_origin, get_type_hints
+from types import MappingProxyType
+from typing import Final
 
 from pywebtransport.constants import (
-    DEFAULT_ALPN_PROTOCOLS,
     DEFAULT_BIND_HOST,
+    DEFAULT_BIND_PORT,
     DEFAULT_CLOSE_TIMEOUT,
     DEFAULT_CONGESTION_CONTROL_ALGORITHM,
-    DEFAULT_CONNECT_TIMEOUT,
     DEFAULT_CONNECTION_ATTEMPT_DELAY,
-    DEFAULT_CONNECTION_IDLE_TIMEOUT,
-    DEFAULT_DEV_PORT,
-    DEFAULT_EVENT_HISTORY_CAPACITY,
-    DEFAULT_EVENT_QUEUE_CAPACITY,
-    DEFAULT_FLOW_CONTROL_WINDOW,
+    DEFAULT_CONNECTION_RECEIVE_WINDOW,
+    DEFAULT_CONNECTION_SEND_WINDOW,
+    DEFAULT_CONNECT_TIMEOUT,
     DEFAULT_INITIAL_MAX_DATA,
     DEFAULT_INITIAL_MAX_STREAMS_BIDI,
     DEFAULT_INITIAL_MAX_STREAMS_UNI,
     DEFAULT_KEEP_ALIVE_INTERVAL,
-    DEFAULT_LOG_LEVEL,
     DEFAULT_MAX_CAPSULE_SIZE,
     DEFAULT_MAX_CONNECTIONS,
+    DEFAULT_MAX_CONNECTION_PENDING_EVENTS,
     DEFAULT_MAX_DATAGRAM_SIZE,
-    DEFAULT_MAX_EVENT_LISTENERS,
     DEFAULT_MAX_FIELD_SECTION_SIZE,
+    DEFAULT_MAX_IDLE_TIMEOUT,
     DEFAULT_MAX_PENDING_CAPSULES,
     DEFAULT_MAX_PENDING_DATAGRAMS,
     DEFAULT_MAX_PENDING_STREAMS,
-    DEFAULT_MAX_SESSION_PENDING_EVENTS,
     DEFAULT_MAX_SESSIONS,
-    DEFAULT_MAX_STREAM_READ_BUFFER_SIZE,
-    DEFAULT_MAX_STREAM_WRITE_BUFFER_SIZE,
-    DEFAULT_MAX_TOTAL_PENDING_EVENTS,
+    DEFAULT_MAX_SESSION_PENDING_EVENTS,
+    DEFAULT_MAX_STREAMS_BIDI,
+    DEFAULT_MAX_STREAMS_UNI,
+    DEFAULT_MAX_UDP_PAYLOAD_SIZE,
+    DEFAULT_MAX_WRITE_BUFFER_SIZE,
     DEFAULT_PENDING_EVENT_TTL,
-    DEFAULT_QUIC_MAX_CONCURRENT_BIDI_STREAMS,
-    DEFAULT_QUIC_MAX_CONCURRENT_UNI_STREAMS,
-    DEFAULT_QUIC_RECEIVE_WINDOW,
-    DEFAULT_QUIC_SEND_WINDOW,
-    DEFAULT_QUIC_STREAM_RECEIVE_WINDOW,
     DEFAULT_READ_TIMEOUT,
     DEFAULT_RESOURCE_CLEANUP_INTERVAL,
-    DEFAULT_STREAM_CREATION_TIMEOUT,
-    DEFAULT_WRITE_TIMEOUT,
+    DEFAULT_SESSION_RECEIVE_WINDOW,
+    DEFAULT_STREAM_CREATE_TIMEOUT,
+    DEFAULT_STREAM_RECEIVE_WINDOW,
     H3_MIN_UNI_STREAM_COUNT,
+    QUIC_MIN_UDP_PAYLOAD_SIZE_LIMIT,
+    QUIC_UDP_PAYLOAD_SIZE_LIMIT,
     QUIC_VARINT_LIMIT,
-    UDP_MAX_DATAGRAM_SIZE,
-    WT_SESSION_CONTROL_BIDI_STREAM_COUNT,
+    WT_SESSION_CONNECT_STREAM_COUNT,
     WT_STREAMS_LIMIT,
 )
 from pywebtransport.exceptions import ConfigurationError
 from pywebtransport.types import Headers
 
-__all__: list[str] = ["BaseConfig", "ClientConfig", "ServerConfig"]
+__all__: list[str] = ["ClientConfig", "ServerConfig"]
 
-_CONGESTION_CONTROL_ALGORITHMS: Final[list[str]] = ["bbr", "cubic", "reno"]
+_CONGESTION_CONTROL_ALGORITHMS: Final[tuple[str, ...]] = ("bbr", "cubic", "reno")
 _FIELD_SECTION_SIZE_LIMIT: Final[int] = 16 * 1024 * 1024
-_VERIFY_MODES: Final[list[ssl.VerifyMode]] = [ssl.CERT_NONE, ssl.CERT_OPTIONAL, ssl.CERT_REQUIRED]
+_VERIFY_MODES: Final[tuple[ssl.VerifyMode, ...]] = (ssl.CERT_NONE, ssl.CERT_OPTIONAL, ssl.CERT_REQUIRED)
 
 
-@dataclass(kw_only=True)
-class BaseConfig(ABC):
-    """Encapsulate common configuration fields and logic."""
+@dataclass(frozen=True, kw_only=True, slots=True)
+class _BaseConfig(ABC):
+    """Encapsulate the base configuration."""
 
-    alpn_protocols: list[str] = field(default_factory=lambda: list(DEFAULT_ALPN_PROTOCOLS))
     close_timeout: float = DEFAULT_CLOSE_TIMEOUT
     congestion_control_algorithm: str = DEFAULT_CONGESTION_CONTROL_ALGORITHM
-    connection_idle_timeout: float = DEFAULT_CONNECTION_IDLE_TIMEOUT
-    event_history_capacity: int = DEFAULT_EVENT_HISTORY_CAPACITY
-    event_queue_capacity: int = DEFAULT_EVENT_QUEUE_CAPACITY
-    flow_control_window: int = DEFAULT_FLOW_CONTROL_WINDOW
+    connection_receive_window: int = DEFAULT_CONNECTION_RECEIVE_WINDOW
+    connection_send_window: int = DEFAULT_CONNECTION_SEND_WINDOW
     initial_max_data: int = DEFAULT_INITIAL_MAX_DATA
     initial_max_streams_bidi: int = DEFAULT_INITIAL_MAX_STREAMS_BIDI
     initial_max_streams_uni: int = DEFAULT_INITIAL_MAX_STREAMS_UNI
     keep_alive_interval: float | None = DEFAULT_KEEP_ALIVE_INTERVAL
-    log_level: str = DEFAULT_LOG_LEVEL
     max_capsule_size: int = DEFAULT_MAX_CAPSULE_SIZE
+    max_connection_pending_events: int = DEFAULT_MAX_CONNECTION_PENDING_EVENTS
     max_connections: int = DEFAULT_MAX_CONNECTIONS
     max_datagram_size: int = DEFAULT_MAX_DATAGRAM_SIZE
-    max_event_listeners: int = DEFAULT_MAX_EVENT_LISTENERS
     max_field_section_size: int = DEFAULT_MAX_FIELD_SECTION_SIZE
+    max_idle_timeout: float = DEFAULT_MAX_IDLE_TIMEOUT
     max_pending_capsules: int = DEFAULT_MAX_PENDING_CAPSULES
     max_pending_datagrams: int = DEFAULT_MAX_PENDING_DATAGRAMS
     max_pending_streams: int = DEFAULT_MAX_PENDING_STREAMS
     max_session_pending_events: int = DEFAULT_MAX_SESSION_PENDING_EVENTS
     max_sessions: int = DEFAULT_MAX_SESSIONS
-    max_stream_read_buffer_size: int = DEFAULT_MAX_STREAM_READ_BUFFER_SIZE
-    max_stream_write_buffer_size: int = DEFAULT_MAX_STREAM_WRITE_BUFFER_SIZE
-    max_total_pending_events: int = DEFAULT_MAX_TOTAL_PENDING_EVENTS
+    max_streams_bidi: int = DEFAULT_MAX_STREAMS_BIDI
+    max_streams_uni: int = DEFAULT_MAX_STREAMS_UNI
+    max_udp_payload_size: int = DEFAULT_MAX_UDP_PAYLOAD_SIZE
+    max_write_buffer_size: int = DEFAULT_MAX_WRITE_BUFFER_SIZE
     pending_event_ttl: float = DEFAULT_PENDING_EVENT_TTL
-    quic_max_concurrent_bidi_streams: int = DEFAULT_QUIC_MAX_CONCURRENT_BIDI_STREAMS
-    quic_max_concurrent_uni_streams: int = DEFAULT_QUIC_MAX_CONCURRENT_UNI_STREAMS
-    quic_receive_window: int = DEFAULT_QUIC_RECEIVE_WINDOW
-    quic_send_window: int = DEFAULT_QUIC_SEND_WINDOW
-    quic_stream_receive_window: int = DEFAULT_QUIC_STREAM_RECEIVE_WINDOW
     read_timeout: float | None = DEFAULT_READ_TIMEOUT
     resource_cleanup_interval: float = DEFAULT_RESOURCE_CLEANUP_INTERVAL
-    stream_creation_timeout: float = DEFAULT_STREAM_CREATION_TIMEOUT
-    write_timeout: float | None = DEFAULT_WRITE_TIMEOUT
+    session_receive_window: int = DEFAULT_SESSION_RECEIVE_WINDOW
+    stream_create_timeout: float = DEFAULT_STREAM_CREATE_TIMEOUT
+    stream_receive_window: int = DEFAULT_STREAM_RECEIVE_WINDOW
 
-    def copy(self) -> Self:
-        """Create a deep copy of the configuration."""
-        return copy.deepcopy(x=self)
+    def __post_init__(self) -> None:
+        """Validate the configuration after initialization."""
+        self._validate()
 
-    @classmethod
-    def from_dict(cls, *, config_dict: dict[str, Any]) -> Self:
-        """Instantiate configuration from a dictionary."""
-        valid_keys = {f.name for f in cls.__dataclass_fields__.values()}
-        filtered_dict = {k: v for k, v in config_dict.items() if k in valid_keys}
-
-        type_hints = get_type_hints(cls)
-
-        for key, value in filtered_dict.items():
-            if key not in type_hints:
-                continue
-
-            target_type = type_hints[key]
-            origin = get_origin(target_type)
-
-            if origin is types.UnionType or origin is Union:
-                args = [arg for arg in get_args(target_type) if arg is not type(None)]
-                if len(args) == 1:
-                    target_type = args[0]
-                elif isinstance(value, str):
-                    for arg in args:
-                        if isinstance(arg, type) and issubclass(arg, Enum):
-                            target_type = arg
-                            break
-
-            if isinstance(value, str) and isinstance(target_type, type) and issubclass(target_type, Enum):
-                try:
-                    filtered_dict[key] = target_type[value]
-                except KeyError:
-                    pass
-
-        return cls(**filtered_dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize the configuration to a dictionary."""
-        result = {}
-        for field_name in self.__dataclass_fields__:
-            value = getattr(self, field_name)
-            match value:
-                case ssl.VerifyMode():
-                    result[field_name] = value.name
-                case _:
-                    result[field_name] = value
-        return result
-
-    def update(self, **kwargs: Any) -> Self:
-        """Return a new configuration with updated values."""
-        new_config = self.copy()
-        for key, value in kwargs.items():
-            if hasattr(new_config, key):
-                setattr(new_config, key, value)
-            else:
-                raise ConfigurationError(
-                    message=f"cfg validate invalid actual={key}", config_key=key, config_value=value
-                )
-        new_config.validate()
-        return new_config
-
-    def validate(self) -> None:
-        """Validate the configuration state."""
-        if not self.alpn_protocols:
-            raise ConfigurationError(
-                message=f"cfg_alpn_protocols validate invalid actual={self.alpn_protocols}",
-                config_key="alpn_protocols",
-                config_value=self.alpn_protocols,
-            )
-
-        try:
-            _validate_timeout(timeout=self.close_timeout)
-        except (TypeError, ValueError) as e:
+    def _validate(self) -> None:
+        if (
+            not isinstance(self.close_timeout, (int, float))
+            or isinstance(self.close_timeout, bool)
+            or self.close_timeout <= 0
+        ):
             raise ConfigurationError(
                 message=f"cfg_close_timeout validate invalid actual={self.close_timeout}",
                 config_key="close_timeout",
                 config_value=self.close_timeout,
-            ) from e
+            )
 
         if self.congestion_control_algorithm not in _CONGESTION_CONTROL_ALGORITHMS:
             raise ConfigurationError(
-                message=(
-                    f"cfg_congestion_control_algorithm validate invalid "
-                    f"actual={self.congestion_control_algorithm} expected=congestion_control_algorithms"
-                ),
+                message=f"cfg_congestion_control_algorithm validate invalid actual={self.congestion_control_algorithm}",
                 config_key="congestion_control_algorithm",
                 config_value=self.congestion_control_algorithm,
             )
 
-        try:
-            _validate_timeout(timeout=self.connection_idle_timeout)
-        except (TypeError, ValueError) as e:
+        if (
+            not isinstance(self.connection_receive_window, int)
+            or isinstance(self.connection_receive_window, bool)
+            or self.connection_receive_window <= 0
+        ):
             raise ConfigurationError(
-                message=f"cfg_connection_idle_timeout validate invalid actual={self.connection_idle_timeout}",
-                config_key="connection_idle_timeout",
-                config_value=self.connection_idle_timeout,
-            ) from e
-
-        if self.event_history_capacity < 0:
-            raise ConfigurationError(
-                message=f"cfg_event_history_capacity validate invalid actual={self.event_history_capacity}",
-                config_key="event_history_capacity",
-                config_value=self.event_history_capacity,
+                message=f"cfg_connection_receive_window validate invalid actual={self.connection_receive_window}",
+                config_key="connection_receive_window",
+                config_value=self.connection_receive_window,
             )
 
-        if self.event_queue_capacity <= 0:
+        if (
+            not isinstance(self.connection_send_window, int)
+            or isinstance(self.connection_send_window, bool)
+            or self.connection_send_window <= 0
+        ):
             raise ConfigurationError(
-                message=f"cfg_event_queue_capacity validate invalid actual={self.event_queue_capacity}",
-                config_key="event_queue_capacity",
-                config_value=self.event_queue_capacity,
+                message=f"cfg_connection_send_window validate invalid actual={self.connection_send_window}",
+                config_key="connection_send_window",
+                config_value=self.connection_send_window,
             )
 
-        if self.flow_control_window <= 0:
-            raise ConfigurationError(
-                message=f"cfg_flow_control_window validate invalid actual={self.flow_control_window}",
-                config_key="flow_control_window",
-                config_value=self.flow_control_window,
-            )
-
-        if self.initial_max_data < 0 or self.initial_max_data > QUIC_VARINT_LIMIT:
+        if (
+            not isinstance(self.initial_max_data, int)
+            or isinstance(self.initial_max_data, bool)
+            or self.initial_max_data < 0
+            or self.initial_max_data > QUIC_VARINT_LIMIT
+        ):
             raise ConfigurationError(
                 message=f"cfg_initial_max_data validate invalid actual={self.initial_max_data}",
                 config_key="initial_max_data",
                 config_value=self.initial_max_data,
             )
 
-        if self.initial_max_streams_bidi < 0 or self.initial_max_streams_bidi > WT_STREAMS_LIMIT:
+        if (
+            not isinstance(self.initial_max_streams_bidi, int)
+            or isinstance(self.initial_max_streams_bidi, bool)
+            or self.initial_max_streams_bidi < 0
+            or self.initial_max_streams_bidi > WT_STREAMS_LIMIT
+        ):
             raise ConfigurationError(
                 message=f"cfg_initial_max_streams_bidi validate invalid actual={self.initial_max_streams_bidi}",
                 config_key="initial_max_streams_bidi",
                 config_value=self.initial_max_streams_bidi,
             )
 
-        if self.initial_max_streams_uni < 0 or self.initial_max_streams_uni > WT_STREAMS_LIMIT:
+        if (
+            not isinstance(self.initial_max_streams_uni, int)
+            or isinstance(self.initial_max_streams_uni, bool)
+            or self.initial_max_streams_uni < 0
+            or self.initial_max_streams_uni > WT_STREAMS_LIMIT
+        ):
             raise ConfigurationError(
                 message=f"cfg_initial_max_streams_uni validate invalid actual={self.initial_max_streams_uni}",
                 config_key="initial_max_streams_uni",
                 config_value=self.initial_max_streams_uni,
             )
 
-        try:
-            _validate_timeout(timeout=self.keep_alive_interval)
-        except (TypeError, ValueError) as e:
+        if self.keep_alive_interval is not None and (
+            not isinstance(self.keep_alive_interval, (int, float))
+            or isinstance(self.keep_alive_interval, bool)
+            or self.keep_alive_interval <= 0
+        ):
             raise ConfigurationError(
                 message=f"cfg_keep_alive_interval validate invalid actual={self.keep_alive_interval}",
                 config_key="keep_alive_interval",
                 config_value=self.keep_alive_interval,
-            ) from e
+            )
 
-        if self.max_capsule_size <= 0:
+        if (
+            not isinstance(self.max_capsule_size, int)
+            or isinstance(self.max_capsule_size, bool)
+            or self.max_capsule_size <= 0
+        ):
             raise ConfigurationError(
                 message=f"cfg_max_capsule_size validate invalid actual={self.max_capsule_size}",
                 config_key="max_capsule_size",
                 config_value=self.max_capsule_size,
             )
 
-        if self.max_connections <= 0:
+        if (
+            not isinstance(self.max_connection_pending_events, int)
+            or isinstance(self.max_connection_pending_events, bool)
+            or self.max_connection_pending_events <= 0
+        ):
+            raise ConfigurationError(
+                message=(
+                    f"cfg_max_connection_pending_events validate invalid actual={self.max_connection_pending_events}"
+                ),
+                config_key="max_connection_pending_events",
+                config_value=self.max_connection_pending_events,
+            )
+
+        if (
+            not isinstance(self.max_connections, int)
+            or isinstance(self.max_connections, bool)
+            or self.max_connections <= 0
+        ):
             raise ConfigurationError(
                 message=f"cfg_max_connections validate invalid actual={self.max_connections}",
                 config_key="max_connections",
                 config_value=self.max_connections,
             )
 
-        if self.max_datagram_size <= 0 or self.max_datagram_size > UDP_MAX_DATAGRAM_SIZE:
+        if (
+            not isinstance(self.max_datagram_size, int)
+            or isinstance(self.max_datagram_size, bool)
+            or self.max_datagram_size <= 0
+            or self.max_datagram_size > self.max_udp_payload_size
+        ):
             raise ConfigurationError(
                 message=f"cfg_max_datagram_size validate invalid actual={self.max_datagram_size}",
                 config_key="max_datagram_size",
                 config_value=self.max_datagram_size,
             )
 
-        if self.max_event_listeners <= 0:
-            raise ConfigurationError(
-                message=f"cfg_max_event_listeners validate invalid actual={self.max_event_listeners}",
-                config_key="max_event_listeners",
-                config_value=self.max_event_listeners,
-            )
-
-        if self.max_field_section_size <= 0 or self.max_field_section_size > _FIELD_SECTION_SIZE_LIMIT:
+        if (
+            not isinstance(self.max_field_section_size, int)
+            or isinstance(self.max_field_section_size, bool)
+            or self.max_field_section_size <= 0
+            or self.max_field_section_size > _FIELD_SECTION_SIZE_LIMIT
+        ):
             raise ConfigurationError(
                 message=f"cfg_max_field_section_size validate invalid actual={self.max_field_section_size}",
                 config_key="max_field_section_size",
                 config_value=self.max_field_section_size,
             )
 
-        if self.max_pending_capsules <= 0:
+        if (
+            not isinstance(self.max_idle_timeout, (int, float))
+            or isinstance(self.max_idle_timeout, bool)
+            or self.max_idle_timeout <= 0
+        ):
+            raise ConfigurationError(
+                message=f"cfg_max_idle_timeout validate invalid actual={self.max_idle_timeout}",
+                config_key="max_idle_timeout",
+                config_value=self.max_idle_timeout,
+            )
+
+        if (
+            not isinstance(self.max_pending_capsules, int)
+            or isinstance(self.max_pending_capsules, bool)
+            or self.max_pending_capsules <= 0
+        ):
             raise ConfigurationError(
                 message=f"cfg_max_pending_capsules validate invalid actual={self.max_pending_capsules}",
                 config_key="max_pending_capsules",
                 config_value=self.max_pending_capsules,
             )
 
-        if self.max_pending_datagrams <= 0:
+        if (
+            not isinstance(self.max_pending_datagrams, int)
+            or isinstance(self.max_pending_datagrams, bool)
+            or self.max_pending_datagrams <= 0
+        ):
             raise ConfigurationError(
                 message=f"cfg_max_pending_datagrams validate invalid actual={self.max_pending_datagrams}",
                 config_key="max_pending_datagrams",
                 config_value=self.max_pending_datagrams,
             )
 
-        if self.max_pending_streams <= 0:
+        if (
+            not isinstance(self.max_pending_streams, int)
+            or isinstance(self.max_pending_streams, bool)
+            or self.max_pending_streams <= 0
+        ):
             raise ConfigurationError(
                 message=f"cfg_max_pending_streams validate invalid actual={self.max_pending_streams}",
                 config_key="max_pending_streams",
                 config_value=self.max_pending_streams,
             )
 
-        if self.max_session_pending_events <= 0:
+        if (
+            not isinstance(self.max_session_pending_events, int)
+            or isinstance(self.max_session_pending_events, bool)
+            or self.max_session_pending_events <= 0
+        ):
             raise ConfigurationError(
                 message=f"cfg_max_session_pending_events validate invalid actual={self.max_session_pending_events}",
                 config_key="max_session_pending_events",
                 config_value=self.max_session_pending_events,
             )
 
-        if self.max_sessions <= 0:
+        if not isinstance(self.max_sessions, int) or isinstance(self.max_sessions, bool) or self.max_sessions <= 0:
             raise ConfigurationError(
                 message=f"cfg_max_sessions validate invalid actual={self.max_sessions}",
                 config_key="max_sessions",
                 config_value=self.max_sessions,
             )
 
-        if self.max_stream_read_buffer_size <= 0:
+        if (
+            not isinstance(self.max_streams_bidi, int)
+            or isinstance(self.max_streams_bidi, bool)
+            or self.max_streams_bidi < WT_SESSION_CONNECT_STREAM_COUNT
+            or self.max_streams_bidi > WT_STREAMS_LIMIT
+        ):
             raise ConfigurationError(
-                message=f"cfg_max_stream_read_buffer_size validate invalid actual={self.max_stream_read_buffer_size}",
-                config_key="max_stream_read_buffer_size",
-                config_value=self.max_stream_read_buffer_size,
+                message=f"cfg_max_streams_bidi validate invalid actual={self.max_streams_bidi}",
+                config_key="max_streams_bidi",
+                config_value=self.max_streams_bidi,
             )
 
-        if self.max_stream_write_buffer_size <= 0:
+        if (
+            not isinstance(self.max_streams_uni, int)
+            or isinstance(self.max_streams_uni, bool)
+            or self.max_streams_uni < H3_MIN_UNI_STREAM_COUNT
+            or self.max_streams_uni > WT_STREAMS_LIMIT
+        ):
             raise ConfigurationError(
-                message=f"cfg_max_stream_write_buffer_size validate invalid actual={self.max_stream_write_buffer_size}",
-                config_key="max_stream_write_buffer_size",
-                config_value=self.max_stream_write_buffer_size,
+                message=f"cfg_max_streams_uni validate invalid actual={self.max_streams_uni}",
+                config_key="max_streams_uni",
+                config_value=self.max_streams_uni,
             )
 
-        if self.max_total_pending_events <= 0:
+        if (
+            not isinstance(self.max_udp_payload_size, int)
+            or isinstance(self.max_udp_payload_size, bool)
+            or self.max_udp_payload_size < QUIC_MIN_UDP_PAYLOAD_SIZE_LIMIT
+            or self.max_udp_payload_size > QUIC_UDP_PAYLOAD_SIZE_LIMIT
+        ):
             raise ConfigurationError(
-                message=f"cfg_max_total_pending_events validate invalid actual={self.max_total_pending_events}",
-                config_key="max_total_pending_events",
-                config_value=self.max_total_pending_events,
+                message=f"cfg_max_udp_payload_size validate invalid actual={self.max_udp_payload_size}",
+                config_key="max_udp_payload_size",
+                config_value=self.max_udp_payload_size,
             )
 
-        try:
-            _validate_timeout(timeout=self.pending_event_ttl)
-        except (TypeError, ValueError) as e:
+        if (
+            not isinstance(self.max_write_buffer_size, int)
+            or isinstance(self.max_write_buffer_size, bool)
+            or self.max_write_buffer_size <= 0
+        ):
+            raise ConfigurationError(
+                message=f"cfg_max_write_buffer_size validate invalid actual={self.max_write_buffer_size}",
+                config_key="max_write_buffer_size",
+                config_value=self.max_write_buffer_size,
+            )
+
+        if (
+            not isinstance(self.pending_event_ttl, (int, float))
+            or isinstance(self.pending_event_ttl, bool)
+            or self.pending_event_ttl <= 0
+        ):
             raise ConfigurationError(
                 message=f"cfg_pending_event_ttl validate invalid actual={self.pending_event_ttl}",
                 config_key="pending_event_ttl",
                 config_value=self.pending_event_ttl,
-            ) from e
+            )
 
-        if (
-            self.quic_max_concurrent_bidi_streams < WT_SESSION_CONTROL_BIDI_STREAM_COUNT
-            or self.quic_max_concurrent_bidi_streams > WT_STREAMS_LIMIT
+        if self.read_timeout is not None and (
+            not isinstance(self.read_timeout, (int, float))
+            or isinstance(self.read_timeout, bool)
+            or self.read_timeout <= 0
         ):
-            raise ConfigurationError(
-                message=(
-                    f"cfg_quic_max_concurrent_bidi_streams validate invalid "
-                    f"actual={self.quic_max_concurrent_bidi_streams}"
-                ),
-                config_key="quic_max_concurrent_bidi_streams",
-                config_value=self.quic_max_concurrent_bidi_streams,
-            )
-
-        if (
-            self.quic_max_concurrent_uni_streams < H3_MIN_UNI_STREAM_COUNT
-            or self.quic_max_concurrent_uni_streams > WT_STREAMS_LIMIT
-        ):
-            raise ConfigurationError(
-                message=(
-                    f"cfg_quic_max_concurrent_uni_streams validate invalid "
-                    f"actual={self.quic_max_concurrent_uni_streams}"
-                ),
-                config_key="quic_max_concurrent_uni_streams",
-                config_value=self.quic_max_concurrent_uni_streams,
-            )
-
-        if self.quic_receive_window <= 0:
-            raise ConfigurationError(
-                message=f"cfg_quic_receive_window validate invalid actual={self.quic_receive_window}",
-                config_key="quic_receive_window",
-                config_value=self.quic_receive_window,
-            )
-
-        if self.quic_send_window <= 0:
-            raise ConfigurationError(
-                message=f"cfg_quic_send_window validate invalid actual={self.quic_send_window}",
-                config_key="quic_send_window",
-                config_value=self.quic_send_window,
-            )
-
-        if self.quic_stream_receive_window <= 0:
-            raise ConfigurationError(
-                message=f"cfg_quic_stream_receive_window validate invalid actual={self.quic_stream_receive_window}",
-                config_key="quic_stream_receive_window",
-                config_value=self.quic_stream_receive_window,
-            )
-
-        try:
-            _validate_timeout(timeout=self.read_timeout)
-        except (TypeError, ValueError) as e:
             raise ConfigurationError(
                 message=f"cfg_read_timeout validate invalid actual={self.read_timeout}",
                 config_key="read_timeout",
                 config_value=self.read_timeout,
-            ) from e
+            )
 
-        try:
-            _validate_timeout(timeout=self.resource_cleanup_interval)
-        except (TypeError, ValueError) as e:
+        if (
+            not isinstance(self.resource_cleanup_interval, (int, float))
+            or isinstance(self.resource_cleanup_interval, bool)
+            or self.resource_cleanup_interval <= 0
+        ):
             raise ConfigurationError(
                 message=f"cfg_resource_cleanup_interval validate invalid actual={self.resource_cleanup_interval}",
                 config_key="resource_cleanup_interval",
                 config_value=self.resource_cleanup_interval,
-            ) from e
+            )
 
-        try:
-            _validate_timeout(timeout=self.stream_creation_timeout)
-        except (TypeError, ValueError) as e:
+        if (
+            not isinstance(self.session_receive_window, int)
+            or isinstance(self.session_receive_window, bool)
+            or self.session_receive_window <= 0
+        ):
             raise ConfigurationError(
-                message=f"cfg_stream_creation_timeout validate invalid actual={self.stream_creation_timeout}",
-                config_key="stream_creation_timeout",
-                config_value=self.stream_creation_timeout,
-            ) from e
+                message=f"cfg_session_receive_window validate invalid actual={self.session_receive_window}",
+                config_key="session_receive_window",
+                config_value=self.session_receive_window,
+            )
 
-        try:
-            _validate_timeout(timeout=self.write_timeout)
-        except (TypeError, ValueError) as e:
+        if (
+            not isinstance(self.stream_create_timeout, (int, float))
+            or isinstance(self.stream_create_timeout, bool)
+            or self.stream_create_timeout <= 0
+        ):
             raise ConfigurationError(
-                message=f"cfg_write_timeout validate invalid actual={self.write_timeout}",
-                config_key="write_timeout",
-                config_value=self.write_timeout,
-            ) from e
+                message=f"cfg_stream_create_timeout validate invalid actual={self.stream_create_timeout}",
+                config_key="stream_create_timeout",
+                config_value=self.stream_create_timeout,
+            )
+
+        if (
+            not isinstance(self.stream_receive_window, int)
+            or isinstance(self.stream_receive_window, bool)
+            or self.stream_receive_window <= 0
+        ):
+            raise ConfigurationError(
+                message=f"cfg_stream_receive_window validate invalid actual={self.stream_receive_window}",
+                config_key="stream_receive_window",
+                config_value=self.stream_receive_window,
+            )
 
 
-@dataclass(kw_only=True)
-class ClientConfig(BaseConfig):
-    """Encapsulate WebTransport client configuration."""
+@dataclass(frozen=True, kw_only=True, slots=True)
+class ClientConfig(_BaseConfig):
+    """Encapsulate client configuration."""
 
     ca_certs: str | None = None
     certfile: str | None = None
@@ -454,40 +434,98 @@ class ClientConfig(BaseConfig):
     verify_mode: ssl.VerifyMode = ssl.CERT_REQUIRED
     wt_available_protocols: list[str] | None = None
 
-    def validate(self) -> None:
-        """Validate the client configuration state."""
-        super().validate()
+    def __post_init__(self) -> None:
+        """Validate the configuration after initialization."""
+        super(ClientConfig, self).__post_init__()
 
-        if self.keyfile is not None and self.certfile is None:
+        if isinstance(self.headers, dict):
+            object.__setattr__(self, "headers", MappingProxyType(dict(self.headers)))
+        else:
+            object.__setattr__(self, "headers", tuple(self.headers))
+
+        if self.wt_available_protocols is not None:
+            object.__setattr__(self, "wt_available_protocols", tuple(self.wt_available_protocols))
+
+    def _validate(self) -> None:
+        super(ClientConfig, self)._validate()
+
+        if self.ca_certs is not None and not isinstance(self.ca_certs, str):
+            raise ConfigurationError(
+                message=f"cfg_ca_certs validate invalid actual={self.ca_certs}",
+                config_key="ca_certs",
+                config_value=self.ca_certs,
+            )
+
+        if (self.keyfile is not None and self.certfile is None) or (
+            self.certfile is not None and not isinstance(self.certfile, str)
+        ):
             raise ConfigurationError(
                 message=f"cfg_certfile validate invalid actual={self.certfile}",
                 config_key="certfile",
                 config_value=self.certfile,
             )
 
-        try:
-            _validate_timeout(timeout=self.connect_timeout)
-        except (TypeError, ValueError) as e:
+        if (
+            not isinstance(self.connect_timeout, (int, float))
+            or isinstance(self.connect_timeout, bool)
+            or self.connect_timeout <= 0
+        ):
             raise ConfigurationError(
                 message=f"cfg_connect_timeout validate invalid actual={self.connect_timeout}",
                 config_key="connect_timeout",
                 config_value=self.connect_timeout,
-            ) from e
+            )
 
-        try:
-            _validate_timeout(timeout=self.connection_attempt_delay)
-        except (TypeError, ValueError) as e:
+        if (
+            not isinstance(self.connection_attempt_delay, (int, float))
+            or isinstance(self.connection_attempt_delay, bool)
+            or self.connection_attempt_delay <= 0
+        ):
             raise ConfigurationError(
                 message=f"cfg_connection_attempt_delay validate invalid actual={self.connection_attempt_delay}",
                 config_key="connection_attempt_delay",
                 config_value=self.connection_attempt_delay,
-            ) from e
+            )
 
-        if self.certfile is not None and self.keyfile is None:
+        if not (
+            (
+                isinstance(self.headers, dict)
+                and all(
+                    isinstance(key, (str, bytes)) and isinstance(value, (str, bytes))
+                    for key, value in self.headers.items()
+                )
+            )
+            or (
+                isinstance(self.headers, list)
+                and all(
+                    isinstance(item, tuple)
+                    and len(item) == 2
+                    and isinstance(item[0], (str, bytes))
+                    and isinstance(item[1], (str, bytes))
+                    for item in self.headers
+                )
+            )
+        ):
+            raise ConfigurationError(
+                message=f"cfg_headers validate invalid actual={self.headers}",
+                config_key="headers",
+                config_value=self.headers,
+            )
+
+        if (self.certfile is not None and self.keyfile is None) or (
+            self.keyfile is not None and not isinstance(self.keyfile, str)
+        ):
             raise ConfigurationError(
                 message=f"cfg_keyfile validate invalid actual={self.keyfile}",
                 config_key="keyfile",
                 config_value=self.keyfile,
+            )
+
+        if self.user_agent is not None and not isinstance(self.user_agent, str):
+            raise ConfigurationError(
+                message=f"cfg_user_agent validate invalid actual={self.user_agent}",
+                config_key="user_agent",
+                config_value=self.user_agent,
             )
 
         if self.verify_mode not in _VERIFY_MODES:
@@ -499,7 +537,7 @@ class ClientConfig(BaseConfig):
 
         if self.wt_available_protocols is not None:
             if not isinstance(self.wt_available_protocols, list) or not all(
-                isinstance(p, str) for p in self.wt_available_protocols
+                isinstance(protocol, str) for protocol in self.wt_available_protocols
             ):
                 raise ConfigurationError(
                     message=f"cfg_wt_available_protocols validate invalid actual={self.wt_available_protocols}",
@@ -508,63 +546,55 @@ class ClientConfig(BaseConfig):
                 )
 
 
-@dataclass(kw_only=True)
-class ServerConfig(BaseConfig):
-    """Encapsulate WebTransport server configuration."""
+@dataclass(frozen=True, kw_only=True, slots=True)
+class ServerConfig(_BaseConfig):
+    """Encapsulate server configuration."""
 
     bind_host: str = DEFAULT_BIND_HOST
-    bind_port: int = DEFAULT_DEV_PORT
+    bind_port: int = DEFAULT_BIND_PORT
     ca_certs: str | None = None
     certfile: str
     keyfile: str
     verify_mode: ssl.VerifyMode = ssl.CERT_NONE
 
-    @classmethod
-    def from_dict(cls, *, config_dict: dict[str, Any]) -> Self:
-        """Instantiate the server configuration with type coercion."""
-        if "bind_port" in config_dict and isinstance(config_dict["bind_port"], str):
-            try:
-                config_dict = config_dict.copy()
-                config_dict["bind_port"] = int(config_dict["bind_port"])
-            except ValueError:
-                pass
-        return super().from_dict(config_dict=config_dict)
+    def _validate(self) -> None:
+        super(ServerConfig, self)._validate()
 
-    def validate(self) -> None:
-        """Validate the server configuration state."""
-        super().validate()
-
-        if not self.bind_host:
+        if not isinstance(self.bind_host, str) or not self.bind_host:
             raise ConfigurationError(
                 message=f"cfg_bind_host validate invalid actual={self.bind_host}",
                 config_key="bind_host",
                 config_value=self.bind_host,
             )
 
-        try:
-            _validate_port(port=self.bind_port)
-        except ValueError as e:
+        if (
+            not isinstance(self.bind_port, int)
+            or isinstance(self.bind_port, bool)
+            or not (1 <= self.bind_port <= 65535)
+        ):
             raise ConfigurationError(
                 message=f"cfg_bind_port validate invalid actual={self.bind_port}",
                 config_key="bind_port",
                 config_value=self.bind_port,
-            ) from e
+            )
 
-        if self.verify_mode in (ssl.CERT_REQUIRED, ssl.CERT_OPTIONAL) and not self.ca_certs:
+        if (self.ca_certs is not None and not isinstance(self.ca_certs, str)) or (
+            self.verify_mode in (ssl.CERT_REQUIRED, ssl.CERT_OPTIONAL) and not self.ca_certs
+        ):
             raise ConfigurationError(
                 message=f"cfg_ca_certs validate invalid actual={self.ca_certs}",
                 config_key="ca_certs",
                 config_value=self.ca_certs,
             )
 
-        if self.certfile is None:
+        if not isinstance(self.certfile, str) or not self.certfile:
             raise ConfigurationError(
                 message=f"cfg_certfile validate invalid actual={self.certfile}",
                 config_key="certfile",
                 config_value=self.certfile,
             )
 
-        if self.keyfile is None:
+        if not isinstance(self.keyfile, str) or not self.keyfile:
             raise ConfigurationError(
                 message=f"cfg_keyfile validate invalid actual={self.keyfile}",
                 config_key="keyfile",
@@ -577,18 +607,3 @@ class ServerConfig(BaseConfig):
                 config_key="verify_mode",
                 config_value=self.verify_mode,
             )
-
-
-def _validate_port(*, port: Any) -> None:
-    """Validate the network port."""
-    if not isinstance(port, int) or not (1 <= port <= 65535):
-        raise ValueError()
-
-
-def _validate_timeout(*, timeout: float | None) -> None:
-    """Validate the timeout value."""
-    if timeout is not None:
-        if not isinstance(timeout, (int, float)):
-            raise TypeError()
-        if timeout <= 0:
-            raise ValueError()

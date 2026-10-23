@@ -9,7 +9,7 @@ from collections.abc import AsyncGenerator
 import pytest
 from pytest_asyncio import fixture as asyncio_fixture
 
-from pywebtransport import ClientConfig, ClientError, WebTransportClient
+from pywebtransport import ClientConfig, ClientError, ConnectionError, TimeoutError, WebTransportClient
 
 from .test_01_basic_connection import test_basic_connection as run_01_basic_connection
 from .test_02_simple_stream import test_multiple_messages as run_02_multiple_messages
@@ -34,20 +34,14 @@ from .test_06_error_handling import test_malformed_operations as run_06_malforme
 from .test_06_error_handling import test_read_timeout as run_06_read_timeout
 from .test_06_error_handling import test_session_closure_handling as run_06_session_closure
 from .test_06_error_handling import test_stream_errors as run_06_stream_errors
-from .test_07_advanced_features import test_client_statistics as run_07_client_statistics
-from .test_07_advanced_features import test_connection_info as run_07_connection_info
-from .test_07_advanced_features import test_datagram_statistics as run_07_datagram_statistics
-from .test_07_advanced_features import test_performance_monitoring as run_07_performance_monitoring
-from .test_07_advanced_features import test_server_diagnostics as run_07_server_diagnostics
-from .test_07_advanced_features import test_session_lifecycle_events as run_07_session_lifecycle_events
-from .test_07_advanced_features import test_session_statistics as run_07_session_statistics
-from .test_07_advanced_features import test_stream_statistics as run_07_stream_statistics
+from .test_07_diagnostics import test_connection_diagnostics as run_07_connection_diagnostics
+from .test_07_diagnostics import test_session_diagnostics as run_07_session_diagnostics
+from .test_07_diagnostics import test_stream_diagnostics as run_07_stream_diagnostics
 from .test_08_protocol_negotiation import test_exact_match as run_08_exact_match
 from .test_08_protocol_negotiation import test_fallback_downgrade as run_08_fallback_downgrade
 from .test_08_protocol_negotiation import test_mismatch_rejection as run_08_mismatch_rejection
 from .test_08_protocol_negotiation import test_missing_required as run_08_missing_required
-from .test_08_protocol_negotiation import test_rogue_mismatch as run_08_rogue_mismatch
-from .test_08_protocol_negotiation import test_rogue_missing as run_08_rogue_missing
+from .test_08_protocol_negotiation import test_omitted_selection as run_08_omitted_selection
 from .test_09_tls_export import test_context_and_label_isolation as run_09_context_and_label_isolation
 from .test_09_tls_export import test_e2e_symmetry as run_09_e2e_symmetry
 from .test_09_tls_export import test_error_handling as run_09_error_handling
@@ -71,10 +65,9 @@ async def _is_server_ready() -> bool:
     for _ in range(60):
         try:
             async with WebTransportClient(config=config) as client:
-                session = await client.connect(url="https://127.0.0.1:4433/health")
-                await session.close()
-                return True
-        except (ClientError, asyncio.TimeoutError):
+                async with await client.connect(url="https://127.0.0.1:4433/"):
+                    return True
+        except (ClientError, ConnectionError, TimeoutError):
             await asyncio.sleep(delay=0.5)
     return False
 
@@ -186,29 +179,14 @@ class TestE2eSuite:
     async def test_06_malformed_operations(self) -> None:
         assert await run_06_malformed_operations() is True, "Malformed API operations handling failed"
 
-    async def test_07_session_statistics(self) -> None:
-        assert await run_07_session_statistics() is True, "Session statistics retrieval failed"
+    async def test_07_connection_diagnostics(self) -> None:
+        assert await run_07_connection_diagnostics() is True, "Connection diagnostics retrieval failed"
 
-    async def test_07_connection_info(self) -> None:
-        assert await run_07_connection_info() is True, "Connection info retrieval failed"
+    async def test_07_session_diagnostics(self) -> None:
+        assert await run_07_session_diagnostics() is True, "Session diagnostics retrieval failed"
 
-    async def test_07_client_statistics(self) -> None:
-        assert await run_07_client_statistics() is True, "Client statistics retrieval failed"
-
-    async def test_07_stream_statistics(self) -> None:
-        assert await run_07_stream_statistics() is True, "Stream statistics test failed"
-
-    async def test_07_datagram_statistics(self) -> None:
-        assert await run_07_datagram_statistics() is True, "Datagram statistics retrieval failed"
-
-    async def test_07_performance_monitoring(self) -> None:
-        assert await run_07_performance_monitoring() is True, "Performance monitoring test failed"
-
-    async def test_07_session_lifecycle_events(self) -> None:
-        assert await run_07_session_lifecycle_events() is True, "Session lifecycle events tracking failed"
-
-    async def test_07_server_diagnostics(self) -> None:
-        assert await run_07_server_diagnostics() is True, "Server diagnostics retrieval failed"
+    async def test_07_stream_diagnostics(self) -> None:
+        assert await run_07_stream_diagnostics() is True, "Stream diagnostics retrieval failed"
 
     async def test_08_exact_match(self) -> None:
         assert await run_08_exact_match() is True, "Exact match protocol negotiation failed"
@@ -222,11 +200,8 @@ class TestE2eSuite:
     async def test_08_missing_required(self) -> None:
         assert await run_08_missing_required() is True, "Missing required protocol test failed"
 
-    async def test_08_rogue_missing(self) -> None:
-        assert await run_08_rogue_missing() is True, "Rogue server missing protocol test failed"
-
-    async def test_08_rogue_mismatch(self) -> None:
-        assert await run_08_rogue_mismatch() is True, "Rogue server mismatched protocol test failed"
+    async def test_08_omitted_selection(self) -> None:
+        assert await run_08_omitted_selection() is True, "Omitted protocol selection test failed"
 
     async def test_09_e2e_symmetry(self) -> None:
         assert await run_09_e2e_symmetry() is True, "TLS export E2E symmetry test failed"

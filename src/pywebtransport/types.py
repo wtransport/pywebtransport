@@ -1,18 +1,11 @@
-"""Core data types and interface protocols for the library."""
+"""Common types."""
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import AsyncGenerator, AsyncIterator
-from contextlib import AbstractAsyncContextManager as AsyncContextManager
 from enum import StrEnum
-from typing import Protocol, runtime_checkable
 
 __all__: list[str] = [
     "Address",
-    "AsyncContextManager",
-    "AsyncGenerator",
-    "AsyncIterator",
     "Buffer",
     "ConnectionHandle",
     "ConnectionState",
@@ -21,12 +14,11 @@ __all__: list[str] = [
     "Headers",
     "RequestId",
     "SessionId",
-    "SessionProtocol",
     "SessionState",
     "StreamDirection",
     "StreamId",
-    "StreamState",
-    "WebTransportProtocol",
+    "StreamReceiveState",
+    "StreamSendState",
 ]
 
 type Address = tuple[str, int]
@@ -50,11 +42,10 @@ class ConnectionState(StrEnum):
 
 
 class EventType(StrEnum):
-    """Enumeration of system event types."""
+    """Enumeration of event types."""
 
     CONNECTION_CLOSED = "connection_closed"
     CONNECTION_ESTABLISHED = "connection_established"
-    DATAGRAM_RECEIVED = "datagram_received"
     SESSION_CLOSED = "session_closed"
     SESSION_DATA_BLOCKED = "session_data_blocked"
     SESSION_DRAINING = "session_draining"
@@ -63,67 +54,16 @@ class EventType(StrEnum):
     SESSION_MAX_STREAMS_UNI_UPDATED = "session_max_streams_uni_updated"
     SESSION_PENDING = "session_pending"
     SESSION_READY = "session_ready"
-    SESSION_REQUEST = "session_request"
+    SESSION_REQUEST_RECEIVED = "session_request_received"
     SESSION_STREAMS_BLOCKED = "session_streams_blocked"
-    STOP_SENDING_RECEIVED = "stop_sending_received"
     STREAM_CLOSED = "stream_closed"
     STREAM_OPENED = "stream_opened"
     STREAM_RESET_RECEIVED = "stream_reset_received"
-
-
-@runtime_checkable
-class SessionProtocol(Protocol):
-    """Define the essential interface of a WebTransport session."""
-
-    __slots__ = ()
-
-    @property
-    def headers(self) -> Headers:
-        """Return the session headers."""
-        ...
-
-    @property
-    def path(self) -> str:
-        """Return the session path."""
-        ...
-
-    @property
-    def remote_address(self) -> Address | None:
-        """Return the remote address of the peer."""
-        ...
-
-    @property
-    def session_id(self) -> SessionId:
-        """Return the session ID."""
-        ...
-
-    @property
-    def state(self) -> SessionState:
-        """Return the current session state."""
-        ...
-
-    @property
-    def wt_available_protocols(self) -> list[str] | None:
-        """Return the requested wt_available_protocols."""
-        ...
-
-    @property
-    def wt_protocol(self) -> str | None:
-        """Return the negotiated wt_protocol."""
-        ...
-
-    @wt_protocol.setter
-    def wt_protocol(self, value: str | None) -> None:
-        """Set the negotiated wt_protocol."""
-        ...
-
-    async def close(self, *, error_code: int = 0, reason: str | None = None) -> None:
-        """Terminate the session."""
-        ...
+    STREAM_STOP_SENDING_RECEIVED = "stream_stop_sending_received"
 
 
 class SessionState(StrEnum):
-    """Enumeration of WebTransport session states."""
+    """Enumeration of session states."""
 
     CLOSED = "closed"
     CLOSING = "closing"
@@ -140,35 +80,19 @@ class StreamDirection(StrEnum):
     SEND_ONLY = "send_only"
 
 
-class StreamState(StrEnum):
-    """Enumeration of WebTransport stream states."""
+class StreamReceiveState(StrEnum):
+    """Enumeration of stream receive states."""
 
-    CLOSED = "closed"
-    HALF_CLOSED_LOCAL = "half_closed_local"
-    HALF_CLOSED_REMOTE = "half_closed_remote"
-    OPEN = "open"
-    RESET_RECEIVED = "reset_received"
+    DATA_READ = "data_read"
+    DATA_RECEIVED = "data_received"
+    RECEIVE = "receive"
+    RESET_READ = "reset_read"
+
+
+class StreamSendState(StrEnum):
+    """Enumeration of stream send states."""
+
+    DATA_RECEIVED = "data_received"
+    DATA_SENT = "data_sent"
+    READY = "ready"
     RESET_SENT = "reset_sent"
-
-
-@runtime_checkable
-class WebTransportProtocol(Protocol):
-    """Define the interface for the underlying WebTransport layer."""
-
-    __slots__ = ()
-
-    def connection_lost(self, exc: Exception | None) -> None:
-        """Handle connection loss."""
-        ...
-
-    def connection_made(self, transport: asyncio.BaseTransport) -> None:
-        """Handle connection establishment."""
-        ...
-
-    def datagram_received(self, data: Buffer, addr: Address) -> None:
-        """Handle incoming datagrams."""
-        ...
-
-    def error_received(self, exc: Exception) -> None:
-        """Handle incoming transport errors."""
-        ...

@@ -1,4 +1,4 @@
-"""Shared, general-purpose utilities."""
+"""General utilities."""
 
 from __future__ import annotations
 

@@ -1,10 +1,10 @@
-//! QPACK encoder and decoder bindings with safe Rust abstractions.
+//! QPACK codec.
 
 use std::cell::UnsafeCell;
 use std::cmp;
 use std::ffi::{c_char, c_int, c_void};
 use std::marker::PhantomPinned;
-use std::mem::MaybeUninit;
+use std::mem::{self, MaybeUninit};
 use std::pin::Pin;
 use std::ptr;
 use std::slice;
@@ -14,28 +14,26 @@ use rustc_hash::FxHashMap;
 use tracing::debug;
 
 use crate::common::types::Headers;
+use crate::protocol::qpack::sys::{
+    lsqpack_dec, lsqpack_dec_hset_if, lsqpack_enc, lsqpack_enc_status, lsqpack_read_header_status,
+    lsxpack_header,
+};
 
-// Internal FFI bindings module.
 mod sys {
     #![allow(warnings, clippy::all, clippy::pedantic, clippy::restriction)]
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 
-// Fixed byte size for the decoder instruction output buffer.
 const DECODER_INSTRUCTION_BUFFER_SIZE: usize = 1024;
-// Decoder pending block capacity for DoS protection.
 const DECODER_PENDING_BLOCK_CAPACITY: usize = 256;
-// Maximum retry iterations for encoder memory fallback.
 const ENCODER_FALLBACK_RETRY: usize = 4;
 
-// Header block decoding status.
 #[derive(Debug)]
 pub(super) enum DecodeStatus {
     Blocked,
-    Complete(Headers),
+    Done(Headers),
 }
 
-// High-level wrapper for the QPACK Decoder.
 pub(super) struct Decoder {
     inner: Pin<Box<InnerDecoder>>,
     pending_blocks: FxHashMap<u64, Pin<Box<PendingBlock>>>,
@@ -44,17 +42,16 @@ pub(super) struct Decoder {
 unsafe impl Send for Decoder {}
 
 impl Decoder {
-    // Decoder instance initialization.
     pub(super) fn new(max_table_capacity: u32, blocked_streams: u32) -> Self {
         let mut inner = Box::pin(InnerDecoder {
             _pin: PhantomPinned,
-            cb: sys::lsqpack_dec_hset_if {
-                dhi_unblocked: Some(cb_unblocked),
-                dhi_prepare_decode: Some(cb_prepare_decode),
-                dhi_process_header: Some(cb_process_header),
-            },
-            dec_buffer: Vec::with_capacity(DECODER_INSTRUCTION_BUFFER_SIZE),
             decoder: unsafe { MaybeUninit::zeroed().assume_init() },
+            decoder_buffer: Vec::with_capacity(DECODER_INSTRUCTION_BUFFER_SIZE),
+            header_set_interface: lsqpack_dec_hset_if {
+                dhi_unblocked: Some(dhi_unblocked),
+                dhi_prepare_decode: Some(dhi_prepare_decode),
+                dhi_process_header: Some(dhi_process_header),
+            },
             unblocked_queue: UnsafeCell::new(Vec::new()),
         });
 
@@ -66,7 +63,7 @@ impl Decoder {
                 ptr::null_mut(),
                 max_table_capacity,
                 blocked_streams,
-                &raw const inner_ptr.cb,
+                &raw const inner_ptr.header_set_interface,
                 0,
             );
         }
@@ -77,7 +74,6 @@ impl Decoder {
         }
     }
 
-    // Pending header block abandonment.
     pub(super) fn abandon_header_block(&mut self, stream_id: u64) -> Vec<u8> {
         let Some(pending) = self.pending_blocks.get_mut(&stream_id) else {
             return Vec::new();
@@ -85,28 +81,27 @@ impl Decoder {
 
         let inner = unsafe { self.inner.as_mut().get_unchecked_mut() };
         let pending_ptr = unsafe { pending.as_mut().get_unchecked_mut() };
-        let mut cancel_buf = [0u8; 16];
+        let mut cancel_buffer = [0u8; 16];
 
-        let res = unsafe {
+        let result = unsafe {
             sys::lsqpack_dec_cancel_stream(
                 &raw mut inner.decoder,
-                (&raw mut pending_ptr.ctx).cast::<c_void>(),
-                cancel_buf.as_mut_ptr(),
-                cancel_buf.len(),
+                (&raw mut pending_ptr.context).cast::<c_void>(),
+                cancel_buffer.as_mut_ptr(),
+                cancel_buffer.len(),
             )
         };
 
-        if res < 0 {
+        if result < 0 {
             return Vec::new();
         }
 
         self.pending_blocks.remove(&stream_id);
 
-        let len = usize::try_from(res).unwrap_or(0);
-        cancel_buf.get(..len).unwrap_or_default().to_vec()
+        let len = usize::try_from(result).unwrap_or(0);
+        cancel_buffer.get(..len).unwrap_or_default().to_vec()
     }
 
-    // Header block decoding.
     pub(super) fn decode_header(
         &mut self,
         stream_id: u64,
@@ -114,9 +109,9 @@ impl Decoder {
     ) -> Result<(Vec<u8>, DecodeStatus), QpackError> {
         let inner = unsafe { self.inner.as_mut().get_unchecked_mut() };
 
-        let ctx = HeaderBlockCtx {
+        let context = HeaderBlockContext {
             error: None,
-            header_buf: Vec::with_capacity(4096),
+            header_buffer: Vec::with_capacity(4096),
             header_struct: unsafe { MaybeUninit::zeroed().assume_init() },
             headers: Headers::new(),
             stream_id,
@@ -124,30 +119,27 @@ impl Decoder {
         };
         let pending = Box::pin(PendingBlock {
             _pin: PhantomPinned,
-            _stream_id: stream_id,
-            ctx,
+            context,
             data,
         });
 
         self.execute_decode(stream_id, pending)
     }
 
-    // Encoder stream instruction ingestion.
     pub(super) fn feed_encoder(&mut self, data: &[u8]) -> Result<Vec<u64>, QpackError> {
         let inner = unsafe { self.inner.as_mut().get_unchecked_mut() };
 
-        let res =
+        let result =
             unsafe { sys::lsqpack_dec_enc_in(&raw mut inner.decoder, data.as_ptr(), data.len()) };
 
-        if res == 0 {
-            let unblocked = unsafe { std::mem::take(&mut *inner.unblocked_queue.get()) };
+        if result == 0 {
+            let unblocked = unsafe { mem::take(&mut *inner.unblocked_queue.get()) };
             Ok(unblocked)
         } else {
             Err(QpackError::DecoderError)
         }
     }
 
-    // Blocked header processing resumption.
     pub(super) fn resume_header(
         &mut self,
         stream_id: u64,
@@ -157,13 +149,12 @@ impl Decoder {
         };
 
         match self.execute_read(stream_id, pending) {
-            Ok((instr, DecodeStatus::Complete(h))) => Ok((instr, Some(h))),
-            Ok((instr, DecodeStatus::Blocked)) => Ok((instr, None)),
+            Ok((instructions, DecodeStatus::Done(headers))) => Ok((instructions, Some(headers))),
+            Ok((instructions, DecodeStatus::Blocked)) => Ok((instructions, None)),
             Err(e) => Err(e),
         }
     }
 
-    // FFI cursor advancement and boundary validation.
     fn advance_pending_cursor(
         pending_ptr: &mut PendingBlock,
         new_ptr: *const u8,
@@ -189,44 +180,43 @@ impl Decoder {
         Ok(())
     }
 
-    // C library status evaluation and lifecycle management.
-    fn evaluate_dec_status(
+    fn evaluate_decode_status(
         &mut self,
         stream_id: u64,
         mut pending: Pin<Box<PendingBlock>>,
-        res: sys::lsqpack_read_header_status,
-        dec_len: usize,
+        status: lsqpack_read_header_status,
+        decoder_len: usize,
     ) -> Result<(Vec<u8>, DecodeStatus), QpackError> {
         let inner = unsafe { self.inner.as_mut().get_unchecked_mut() };
 
-        if res != sys::lsqpack_read_header_status::LQRHS_DONE
-            && res != sys::lsqpack_read_header_status::LQRHS_BLOCKED
+        if status != lsqpack_read_header_status::LQRHS_DONE
+            && status != lsqpack_read_header_status::LQRHS_BLOCKED
         {
             return Err(QpackError::DecoderError);
         }
 
-        if dec_len > DECODER_INSTRUCTION_BUFFER_SIZE {
+        if decoder_len > DECODER_INSTRUCTION_BUFFER_SIZE {
             debug!(
-                "qpack_decoder_instruction validate exceeded actual={dec_len} expected=decoder_instruction_buffer_size"
+                "qpack_decoder_instruction validate exceeded actual={decoder_len} expected=decoder_instruction_buffer_size"
             );
             return Err(QpackError::DecoderError);
         }
 
-        // SAFETY: FFI contract guarantees dec_len bytes are initialized upon LQRHS_DONE or LQRHS_BLOCKED.
+        // SAFETY: FFI contract guarantees decoder_len bytes are initialized upon LQRHS_DONE or LQRHS_BLOCKED.
         unsafe {
-            inner.dec_buffer.set_len(dec_len);
+            inner.decoder_buffer.set_len(decoder_len);
         }
 
-        let dec_instructions = inner.dec_buffer.clone();
+        let decoder_instructions = inner.decoder_buffer.clone();
         let pending_ptr = unsafe { pending.as_mut().get_unchecked_mut() };
 
-        if res == sys::lsqpack_read_header_status::LQRHS_DONE {
-            if let Some(e) = pending_ptr.ctx.error {
+        if status == lsqpack_read_header_status::LQRHS_DONE {
+            if let Some(e) = pending_ptr.context.error {
                 Err(e)
             } else {
                 Ok((
-                    dec_instructions,
-                    DecodeStatus::Complete(std::mem::take(&mut pending_ptr.ctx.headers)),
+                    decoder_instructions,
+                    DecodeStatus::Done(mem::take(&mut pending_ptr.context.headers)),
                 ))
             }
         } else {
@@ -240,11 +230,10 @@ impl Decoder {
 
             self.pending_blocks.insert(stream_id, pending);
 
-            Ok((dec_instructions, DecodeStatus::Blocked))
+            Ok((decoder_instructions, DecodeStatus::Blocked))
         }
     }
 
-    // FFI decoding execution.
     fn execute_decode(
         &mut self,
         stream_id: u64,
@@ -252,33 +241,34 @@ impl Decoder {
     ) -> Result<(Vec<u8>, DecodeStatus), QpackError> {
         let inner = unsafe { self.inner.as_mut().get_unchecked_mut() };
 
-        inner.dec_buffer.clear();
-        inner.dec_buffer.reserve(DECODER_INSTRUCTION_BUFFER_SIZE);
-        let mut dec_len = DECODER_INSTRUCTION_BUFFER_SIZE;
+        inner.decoder_buffer.clear();
+        inner
+            .decoder_buffer
+            .reserve(DECODER_INSTRUCTION_BUFFER_SIZE);
+        let mut decoder_len = DECODER_INSTRUCTION_BUFFER_SIZE;
 
         let pending_ptr = unsafe { pending.as_mut().get_unchecked_mut() };
         let mut ffi_ptr = pending_ptr.data.as_ptr();
         let data_len = pending_ptr.data.len();
 
-        let res = unsafe {
+        let status = unsafe {
             sys::lsqpack_dec_header_in(
                 &raw mut inner.decoder,
-                (&raw mut pending_ptr.ctx).cast::<c_void>(),
+                (&raw mut pending_ptr.context).cast::<c_void>(),
                 stream_id,
                 data_len,
                 &raw mut ffi_ptr,
                 data_len,
-                inner.dec_buffer.as_mut_ptr(),
-                &raw mut dec_len,
+                inner.decoder_buffer.as_mut_ptr(),
+                &raw mut decoder_len,
             )
         };
 
         Self::advance_pending_cursor(pending_ptr, ffi_ptr)?;
 
-        self.evaluate_dec_status(stream_id, pending, res, dec_len)
+        self.evaluate_decode_status(stream_id, pending, status, decoder_len)
     }
 
-    // FFI header read execution.
     fn execute_read(
         &mut self,
         stream_id: u64,
@@ -286,32 +276,33 @@ impl Decoder {
     ) -> Result<(Vec<u8>, DecodeStatus), QpackError> {
         let inner = unsafe { self.inner.as_mut().get_unchecked_mut() };
 
-        inner.dec_buffer.clear();
-        inner.dec_buffer.reserve(DECODER_INSTRUCTION_BUFFER_SIZE);
-        let mut dec_len = DECODER_INSTRUCTION_BUFFER_SIZE;
+        inner.decoder_buffer.clear();
+        inner
+            .decoder_buffer
+            .reserve(DECODER_INSTRUCTION_BUFFER_SIZE);
+        let mut decoder_len = DECODER_INSTRUCTION_BUFFER_SIZE;
 
         let pending_ptr = unsafe { pending.as_mut().get_unchecked_mut() };
         let mut ffi_ptr = pending_ptr.data.as_ptr();
         let data_len = pending_ptr.data.len();
 
-        let res = unsafe {
+        let status = unsafe {
             sys::lsqpack_dec_header_read(
                 &raw mut inner.decoder,
-                (&raw mut pending_ptr.ctx).cast::<c_void>(),
+                (&raw mut pending_ptr.context).cast::<c_void>(),
                 &raw mut ffi_ptr,
                 data_len,
-                inner.dec_buffer.as_mut_ptr(),
-                &raw mut dec_len,
+                inner.decoder_buffer.as_mut_ptr(),
+                &raw mut decoder_len,
             )
         };
 
         Self::advance_pending_cursor(pending_ptr, ffi_ptr)?;
 
-        self.evaluate_dec_status(stream_id, pending, res, dec_len)
+        self.evaluate_decode_status(stream_id, pending, status, decoder_len)
     }
 }
 
-// High-level wrapper for the QPACK Encoder.
 pub(super) struct Encoder {
     inner: Pin<Box<InnerEncoder>>,
 }
@@ -319,19 +310,19 @@ pub(super) struct Encoder {
 unsafe impl Send for Encoder {}
 
 impl Encoder {
-    // Encoder instance initialization.
     pub(super) fn new(max_table_capacity: u32, blocked_streams: u32) -> Self {
         let mut inner = Box::pin(InnerEncoder {
             _pin: PhantomPinned,
-            enc_buffer: Vec::new(),
             encoder: unsafe { MaybeUninit::zeroed().assume_init() },
-            hdr_buffer: Vec::new(),
+            encoder_buffer: Vec::new(),
+            header_buffer: Vec::new(),
+            initialized: false,
             max_table_capacity,
         });
 
         let inner_ptr = unsafe { inner.as_mut().get_unchecked_mut() };
 
-        unsafe {
+        let result = unsafe {
             sys::lsqpack_enc_init(
                 &raw mut inner_ptr.encoder,
                 ptr::null_mut(),
@@ -341,13 +332,18 @@ impl Encoder {
                 0,
                 ptr::null_mut(),
                 ptr::null_mut(),
-            );
+            )
+        };
+
+        if result == 0 {
+            inner_ptr.initialized = true;
+        } else {
+            debug!("qpack_encoder create failed actual={result}");
         }
 
         Self { inner }
     }
 
-    // Dynamic table capacity configuration.
     pub(super) fn apply_settings(
         &mut self,
         max_table_capacity: u64,
@@ -375,20 +371,19 @@ impl Encoder {
         }
     }
 
-    // Stream-specific header block encoding.
     pub(super) fn encode(
         &mut self,
         stream_id: u64,
         headers: &Headers,
     ) -> Result<(Vec<u8>, Vec<u8>), QpackError> {
-        let mut q_headers = Vec::with_capacity(headers.len());
-        for (n, v) in headers {
-            q_headers.push(Header::new(n, v)?);
+        let mut qpack_headers = Vec::with_capacity(headers.len());
+        for (key, value) in headers {
+            qpack_headers.push(Header::new(key, value)?);
         }
 
-        let mut ls_headers = Vec::with_capacity(q_headers.len());
-        for h in &mut q_headers {
-            ls_headers.push(h.create_lsxpack_header());
+        let mut lsxpack_headers = Vec::with_capacity(qpack_headers.len());
+        for header in &mut qpack_headers {
+            lsxpack_headers.push(header.create_lsxpack_header());
         }
 
         let inner = unsafe { self.inner.as_mut().get_unchecked_mut() };
@@ -397,35 +392,35 @@ impl Encoder {
             return Err(QpackError::EncoderError);
         }
 
-        inner.enc_buffer.clear();
-        inner.hdr_buffer.clear();
-        inner.enc_buffer.reserve(1024);
-        inner.hdr_buffer.reserve(4096);
+        inner.encoder_buffer.clear();
+        inner.header_buffer.clear();
+        inner.encoder_buffer.reserve(1024);
+        inner.header_buffer.reserve(4096);
 
-        for hdr in &mut ls_headers {
-            inner.encode_single_header(hdr)?;
+        for header in &mut lsxpack_headers {
+            inner.encode_single_header(header)?;
         }
 
         let max_prefix =
             unsafe { sys::lsqpack_enc_header_block_prefix_size(&raw const inner.encoder) };
-        let total_len = max_prefix + inner.hdr_buffer.len();
-        let mut final_hdr_block = Vec::with_capacity(total_len);
+        let total_len = max_prefix + inner.header_buffer.len();
+        let mut final_header_block = Vec::with_capacity(total_len);
 
-        let res = unsafe {
+        let result = unsafe {
             sys::lsqpack_enc_end_header(
                 &raw mut inner.encoder,
-                final_hdr_block.as_mut_ptr(),
+                final_header_block.as_mut_ptr(),
                 max_prefix,
                 ptr::null_mut(),
             )
         };
 
-        if res < 0 {
+        if result < 0 {
             return Err(QpackError::EncoderError);
         }
 
-        let prefix_len = usize::try_from(res).map_err(|e| {
-            debug!("qpack_prefix convert failed actual={res} expected=usize err={e:?}");
+        let prefix_len = usize::try_from(result).map_err(|e| {
+            debug!("qpack_prefix convert failed actual={result} expected=usize err={e:?}");
             QpackError::EncoderError
         })?;
 
@@ -436,31 +431,35 @@ impl Encoder {
         // SAFETY: FFI execution and contiguous non-overlapping copy strictly initialize the extended length.
         unsafe {
             ptr::copy_nonoverlapping(
-                inner.hdr_buffer.as_ptr(),
-                final_hdr_block.as_mut_ptr().add(prefix_len),
-                inner.hdr_buffer.len(),
+                inner.header_buffer.as_ptr(),
+                final_header_block.as_mut_ptr().add(prefix_len),
+                inner.header_buffer.len(),
             );
-            final_hdr_block.set_len(prefix_len + inner.hdr_buffer.len());
+            final_header_block.set_len(prefix_len + inner.header_buffer.len());
         }
 
-        Ok((final_hdr_block, std::mem::take(&mut inner.enc_buffer)))
+        Ok((final_header_block, mem::take(&mut inner.encoder_buffer)))
     }
 
-    // Decoder stream instruction ingestion.
-    pub(super) fn feed_decoder(&mut self, data: &[u8]) {
+    pub(super) fn feed_decoder(&mut self, data: &[u8]) -> Result<(), QpackError> {
         let inner = unsafe { self.inner.as_mut().get_unchecked_mut() };
 
-        unsafe {
+        let result = unsafe {
             sys::lsqpack_enc_decoder_in(
                 &raw mut inner.encoder,
                 data.as_ptr().cast::<u8>(),
                 data.len(),
-            );
+            )
+        };
+
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(QpackError::EncoderError)
         }
     }
 }
 
-// QPACK operation error definitions.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum QpackError {
     DecoderError,
@@ -468,7 +467,6 @@ pub(super) enum QpackError {
     HeaderTooLong,
 }
 
-// HTTP header pair container.
 #[derive(Debug)]
 struct Header {
     buffer: Vec<u8>,
@@ -477,7 +475,6 @@ struct Header {
 }
 
 impl Header {
-    // Header instance constructor.
     fn new<N, V>(name: N, value: V) -> Result<Self, QpackError>
     where
         N: AsRef<[u8]>,
@@ -512,100 +509,104 @@ impl Header {
         })
     }
 
-    // C-compatible lsxpack_header conversion.
-    fn create_lsxpack_header(&mut self) -> sys::lsxpack_header {
-        let mut hdr: sys::lsxpack_header = unsafe { MaybeUninit::zeroed().assume_init() };
+    fn create_lsxpack_header(&mut self) -> lsxpack_header {
+        let mut header: lsxpack_header = unsafe { MaybeUninit::zeroed().assume_init() };
 
-        hdr.buf = self.buffer.as_mut_ptr().cast::<c_char>();
-        hdr.name_len = self.name_len;
-        hdr.name_offset = 0;
-        hdr.val_len = self.value_len;
-        hdr.val_offset = i32::from(self.name_len);
+        header.buf = self.buffer.as_mut_ptr().cast::<c_char>();
+        header.name_len = self.name_len;
+        header.name_offset = 0;
+        header.val_len = self.value_len;
+        header.val_offset = i32::from(self.name_len);
 
-        hdr
+        header
     }
 }
 
-// Header block decoding context.
-struct HeaderBlockCtx {
+struct HeaderBlockContext {
     error: Option<QpackError>,
-    header_buf: Vec<u8>,
-    header_struct: sys::lsxpack_header,
+    header_buffer: Vec<u8>,
+    header_struct: lsxpack_header,
     headers: Headers,
     stream_id: u64,
     unblocked_queue_ptr: *mut Vec<u64>,
 }
 
-// Internal decoder implementation details.
 struct InnerDecoder {
     _pin: PhantomPinned,
-    cb: sys::lsqpack_dec_hset_if,
-    dec_buffer: Vec<u8>,
-    decoder: sys::lsqpack_dec,
+    decoder: lsqpack_dec,
+    decoder_buffer: Vec<u8>,
+    header_set_interface: lsqpack_dec_hset_if,
     unblocked_queue: UnsafeCell<Vec<u64>>,
 }
 
 impl Drop for InnerDecoder {
-    // Resource cleanup.
     fn drop(&mut self) {
         // SAFETY: lsqpack_dec_cleanup strictly avoids callback invocations, precluding UAF of pending blocks.
         unsafe { sys::lsqpack_dec_cleanup(&raw mut self.decoder) };
     }
 }
 
-// Internal encoder implementation details.
 struct InnerEncoder {
     _pin: PhantomPinned,
-    enc_buffer: Vec<u8>,
-    encoder: sys::lsqpack_enc,
-    hdr_buffer: Vec<u8>,
+    encoder: lsqpack_enc,
+    encoder_buffer: Vec<u8>,
+    header_buffer: Vec<u8>,
+    initialized: bool,
     max_table_capacity: u32,
 }
 
 impl Drop for InnerEncoder {
-    // Resource cleanup.
     fn drop(&mut self) {
-        unsafe { sys::lsqpack_enc_cleanup(&raw mut self.encoder) };
+        if self.initialized {
+            // SAFETY: lsqpack_enc_cleanup exclusively frees encoder-internal memory and invokes no callbacks.
+            unsafe { sys::lsqpack_enc_cleanup(&raw mut self.encoder) };
+        }
     }
 }
 
 impl InnerEncoder {
-    // Single header FFI encoding with heuristic allocation and retry fallback.
-    fn encode_single_header(&mut self, hdr: &mut sys::lsxpack_header) -> Result<(), QpackError> {
-        let enc_off = self.enc_buffer.len();
-        let hdr_off = self.hdr_buffer.len();
-        let required_space = usize::from(hdr.name_len) + usize::from(hdr.val_len) + 256;
+    fn encode_single_header(&mut self, header: &mut lsxpack_header) -> Result<(), QpackError> {
+        let encoder_offset = self.encoder_buffer.len();
+        let header_offset = self.header_buffer.len();
+        let required_space = usize::from(header.name_len) + usize::from(header.val_len) + 256;
 
-        if self.enc_buffer.capacity() - enc_off < required_space {
-            self.enc_buffer.reserve(required_space);
+        if self.encoder_buffer.capacity() - encoder_offset < required_space {
+            self.encoder_buffer.reserve(required_space);
         }
-        if self.hdr_buffer.capacity() - hdr_off < required_space {
-            self.hdr_buffer.reserve(required_space);
+        if self.header_buffer.capacity() - header_offset < required_space {
+            self.header_buffer.reserve(required_space);
         }
 
         let mut retries = 0;
 
         loop {
-            let mut enc_written = self.enc_buffer.capacity() - enc_off;
-            let mut hdr_written = self.hdr_buffer.capacity() - hdr_off;
+            let mut encoder_written = self.encoder_buffer.capacity() - encoder_offset;
+            let mut header_written = self.header_buffer.capacity() - header_offset;
 
-            let res = unsafe {
+            let status = unsafe {
                 sys::lsqpack_enc_encode(
                     &raw mut self.encoder,
-                    self.enc_buffer.as_mut_ptr().add(enc_off).cast::<u8>(),
-                    &raw mut enc_written,
-                    self.hdr_buffer.as_mut_ptr().add(hdr_off).cast::<u8>(),
-                    &raw mut hdr_written,
-                    hdr,
+                    self.encoder_buffer
+                        .as_mut_ptr()
+                        .add(encoder_offset)
+                        .cast::<u8>(),
+                    &raw mut encoder_written,
+                    self.header_buffer
+                        .as_mut_ptr()
+                        .add(header_offset)
+                        .cast::<u8>(),
+                    &raw mut header_written,
+                    header,
                     0,
                 )
             };
 
-            if res == sys::lsqpack_enc_status::LQES_OK {
-                // SAFETY: FFI contract guarantees enc_written and hdr_written bytes are initialized upon LQES_OK.
+            if status == lsqpack_enc_status::LQES_OK {
+                // SAFETY: FFI contract guarantees encoder_written and header_written bytes are initialized upon LQES_OK.
                 unsafe {
-                    self.enc_buffer.set_len(enc_off + enc_written);
-                    self.hdr_buffer.set_len(hdr_off + hdr_written);
+                    self.encoder_buffer
+                        .set_len(encoder_offset + encoder_written);
+                    self.header_buffer.set_len(header_offset + header_written);
                 }
                 break;
             }
@@ -616,10 +617,10 @@ impl InnerEncoder {
                 return Err(QpackError::EncoderError);
             }
 
-            if res == sys::lsqpack_enc_status::LQES_NOBUF_ENC {
-                self.enc_buffer.reserve(1024);
-            } else if res == sys::lsqpack_enc_status::LQES_NOBUF_HEAD {
-                self.hdr_buffer.reserve(1024);
+            if status == lsqpack_enc_status::LQES_NOBUF_ENC {
+                self.encoder_buffer.reserve(1024);
+            } else if status == lsqpack_enc_status::LQES_NOBUF_HEAD {
+                self.header_buffer.reserve(1024);
             } else {
                 return Err(QpackError::EncoderError);
             }
@@ -629,99 +630,102 @@ impl InnerEncoder {
     }
 }
 
-// Pinned decoding block context.
 struct PendingBlock {
     _pin: PhantomPinned,
-    _stream_id: u64,
-    ctx: HeaderBlockCtx,
+    context: HeaderBlockContext,
     data: Bytes,
 }
 
-// Decoding buffer preparation callback.
-unsafe extern "C" fn cb_prepare_decode(
-    ctx: *mut c_void,
-    hdr_block: *mut sys::lsxpack_header,
+unsafe extern "C" fn dhi_prepare_decode(
+    hblock_ctx: *mut c_void,
+    header: *mut lsxpack_header,
     space: usize,
-) -> *mut sys::lsxpack_header {
-    let ctx_ref = unsafe { &mut *ctx.cast::<HeaderBlockCtx>() };
+) -> *mut lsxpack_header {
+    let hblock_ctx = unsafe { &mut *hblock_ctx.cast::<HeaderBlockContext>() };
 
-    let used_bytes = if hdr_block.is_null() {
-        ctx_ref.header_struct = unsafe { std::mem::zeroed() };
+    let used_bytes = if header.is_null() {
+        hblock_ctx.header_struct = unsafe { mem::zeroed() };
         0
     } else {
-        ctx_ref.header_struct = unsafe { *hdr_block };
-        let h = &ctx_ref.header_struct;
+        hblock_ctx.header_struct = unsafe { *header };
+        let header = &hblock_ctx.header_struct;
 
-        let name_offset = usize::try_from(h.name_offset).unwrap_or(0);
-        let val_offset = usize::try_from(h.val_offset).unwrap_or(0);
+        let name_offset = usize::try_from(header.name_offset).unwrap_or(0);
+        let val_offset = usize::try_from(header.val_offset).unwrap_or(0);
 
-        let name_end = name_offset + usize::from(h.name_len);
-        let val_end = val_offset + usize::from(h.val_len);
-        cmp::max(name_end, val_end)
+        let name_end = name_offset + usize::from(header.name_len);
+        let value_end = val_offset + usize::from(header.val_len);
+        cmp::max(name_end, value_end)
     };
 
     let Ok(val_len) = u16::try_from(space) else {
-        ctx_ref.error = Some(QpackError::HeaderTooLong);
+        hblock_ctx.error = Some(QpackError::HeaderTooLong);
         return ptr::null_mut();
     };
 
     // SAFETY: Synchronization of the Rust Vec's view of physical bytes written by the C library.
     unsafe {
-        ctx_ref.header_buf.set_len(used_bytes);
+        hblock_ctx.header_buffer.set_len(used_bytes);
     }
-    ctx_ref.header_buf.reserve(space.saturating_sub(used_bytes));
+    hblock_ctx
+        .header_buffer
+        .reserve(space.saturating_sub(used_bytes));
 
-    ctx_ref.header_struct.buf = ctx_ref.header_buf.as_mut_ptr().cast::<c_char>();
-    ctx_ref.header_struct.val_len = val_len;
+    hblock_ctx.header_struct.buf = hblock_ctx.header_buffer.as_mut_ptr().cast::<c_char>();
+    hblock_ctx.header_struct.val_len = val_len;
 
-    &raw mut ctx_ref.header_struct
+    &raw mut hblock_ctx.header_struct
 }
 
-// Header processing callback.
-unsafe extern "C" fn cb_process_header(
-    ctx: *mut c_void,
-    header: *mut sys::lsxpack_header,
+unsafe extern "C" fn dhi_process_header(
+    hblock_ctx: *mut c_void,
+    header: *mut lsxpack_header,
 ) -> c_int {
-    let ctx_ref = unsafe { &mut *ctx.cast::<HeaderBlockCtx>() };
+    let hblock_ctx = unsafe { &mut *hblock_ctx.cast::<HeaderBlockContext>() };
 
-    if ctx_ref.error.is_some() {
+    if hblock_ctx.error.is_some() {
         return 1;
     }
 
-    let h = unsafe { &*header };
+    let header = unsafe { &*header };
 
-    let Ok(name_offset) = usize::try_from(h.name_offset) else {
+    let Ok(name_offset) = usize::try_from(header.name_offset) else {
         return 1;
     };
-    let Ok(val_offset) = usize::try_from(h.val_offset) else {
+    let Ok(val_offset) = usize::try_from(header.val_offset) else {
         return 1;
     };
 
     let name_slice = unsafe {
-        slice::from_raw_parts(h.buf.add(name_offset).cast::<u8>(), usize::from(h.name_len))
+        slice::from_raw_parts(
+            header.buf.add(name_offset).cast::<u8>(),
+            usize::from(header.name_len),
+        )
     };
-    let val_slice = unsafe {
-        slice::from_raw_parts(h.buf.add(val_offset).cast::<u8>(), usize::from(h.val_len))
+    let value_slice = unsafe {
+        slice::from_raw_parts(
+            header.buf.add(val_offset).cast::<u8>(),
+            usize::from(header.val_len),
+        )
     };
 
-    ctx_ref.headers.push((
+    hblock_ctx.headers.push((
         Bytes::copy_from_slice(name_slice),
-        Bytes::copy_from_slice(val_slice),
+        Bytes::copy_from_slice(value_slice),
     ));
 
     0
 }
 
-// Stream unblocked callback.
-unsafe extern "C" fn cb_unblocked(ctx: *mut c_void) {
-    if ctx.is_null() {
+unsafe extern "C" fn dhi_unblocked(hblock_ctx: *mut c_void) {
+    if hblock_ctx.is_null() {
         return;
     }
 
-    let ctx_ref = unsafe { &*ctx.cast::<HeaderBlockCtx>() };
-    let queue = unsafe { &mut *ctx_ref.unblocked_queue_ptr };
+    let hblock_ctx = unsafe { &*hblock_ctx.cast::<HeaderBlockContext>() };
+    let queue = unsafe { &mut *hblock_ctx.unblocked_queue_ptr };
 
-    queue.push(ctx_ref.stream_id);
+    queue.push(hblock_ctx.stream_id);
 }
 
 #[cfg(test)]

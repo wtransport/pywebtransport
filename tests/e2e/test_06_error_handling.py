@@ -89,23 +89,23 @@ async def test_stream_errors() -> bool:
 
     try:
         async with WebTransportClient(config=config) as client:
-            session = await client.connect(url=SERVER_URL)
-            stream = await session.create_bidirectional_stream()
-            await stream.close()
-            logger.info("Stream closed for testing subsequent operations")
+            async with await client.connect(url=SERVER_URL) as session:
+                stream = await session.create_bidirectional_stream()
+                await stream.close()
+                logger.info("Stream closed for testing subsequent operations")
 
-            logger.info("Testing write operation on a closed stream...")
-            try:
-                await stream.write(data=b"This should fail")
-                logger.error("FAILURE: Write on a closed stream should have failed")
-                return False
-            except StreamError:
-                logger.info("   - SUCCESS: Write on a closed stream correctly failed")
-            except Exception as e:
-                logger.error("   - FAILURE: Unexpected error on write: %s", e)
-                return False
+                logger.info("Testing write operation on a closed stream...")
+                try:
+                    await stream.write(data=b"This should fail")
+                    logger.error("FAILURE: Write on a closed stream should have failed")
+                    return False
+                except StreamError:
+                    logger.info("   - SUCCESS: Write on a closed stream correctly failed")
+                except Exception as e:
+                    logger.error("   - FAILURE: Unexpected error on write: %s", e)
+                    return False
 
-            return True
+                return True
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)
         return False
@@ -120,23 +120,23 @@ async def test_read_timeout() -> bool:
 
     try:
         async with WebTransportClient(config=config) as client:
-            session = await client.connect(url=SERVER_URL)
-            stream = await session.create_bidirectional_stream()
-            logger.info("Attempting to read from a stream with no data...")
-            start_time = time.time()
-            try:
-                async with asyncio.timeout(delay=1.0):
-                    await stream.read(max_bytes=1024)
-                logger.error("FAILURE: Read operation should have timed out")
-                return False
-            except asyncio.TimeoutError:
-                duration = time.time() - start_time
-                logger.info("SUCCESS: Read correctly timed out after %.1fs", duration)
-                await stream.close()
-                return True
-            except Exception as e:
-                logger.error("FAILURE: Unexpected exception during read: %s", e)
-                return False
+            async with await client.connect(url=SERVER_URL) as session:
+                stream = await session.create_bidirectional_stream()
+                logger.info("Attempting to read from a stream with no data...")
+                start_time = time.time()
+                try:
+                    async with asyncio.timeout(delay=1.0):
+                        await stream.read(max_size=1024)
+                    logger.error("FAILURE: Read operation should have timed out")
+                    return False
+                except asyncio.TimeoutError:
+                    duration = time.time() - start_time
+                    logger.info("SUCCESS: Read correctly timed out after %.1fs", duration)
+                    await stream.close()
+                    return True
+                except Exception as e:
+                    logger.error("FAILURE: Unexpected exception during read: %s", e)
+                    return False
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)
         return False
@@ -151,34 +151,34 @@ async def test_session_closure_handling() -> bool:
 
     try:
         async with WebTransportClient(config=config) as client:
-            session = await client.connect(url=SERVER_URL)
-            logger.info("Connected, session ID: %d", session.session_id)
-            await session.close()
-            logger.info("Session closed")
+            async with await client.connect(url=SERVER_URL) as session:
+                logger.info("Connected, session ID: %d", session.session_id)
+                await session.close()
+                logger.info("Session closed")
 
-            logger.info("Testing stream creation on closed session...")
-            try:
-                await session.create_bidirectional_stream()
-                logger.error("FAILURE: Stream creation on closed session should have failed")
-                return False
-            except SessionError:
-                logger.info("   - SUCCESS: Stream creation correctly failed")
-            except Exception as e:
-                logger.error("   - FAILURE: Unexpected error: %s", e)
-                return False
+                logger.info("Testing stream creation on closed session...")
+                try:
+                    await session.create_bidirectional_stream()
+                    logger.error("FAILURE: Stream creation on closed session should have failed")
+                    return False
+                except SessionError:
+                    logger.info("   - SUCCESS: Stream creation correctly failed")
+                except Exception as e:
+                    logger.error("   - FAILURE: Unexpected error: %s", e)
+                    return False
 
-            logger.info("Testing datagram send on closed session...")
-            try:
-                await session.send_datagram(data=b"This should fail")
-                logger.error("FAILURE: Datagram send on closed session should have failed")
-                return False
-            except SessionError:
-                logger.info("   - SUCCESS: Datagram send correctly failed")
-            except Exception as e:
-                logger.error("   - FAILURE: Unexpected error: %s", e)
-                return False
+                logger.info("Testing datagram send on closed session...")
+                try:
+                    await session.send_datagram(data=b"This should fail")
+                    logger.error("FAILURE: Datagram send on closed session should have failed")
+                    return False
+                except SessionError:
+                    logger.info("   - SUCCESS: Datagram send correctly failed")
+                except Exception as e:
+                    logger.error("   - FAILURE: Unexpected error: %s", e)
+                    return False
 
-            return True
+                return True
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)
         return False
@@ -193,21 +193,21 @@ async def test_malformed_operations() -> bool:
 
     try:
         async with WebTransportClient(config=config) as client:
-            session = await client.connect(url=SERVER_URL)
-            stream = await session.create_bidirectional_stream()
+            async with await client.connect(url=SERVER_URL) as session:
+                stream = await session.create_bidirectional_stream()
 
-            logger.info("Testing invalid write data (None)...")
-            try:
-                await stream.write(data=None)  # type: ignore
-                logger.error("FAILURE: Writing None should have failed")
-                return False
-            except StreamError:
-                logger.info("   - SUCCESS: Writing None correctly failed with StreamError")
-            except Exception as e:
-                logger.error("   - FAILURE: Unexpected error for None write: %s", e)
-                return False
+                logger.info("Testing invalid write data (None)...")
+                try:
+                    await stream.write(data=None)  # type: ignore
+                    logger.error("FAILURE: Writing None should have failed")
+                    return False
+                except StreamError:
+                    logger.info("   - SUCCESS: Writing None correctly failed with StreamError")
+                except Exception as e:
+                    logger.error("   - FAILURE: Unexpected error for None write: %s", e)
+                    return False
 
-            return True
+                return True
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)
         return False

@@ -1,6 +1,6 @@
 # Performance Benchmarks
 
-This document defines the performance characteristics of the `PyWebTransport` library. The benchmarks quantify the implementation overhead of the protocol stack—covering connection establishment, stream multiplexing, and datagram processing—isolated from physical network latency constraints.
+This document reports the performance characteristics of the `PyWebTransport` library. The benchmarks quantify the implementation overhead of the protocol stack—covering connection establishment, stream multiplexing, and datagram processing—isolated from physical network latency constraints.
 
 ## 1. Test Environment
 
@@ -8,29 +8,27 @@ The test configuration detailed below serves as the reference environment for al
 
 | Component            | Specification                                      |
 | :------------------- | :------------------------------------------------- |
-| **Library Version**  | `PyWebTransport v0.20.1` (Ref: `HEAD`)             |
+| **Library Version**  | `PyWebTransport v0.21.0` (Ref: `HEAD`)             |
 | **Python Runtime**   | CPython 3.12.10                                    |
 | **Rust Compiler**    | rustc 1.97.1                                       |
-| **Event Loop**       | `uvloop` v0.22.1                                   |
-| **Cryptography**     | `rustls` v0.23.42 (ring)                           |
+| **Cryptography**     | `rustls` v0.23.46 (ring)                           |
 | **Test Suite**       | `pytest-benchmark`                                 |
-| **OS / Kernel**      | Debian 12.15 / Linux 6.1.0-51-amd64                |
-| **CPU Architecture** | Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GHz          |
+| **OS / Kernel**      | Debian 12.15 / Linux 6.1.0-54-amd64                |
+| **CPU Architecture** | x86-64                                             |
 | **CPU Scaling**      | Dual-threaded (GIL-bound Loop + Dedicated Reactor) |
 | **vCPU Allocation**  | 4 Cores                                            |
 | **Memory**           | 8 GB                                               |
-| **Hypervisor**       | VMware ESXi 7.0 Update 3                           |
+| **Platform**         | OSU Open Source Lab OpenStack (Multi-Tenant)       |
 
 ## 2. Methodology
 
-The following methodologies are enforced to ensure result reproducibility and statistical significance:
+The following methodologies are enforced to ensure result reproducibility:
 
-- **Event Loop Policy**: `uvloop` is mandated for all test cases.
 - **Garbage Collection**: Measurements incorporate Python garbage collection overhead to reflect production runtime characteristics.
-- **Process Isolation**: All test cases are executed in isolated processes, restarted between runs to ensure deterministic memory states.
-- **Warm-up Phase**: A warm-up cycle precedes all measurements to stabilize branch prediction and internal caching effects.
+- **Process Isolation**: Client and server processes are restarted for each test module.
+- **Warm-up Phase**: Five warm-up rounds precede each timed measurement to exclude one-time initialization costs.
 - **Measurement Metrics**:
-  - **Latency**: Metrics include Minimum, Median (p50), and Maximum values to accurately quantify network jitter and tail latency characteristics.
+  - **Latency**: Metrics include Minimum, Median (p50), and Maximum values.
   - **Throughput**: Reported as the mean sustained data transfer rate.
   - **Overhead**: Application logging is disabled (`CRITICAL` level) to eliminate I/O blocking.
 
@@ -40,29 +38,29 @@ This section details the sustained goodput over reliable WebTransport streams, u
 
 | Scenario     | Result (MB/s) |
 | :----------- | :------------ |
-| **Upload**   | `98.28` MB/s  |
-| **Download** | `97.20` MB/s  |
-| **Duplex**   | `103.24` MB/s |
+| **Upload**   | `209.65` MB/s |
+| **Download** | `219.28` MB/s |
+| **Duplex**   | `230.11` MB/s |
 
 ## 4. Latency & RTT
 
 This section measures the Round-Trip Time (RTT) for application-layer interactions under the methodology defined in Section 2.
 
-| Metric                          | Min       | Median (p50) | Max        |
-| :------------------------------ | :-------- | :----------- | :--------- |
-| **Handshake** (Connect → Ready) | `5.49` ms | `7.13` ms    | `13.11` ms |
-| **Request-Response** (64B)      | `1.99` ms | `2.54` ms    | `4.15` ms  |
-| **Request-Response** (1KB)      | `2.42` ms | `2.87` ms    | `4.27` ms  |
-| **Datagram RTT**                | `1.14` ms | `1.39` ms    | `3.17` ms  |
+| Metric                          | Min       | Median (p50) | Max       |
+| :------------------------------ | :-------- | :----------- | :-------- |
+| **Handshake** (Connect → Ready) | `4.47` ms | `4.78` ms    | `7.67` ms |
+| **Request-Response** (64B)      | `0.82` ms | `0.89` ms    | `1.20` ms |
+| **Request-Response** (1KB)      | `0.77` ms | `0.82` ms    | `1.22` ms |
+| **Datagram RTT**                | `0.27` ms | `0.29` ms    | `0.55` ms |
 
 ## 5. Concurrency & Multiplexing
 
-This section evaluates connection scalability when handling concurrent flows on a single session.
+This section evaluates stream multiplexing within a single session and concurrent connection establishment.
 
-| Metric              | Result       | Description                                                                |
-| :------------------ | :----------- | :------------------------------------------------------------------------- |
-| **RPC Throughput**  | `600.16` RPS | Measures Requests Per Second with 20 concurrent streams using 64KB payload |
-| **Connection Rate** | `552.65` CPS | Measures Connections Per Second sustaining 50 concurrent handshakes        |
+| Metric              | Result         | Description                                                                |
+| :------------------ | :------------- | :------------------------------------------------------------------------- |
+| **RPC Throughput**  | `2,432.63` RPS | Measures Requests Per Second with 20 concurrent streams using 64KB payload |
+| **Connection Rate** | `1,162.39` CPS | Measures Connections Per Second sustaining 50 concurrent handshakes        |
 
 ## 6. Datagram Performance
 
@@ -70,7 +68,7 @@ This section measures the packet processing rate for unreliable datagrams (HTTP/
 
 | Metric        | Result          | Description                                                          |
 | :------------ | :-------------- | :------------------------------------------------------------------- |
-| **Send Rate** | `32,329.88` PPS | Tests utilize a 64-byte payload transmitted in a non-blocking burst. |
+| **Send Rate** | `25,476.76` PPS | Tests utilize a 64-byte payload transmitted in a non-blocking burst. |
 
 ## 7. Resource Utilization
 
@@ -78,4 +76,4 @@ This section measures the system memory footprint per connection in a steady, id
 
 | Metric                         | Result     |
 | :----------------------------- | :--------- |
-| **Memory per Idle Connection** | `63.39` KB |
+| **Memory per Idle Connection** | `60.43` KB |

@@ -38,7 +38,7 @@ allow-workspace = false
 deny = []
 skip = [
     { crate = "getrandom@0.2.17", reason = "Ecosystem diamond dependency bifurcation via ring." },
-    { crate = "shlex@1.3.0", reason = "Build-phase AST toolchain bifurcation via bindgen and cc." },
+    { crate = "syn@3.0.6", reason = "Procedural-macro AST toolchain bifurcation via thiserror-impl." },
     { crate = "windows-sys@0.52.0", reason = "OS-level API binding bifurcation via ring." },
 ]
 skip-tree = []

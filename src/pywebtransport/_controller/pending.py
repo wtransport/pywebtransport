@@ -1,9 +1,10 @@
-"""Internal manager for tracking and completing asyncio requests."""
+"""Pending request manager."""
 
 from __future__ import annotations
 
 import asyncio
 import itertools
+from collections.abc import Callable
 from typing import Any
 
 from pywebtransport.types import RequestId
@@ -12,42 +13,54 @@ __all__: list[str] = []
 
 
 class PendingRequestManager:
-    """Manage the lifecycle of pending asynchronous requests."""
 
     __slots__ = ("_counter", "_requests")
 
     def __init__(self) -> None:
-        """Initialize the instance."""
-        self._requests: dict[RequestId, asyncio.Future[Any]] = {}
         self._counter = itertools.count()
+        self._requests: dict[RequestId, tuple[asyncio.Future[Any], Callable[[Any], Any] | None]] = {}
 
     def complete_request(self, *, request_id: RequestId, result: Any) -> None:
-        """Resolve a pending request with a successful result."""
-        future = self._requests.pop(request_id, None)
-        if future is not None and not future.done():
-            future.set_result(result)
+        request = self._requests.pop(request_id, None)
+        if request is None:
+            return
 
-    def create_request(self) -> tuple[RequestId, asyncio.Future[Any]]:
-        """Create a new tracked request and return its ID and Future."""
+        future, resolver = request
+        if future.done():
+            return
+
+        if resolver is None:
+            future.set_result(result)
+            return
+
+        try:
+            resolved_result = resolver(result)
+        except Exception as e:
+            future.set_exception(e)
+        else:
+            future.set_result(resolved_result)
+
+    def create_request(self, *, resolver: Callable[[Any], Any] | None = None) -> tuple[RequestId, asyncio.Future[Any]]:
         loop = asyncio.get_running_loop()
         future = loop.create_future()
         request_id = next(self._counter)
-        self._requests[request_id] = future
+        self._requests[request_id] = (future, resolver)
         return request_id, future
 
+    def evict_request(self, *, request_id: RequestId) -> None:
+        self._requests.pop(request_id, None)
+
     def fail_all(self, *, exception: Exception) -> None:
-        """Reject all currently pending requests with the given exception."""
         while self._requests:
-            _, future = self._requests.popitem()
+            _, (future, _) = self._requests.popitem()
             if not future.done():
                 future.set_exception(exception)
 
     def fail_request(self, *, request_id: RequestId, exception: Exception) -> None:
-        """Reject a pending request with an exception."""
-        future = self._requests.pop(request_id, None)
-        if future is not None and not future.done():
-            future.set_exception(exception)
+        request = self._requests.pop(request_id, None)
+        if request is None:
+            return
 
-    def unregister_request(self, *, request_id: RequestId) -> None:
-        """Remove a request from active ownership tracking."""
-        self._requests.pop(request_id, None)
+        future, _ = request
+        if not future.done():
+            future.set_exception(exception)

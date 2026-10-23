@@ -21,7 +21,7 @@ cleanup() {
 trap cleanup SIGINT SIGTERM EXIT
 
 echo "Benchmark Suite Initialized"
-echo "Runtime: $($PYTHON_EXEC --version) | Loop: uvloop"
+echo "Runtime: $($PYTHON_EXEC --version)"
 
 for test_file in "${TEST_SUITES[@]}"; do
     test_name=$(basename "${test_file}" .py)

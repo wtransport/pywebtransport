@@ -8,7 +8,7 @@ use super::*;
 
 #[test]
 fn test_alpn_list_integrity() {
-    let protocols = DEFAULT_ALPN_PROTOCOLS;
+    let protocols = ALPN_PROTOCOLS;
 
     assert!(protocols.contains(&"h3"));
     assert!(!protocols.is_empty());
@@ -25,22 +25,34 @@ fn test_alpn_list_integrity() {
 #[case(ERR_APP_PERMISSION_DENIED, 0x1005)]
 #[case(ERR_APP_RESOURCE_EXHAUSTED, 0x1006)]
 #[case(ERR_APP_SERVICE_UNAVAILABLE, 0x1008)]
-fn test_app_error_codes_match_spec(#[case] error_code: u64, #[case] expected: u64) {
+fn test_application_error_codes_match_specification(
+    #[case] error_code: u64,
+    #[case] expected: u64,
+) {
     assert_eq!(error_code, expected);
 }
 
 #[rstest]
-#[case(DEFAULT_EVENT_QUEUE_CAPACITY)]
+#[case(DEFAULT_INITIAL_MAX_STREAMS_BIDI)]
+#[case(DEFAULT_INITIAL_MAX_STREAMS_UNI)]
 #[case(DEFAULT_MAX_CONNECTIONS)]
-#[case(DEFAULT_MAX_EVENT_LISTENERS)]
+#[case(DEFAULT_MAX_CONNECTION_PENDING_EVENTS)]
 #[case(DEFAULT_MAX_PENDING_CAPSULES)]
 #[case(DEFAULT_MAX_PENDING_DATAGRAMS)]
 #[case(DEFAULT_MAX_PENDING_STREAMS)]
 #[case(DEFAULT_MAX_SESSIONS)]
-#[case(DEFAULT_QUIC_MAX_CONCURRENT_BIDI_STREAMS)]
-#[case(DEFAULT_QUIC_MAX_CONCURRENT_UNI_STREAMS)]
+#[case(DEFAULT_MAX_SESSION_PENDING_EVENTS)]
+#[case(DEFAULT_MAX_STREAMS_BIDI)]
+#[case(DEFAULT_MAX_STREAMS_UNI)]
 fn test_concurrency_limits_are_sane(#[case] limit: u64) {
     assert!(limit >= 1);
+}
+
+#[test]
+fn test_default_configuration_identity_values_are_valid() {
+    assert_eq!(DEFAULT_BIND_HOST, "::");
+    assert_eq!(DEFAULT_BIND_PORT, 4433);
+    assert_eq!(DEFAULT_CONGESTION_CONTROL_ALGORITHM, "cubic");
 }
 
 #[rstest]
@@ -62,7 +74,7 @@ fn test_concurrency_limits_are_sane(#[case] limit: u64) {
 #[case(ERR_H3_SETTINGS_ERROR, 0x109)]
 #[case(ERR_H3_STREAM_CREATION_ERROR, 0x103)]
 #[case(ERR_H3_VERSION_FALLBACK, 0x110)]
-fn test_http3_error_codes_match_spec(#[case] error_code: u64, #[case] expected: u64) {
+fn test_http3_error_codes_match_specification(#[case] error_code: u64, #[case] expected: u64) {
     assert_eq!(error_code, expected);
 }
 
@@ -75,7 +87,10 @@ fn test_http3_error_codes_match_spec(#[case] error_code: u64, #[case] expected: 
 #[case(H3_FRAME_TYPE_PUSH_PROMISE, 0x5)]
 #[case(H3_FRAME_TYPE_SETTINGS, 0x4)]
 #[case(H3_FRAME_TYPE_WT_STREAM, 0x41)]
-fn test_http3_frame_types_match_spec(#[case] frame_type: u64, #[case] expected_value: u64) {
+fn test_http3_frame_types_match_specification(
+    #[case] frame_type: u64,
+    #[case] expected_value: u64,
+) {
     assert_eq!(frame_type, expected_value);
 }
 
@@ -85,15 +100,19 @@ fn test_http3_frame_types_match_spec(#[case] frame_type: u64, #[case] expected_v
 #[case(SETTINGS_MAX_FIELD_SECTION_SIZE, 0x06)]
 #[case(SETTINGS_QPACK_BLOCKED_STREAMS, 0x7)]
 #[case(SETTINGS_QPACK_MAX_TABLE_CAPACITY, 0x1)]
+#[case(SETTINGS_RESERVED_ENABLE_PUSH, 0x2)]
+#[case(SETTINGS_RESERVED_INITIAL_WINDOW_SIZE, 0x4)]
+#[case(SETTINGS_RESERVED_MAX_CONCURRENT_STREAMS, 0x3)]
+#[case(SETTINGS_RESERVED_MAX_FRAME_SIZE, 0x5)]
 #[case(SETTINGS_WT_ENABLED, 0x2C7C_F000)]
 #[case(SETTINGS_WT_INITIAL_MAX_DATA, 0x2B61)]
 #[case(SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI, 0x2B65)]
 #[case(SETTINGS_WT_INITIAL_MAX_STREAMS_UNI, 0x2B64)]
-fn test_http3_settings_identifiers_match_spec(
-    #[case] setting_id: u64,
+fn test_http3_settings_identifiers_match_specification(
+    #[case] identifier: u64,
     #[case] expected_value: u64,
 ) {
-    assert_eq!(setting_id, expected_value);
+    assert_eq!(identifier, expected_value);
 }
 
 #[rstest]
@@ -102,24 +121,37 @@ fn test_http3_settings_identifiers_match_spec(
 #[case(H3_STREAM_TYPE_QPACK_DECODER, 0x3)]
 #[case(H3_STREAM_TYPE_QPACK_ENCODER, 0x2)]
 #[case(H3_STREAM_TYPE_WEBTRANSPORT, 0x54)]
-fn test_http3_stream_types_match_spec(#[case] stream_type: u64, #[case] expected_value: u64) {
+fn test_http3_stream_types_match_specification(
+    #[case] stream_type: u64,
+    #[case] expected_value: u64,
+) {
     assert_eq!(stream_type, expected_value);
 }
 
 #[rstest]
 #[case(H3_MIN_UNI_STREAM_COUNT, 3)]
-#[case(WT_SESSION_CONTROL_BIDI_STREAM_COUNT, 1)]
-fn test_infrastructure_stream_counts_match_spec(
+#[case(WT_SESSION_CONNECT_STREAM_COUNT, 1)]
+fn test_infrastructure_stream_counts_match_specification(
     #[case] stream_count: u64,
     #[case] expected_value: u64,
 ) {
     assert_eq!(stream_count, expected_value);
 }
 
+#[rstest]
+#[case(ERR_LIB_CONNECTION_LIMIT_EXCEEDED, 0x1100_0002)]
+#[case(ERR_LIB_CONNECTION_STATE_ERROR, 0x1100_0001)]
+#[case(ERR_LIB_INTERNAL_ERROR, 0x1000_0001)]
+#[case(ERR_LIB_SESSION_STATE_ERROR, 0x1200_0001)]
+#[case(ERR_LIB_STREAM_STATE_ERROR, 0x1300_0001)]
+fn test_library_error_codes_match_specification(#[case] error_code: u64, #[case] expected: u64) {
+    assert_eq!(error_code, expected);
+}
+
 #[test]
 fn test_max_datagram_size_consistency() {
-    const { assert!(DEFAULT_MAX_DATAGRAM_SIZE <= UDP_MAX_DATAGRAM_SIZE) };
-    assert_eq!(UDP_MAX_DATAGRAM_SIZE, 65535);
+    const { assert!(DEFAULT_MAX_DATAGRAM_SIZE <= QUIC_UDP_PAYLOAD_SIZE_LIMIT) };
+    assert_eq!(QUIC_UDP_PAYLOAD_SIZE_LIMIT, 65527);
 }
 
 #[test]
@@ -129,14 +161,32 @@ fn test_max_protocol_streams_limit() {
 }
 
 #[test]
-fn test_quic_varint_limit() {
-    let calculation = (1u64 << 62) - 1;
-    assert_eq!(QUIC_VARINT_LIMIT, calculation);
+fn test_protocol_identification_values_are_valid() {
+    assert_eq!(WT_UPGRADE_TOKEN, b"webtransport-h3");
+}
+
+#[rstest]
+#[case(ERR_QPACK_DECODER_STREAM_ERROR, 0x0202)]
+#[case(ERR_QPACK_DECOMPRESSION_FAILED, 0x0200)]
+#[case(ERR_QPACK_ENCODER_STREAM_ERROR, 0x0201)]
+fn test_qpack_error_codes_match_specification(#[case] error_code: u64, #[case] expected: u64) {
+    assert_eq!(error_code, expected);
 }
 
 #[test]
-fn test_protocol_identification_values_are_valid() {
-    assert_eq!(WT_UPGRADE_TOKEN, b"webtransport-h3");
+fn test_quic_crypto_error_range() {
+    assert_eq!(ERR_QUIC_CRYPTO_ERROR_FIRST, 0x0100);
+    assert_eq!(ERR_QUIC_CRYPTO_ERROR_LAST, 0x01FF);
+    const { assert!(ERR_QUIC_CRYPTO_ERROR_FIRST < ERR_QUIC_CRYPTO_ERROR_LAST) };
+}
+
+#[test]
+fn test_quic_stream_type_count() {
+    assert_eq!(QUIC_STREAM_TYPE_COUNT, 4);
+    assert_eq!(
+        QUIC_STREAM_TYPE_COUNT,
+        (QUIC_STREAM_DIRECTION_MASK | QUIC_STREAM_INITIATOR_MASK) + 1
+    );
 }
 
 #[rstest]
@@ -161,17 +211,30 @@ fn test_quic_transport_error_codes(#[case] error_code: u64, #[case] expected: u6
     assert_eq!(error_code, expected);
 }
 
+#[test]
+fn test_quic_udp_payload_size_range() {
+    assert_eq!(QUIC_MIN_UDP_PAYLOAD_SIZE_LIMIT, 1200);
+    assert_eq!(QUIC_UDP_PAYLOAD_SIZE_LIMIT, 65527);
+    const { assert!(QUIC_MIN_UDP_PAYLOAD_SIZE_LIMIT < QUIC_UDP_PAYLOAD_SIZE_LIMIT) };
+}
+
+#[test]
+fn test_quic_varint_limit() {
+    let calculation = (1u64 << 62) - 1;
+    assert_eq!(QUIC_VARINT_LIMIT, calculation);
+}
+
 #[rstest]
-#[case(DEFAULT_FLOW_CONTROL_WINDOW)]
+#[case(DEFAULT_CONNECTION_RECEIVE_WINDOW)]
+#[case(DEFAULT_CONNECTION_SEND_WINDOW)]
 #[case(DEFAULT_INITIAL_MAX_DATA)]
 #[case(DEFAULT_MAX_CAPSULE_SIZE)]
 #[case(DEFAULT_MAX_DATAGRAM_SIZE)]
 #[case(DEFAULT_MAX_FIELD_SECTION_SIZE)]
-#[case(DEFAULT_MAX_STREAM_READ_BUFFER_SIZE)]
-#[case(DEFAULT_MAX_STREAM_WRITE_BUFFER_SIZE)]
-#[case(DEFAULT_QUIC_RECEIVE_WINDOW)]
-#[case(DEFAULT_QUIC_SEND_WINDOW)]
-#[case(DEFAULT_QUIC_STREAM_RECEIVE_WINDOW)]
+#[case(DEFAULT_MAX_UDP_PAYLOAD_SIZE)]
+#[case(DEFAULT_MAX_WRITE_BUFFER_SIZE)]
+#[case(DEFAULT_SESSION_RECEIVE_WINDOW)]
+#[case(DEFAULT_STREAM_RECEIVE_WINDOW)]
 fn test_size_configuration_defaults_are_nonzero(#[case] size_value: u64) {
     assert!(size_value > 0);
 }
@@ -185,15 +248,14 @@ fn test_stream_direction_masks(#[case] mask: u64, #[case] expected: u64) {
 
 #[rstest]
 #[case(DEFAULT_CLOSE_TIMEOUT)]
-#[case(DEFAULT_CONNECT_TIMEOUT)]
 #[case(DEFAULT_CONNECTION_ATTEMPT_DELAY)]
-#[case(DEFAULT_CONNECTION_IDLE_TIMEOUT)]
+#[case(DEFAULT_CONNECT_TIMEOUT)]
 #[case(DEFAULT_KEEP_ALIVE_INTERVAL)]
+#[case(DEFAULT_MAX_IDLE_TIMEOUT)]
 #[case(DEFAULT_PENDING_EVENT_TTL)]
 #[case(DEFAULT_READ_TIMEOUT)]
 #[case(DEFAULT_RESOURCE_CLEANUP_INTERVAL)]
-#[case(DEFAULT_STREAM_CREATION_TIMEOUT)]
-#[case(DEFAULT_WRITE_TIMEOUT)]
+#[case(DEFAULT_STREAM_CREATE_TIMEOUT)]
 fn test_time_configuration_defaults_are_positive(#[case] timeout_value: f64) {
     assert!(timeout_value > 0.0);
     assert!(timeout_value.is_finite());
@@ -225,8 +287,10 @@ fn test_webtransport_capsule_types() {
 #[case(ERR_WT_FLOW_CONTROL_ERROR, 0x045D_4487)]
 #[case(ERR_WT_REQUIREMENTS_NOT_MET, 0x212C_0D48)]
 #[case(ERR_WT_SESSION_GONE, 0x170D_7B68)]
-#[case(ERR_WT_STREAM_BUFFER_EXCEEDED, 0x52E4_A40F_A8DC)]
-fn test_webtransport_error_codes_match_spec(#[case] error_code: u64, #[case] expected: u64) {
+fn test_webtransport_error_codes_match_specification(
+    #[case] error_code: u64,
+    #[case] expected: u64,
+) {
     assert_eq!(error_code, expected);
 }
 
@@ -251,18 +315,27 @@ fn test_webtransport_frame_types_distinctness() {
 #[rstest]
 #[case(WT_CAPSULE_TYPE_DATA_BLOCKED, 0x190B_4D41)]
 #[case(WT_CAPSULE_TYPE_MAX_DATA, 0x190B_4D3D)]
-#[case(WT_CAPSULE_TYPE_MAX_STREAM_DATA, 0x190B_4D3E)]
 #[case(WT_CAPSULE_TYPE_MAX_STREAMS_BIDI, 0x190B_4D3F)]
 #[case(WT_CAPSULE_TYPE_MAX_STREAMS_UNI, 0x190B_4D40)]
-#[case(WT_CAPSULE_TYPE_STREAM_DATA_BLOCKED, 0x190B_4D42)]
+#[case(WT_CAPSULE_TYPE_MAX_STREAM_DATA, 0x190B_4D3E)]
 #[case(WT_CAPSULE_TYPE_STREAMS_BLOCKED_BIDI, 0x190B_4D43)]
 #[case(WT_CAPSULE_TYPE_STREAMS_BLOCKED_UNI, 0x190B_4D44)]
-fn test_webtransport_frame_types_match_spec(#[case] frame_type: u64, #[case] expected_value: u64) {
+#[case(WT_CAPSULE_TYPE_STREAM_DATA_BLOCKED, 0x190B_4D42)]
+fn test_webtransport_frame_types_match_specification(
+    #[case] frame_type: u64,
+    #[case] expected_value: u64,
+) {
     assert_eq!(frame_type, expected_value);
 }
 
 #[test]
-fn test_webtransport_headers_match_spec() {
+fn test_webtransport_headers_match_specification() {
     assert_eq!(WT_AVAILABLE_PROTOCOLS, b"wt-available-protocols");
     assert_eq!(WT_PROTOCOL, b"wt-protocol");
+}
+
+#[test]
+fn test_webtransport_session_parameters_are_valid() {
+    assert_eq!(WT_EXPORTER_LABEL, "EXPORTER-WebTransport");
+    assert_eq!(WT_CLOSE_REASON_SIZE_LIMIT, 1024);
 }

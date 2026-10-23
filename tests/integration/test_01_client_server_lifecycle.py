@@ -1,106 +1,54 @@
 """Integration tests for the basic client-server connection lifecycle."""
 
 import asyncio
-from typing import Any
 
 import pytest
 
-from pywebtransport import ClientError, ServerApp, WebTransportClient, WebTransportSession
-from pywebtransport.types import EventType, SessionState
+from pywebtransport import ClientError, WebTransportClient, WebTransportServer, WebTransportSession
+from pywebtransport.types import EventType
 
 pytestmark = pytest.mark.asyncio
 
 
-async def test_client_initiated_close(
-    server_app: ServerApp, server: tuple[str, int], client: WebTransportClient
-) -> None:
-    host, port = server
-    url = f"https://{host}:{port}/"
-    server_entered = asyncio.Event()
+async def test_client_initiated_close(sessions: tuple[WebTransportSession, WebTransportSession]) -> None:
+    client_session, server_session = sessions
 
-    @server_app.route(path="/")
-    async def simple_handler(session: WebTransportSession, **kwargs: Any) -> None:
-        server_entered.set()
-        try:
-            await session.events.wait_for(event_type=EventType.SESSION_CLOSED)
-        except (Exception, asyncio.CancelledError):
-            pass
+    async with asyncio.TaskGroup() as task_group:
+        task_group.create_task(coro=server_session.events.wait_for(event_type=EventType.SESSION_CLOSED, timeout=2.0))
+        await client_session.close(reason="client-initiated close")
 
-    session = await client.connect(url=url)
-    assert session.state == SessionState.CONNECTED
-
-    async with asyncio.timeout(delay=2.0):
-        await server_entered.wait()
-
-    await session.close(reason="client-initiated close")
-
-    try:
-        async with asyncio.timeout(delay=2.0):
-            await session.events.wait_for(event_type=EventType.SESSION_CLOSED)
-    except TimeoutError:
-        pass
-
-    assert session.is_closed is True
+    assert client_session.is_closed is True
+    assert server_session.is_closed is True
 
 
-async def test_connection_to_non_existent_route_fails(
-    server: tuple[str, int], client: WebTransportClient, server_app: ServerApp
-) -> None:
-    host, port = server
-    url = f"https://{host}:{port}/nonexistent"
+async def test_rejected_session_fails(client: WebTransportClient, server: WebTransportServer, url: str) -> None:
+    with pytest.RaisesGroup(pytest.RaisesExc(ClientError, match="0x10b")):
+        async with asyncio.TaskGroup() as task_group:
+            task_group.create_task(coro=client.connect(url=url))
+            connection = await anext(server.incoming_connections())
+            server_session = await anext(connection.incoming_sessions())
+            await server_session.reject()
 
-    with pytest.raises(expected_exception=ClientError) as exc_info:
-        await client.connect(url=url)
-
-    error_message = str(exc_info.value).lower()
-    assert "0x10b" in error_message
+    assert server_session.is_closed is True
 
 
-async def test_server_initiated_close(
-    server_app: ServerApp, server: tuple[str, int], client: WebTransportClient
-) -> None:
-    host, port = server
-    url = f"https://{host}:{port}/close-me"
+async def test_server_initiated_close(sessions: tuple[WebTransportSession, WebTransportSession]) -> None:
+    client_session, server_session = sessions
 
-    @server_app.route(path="/close-me")
-    async def immediate_close_handler(session: WebTransportSession, **kwargs: Any) -> None:
-        await asyncio.sleep(delay=0.2)
-        await session.close(reason="server closed immediately")
+    async with asyncio.TaskGroup() as task_group:
+        task_group.create_task(coro=client_session.events.wait_for(event_type=EventType.SESSION_CLOSED, timeout=2.0))
+        await server_session.close(reason="server-initiated close")
 
-    session = await client.connect(url=url)
-
-    try:
-        async with asyncio.timeout(delay=5.0):
-            await session.events.wait_for(event_type=EventType.SESSION_CLOSED)
-    except TimeoutError:
-        if not session.is_closed:
-            pytest.fail(reason="timed out waiting for server-initiated close")
-
-    assert session.is_closed is True
+    assert client_session.is_closed is True
+    assert server_session.is_closed is True
 
 
-async def test_successful_connection_and_session(
-    server_app: ServerApp, server: tuple[str, int], client: WebTransportClient
-) -> None:
-    host, port = server
-    url = f"https://{host}:{port}/"
-    handler_called = asyncio.Event()
+async def test_successful_connection_and_session(sessions: tuple[WebTransportSession, WebTransportSession]) -> None:
+    client_session, server_session = sessions
 
-    @server_app.route(path="/")
-    async def basic_handler(session: WebTransportSession, **kwargs: Any) -> None:
-        handler_called.set()
-        try:
-            await session.events.wait_for(event_type=EventType.SESSION_CLOSED)
-        except asyncio.CancelledError:
-            pass
+    await client_session.ensure_ready()
+    await server_session.ensure_ready()
 
-    session = None
-    try:
-        session = await client.connect(url=url)
-        assert session.state == SessionState.CONNECTED
-
-        async with asyncio.timeout(delay=2.0):
-            await handler_called.wait()
-    finally:
-        if session and not session.is_closed:
-            await session.close()
+    assert client_session.is_closed is False
+    assert server_session.is_closed is False
+    assert server_session.path == client_session.path

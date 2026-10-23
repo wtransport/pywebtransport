@@ -1,10 +1,14 @@
-//! Build configuration for vendored C dependencies and FFI binding generation.
+//! Build integration.
 
 use std::env;
+use std::error;
+use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 
-// Build process execution, compiling C libraries and generating Rust bindings.
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+use bindgen::Builder;
+use cc::Build;
+
+fn main() -> Result<(), Box<dyn error::Error>> {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
     let vendor_dir = manifest_dir.join("vendor");
     let lsqpack_dir = vendor_dir.join("ls-qpack");
@@ -18,7 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let is_windows = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows");
 
-    let mut build = cc::Build::new();
+    let mut build = Build::new();
     build
         .file(&lsqpack_c)
         .file(&xxhash_c)
@@ -38,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed={}", lsqpack_h.display());
     println!("cargo:rerun-if-changed={}", lsxpack_header_h.display());
 
-    let mut builder = bindgen::Builder::default()
+    let mut builder = Builder::default()
         .header(path_to_str(&lsqpack_h)?)
         .header(path_to_str(&lsxpack_header_h)?)
         .clang_arg(format!("-I{}", lsqpack_dir.display()))
@@ -66,14 +70,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-// Path to string conversion helper.
-fn path_to_str(p: &Path) -> Result<&str, std::io::Error> {
-    p.to_str().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
+fn path_to_str(path: &Path) -> Result<&str, io::Error> {
+    path.to_str().ok_or_else(|| {
+        io::Error::new(
+            ErrorKind::InvalidData,
             format!(
                 "build_path convert failed actual={} expected=utf8",
-                p.display()
+                path.display()
             ),
         )
     })

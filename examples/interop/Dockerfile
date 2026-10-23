@@ -1,5 +1,3 @@
-# PyWebTransport Interop Server Dockerfile
-
 FROM python:3.14-slim-trixie
 
 LABEL org.opencontainers.image.source="https://github.com/wtransport/pywebtransport"

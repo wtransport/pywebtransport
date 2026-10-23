@@ -7,22 +7,19 @@ import ssl
 import sys
 import time
 import traceback
+from collections.abc import AsyncGenerator, Callable, Coroutine
 from contextlib import asynccontextmanager
 from dataclasses import asdict
-from typing import Any, AsyncGenerator, Callable, Coroutine, Final
+from typing import Any, Final
 
 from pywebtransport import ClientConfig, WebTransportClient, WebTransportSession
-from pywebtransport.server import ServerDiagnostics
 from pywebtransport.session import SessionDiagnostics
-from pywebtransport.types import EventType
 
 SERVER_HOST: Final[str] = "127.0.0.1"
 SERVER_PORT: Final[int] = 4433
 TIMEOUT: Final[float] = 15.0
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", datefmt="%H:%M:%S"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(name="test_basic_endpoints")
 
 
@@ -48,8 +45,7 @@ class BasicEndpointsTest:
 
         tests: list[Callable[[], Coroutine[Any, Any, None]]] = [
             self.test_01_echo_endpoint,
-            self.test_02_status_endpoint,
-            self.test_03_stats_endpoint,
+            self.test_02_stats_endpoint,
         ]
 
         for test in tests:
@@ -65,57 +61,25 @@ class BasicEndpointsTest:
             stream = await session.create_bidirectional_stream()
             await stream.write(data=payload, end_stream=True)
             response = await stream.read_all()
-            await stream.close()
 
             if response != payload:
                 raise TestFailure(f"Stream Echo mismatch. Sent: {payload!r}, Recv: {response!r}")
             logger.info("[PASS] Stream Echo verified")
 
-            dgram_payload = b"Datagram Test"
-            loop = asyncio.get_running_loop()
-            recv_future = loop.create_future()
-
-            async def on_dgram(evt: Any) -> None:
-                if isinstance(evt.data, dict) and (data := evt.data.get("data")):
-                    if not recv_future.done():
-                        recv_future.set_result(data)
-
-            session.events.on(event_type=EventType.DATAGRAM_RECEIVED, handler=on_dgram)
-            await session.send_datagram(data=dgram_payload)
+            datagram_payload = b"Datagram Test"
+            await session.send_datagram(data=datagram_payload)
 
             try:
                 async with asyncio.timeout(delay=TIMEOUT):
-                    received_dgram = await recv_future
+                    received_datagram = await session.read_datagram()
             except asyncio.TimeoutError:
                 raise TestFailure("Server did not echo datagram") from None
-            finally:
-                session.events.off(event_type=EventType.DATAGRAM_RECEIVED, handler=on_dgram)
 
-            if received_dgram != dgram_payload:
-                raise TestFailure(f"Datagram Echo mismatch. Sent: {dgram_payload!r}, Recv: {received_dgram!r}")
+            if received_datagram != datagram_payload:
+                raise TestFailure(f"Datagram Echo mismatch. Sent: {datagram_payload!r}, Recv: {received_datagram!r}")
             logger.info("[PASS] Datagram Echo verified")
 
-    async def test_02_status_endpoint(self) -> None:
-        """Test /status: Request server diagnostics."""
-        url = self._build_url(path="/status")
-        async with self._connect(url=url) as session:
-            stream = await session.create_bidirectional_stream()
-            await stream.write(data=b"", end_stream=True)
-            data = await stream.read_all()
-
-            try:
-                diag_dict = json.loads(data.decode("utf-8"))
-                diagnostics = ServerDiagnostics(**diag_dict)
-            except Exception as e:
-                raise TestFailure(f"Failed to parse server diagnostics: {e}") from e
-
-            if not isinstance(diagnostics, ServerDiagnostics):
-                raise TestFailure(f"Invalid type: {type(diagnostics)}")
-
-            pretty_json = json.dumps(obj=asdict(obj=diagnostics), indent=2, default=str)
-            logger.info("[PASS] Server Status Received:\n%s", pretty_json)
-
-    async def test_03_stats_endpoint(self) -> None:
+    async def test_02_stats_endpoint(self) -> None:
         """Test /stats: Request session diagnostics."""
         url = self._build_url(path="/stats")
         async with self._connect(url=url) as session:
@@ -124,34 +88,25 @@ class BasicEndpointsTest:
             data = await stream.read_all()
 
             try:
-                stats_dict = json.loads(data.decode("utf-8"))
-                stats = SessionDiagnostics(**stats_dict)
+                diagnostics = SessionDiagnostics(**json.loads(data.decode(encoding="utf-8")))
             except Exception as e:
                 raise TestFailure(f"Failed to parse session diagnostics: {e}") from e
 
-            if not isinstance(stats, SessionDiagnostics):
-                raise TestFailure(f"Invalid type: {type(stats)}")
-
-            pretty_json = json.dumps(obj=asdict(obj=stats), indent=2, default=str)
+            pretty_json = json.dumps(obj=asdict(obj=diagnostics), indent=2, default=str)
             logger.info("[PASS] Session Stats Received:\n%s", pretty_json)
 
-    def _build_url(self, path: str) -> str:
+    def _build_url(self, *, path: str) -> str:
         """Construct the connection URL."""
         return f"https://{SERVER_HOST}:{SERVER_PORT}{path}"
 
     @asynccontextmanager
-    async def _connect(self, url: str) -> AsyncGenerator[WebTransportSession, None]:
+    async def _connect(self, *, url: str) -> AsyncGenerator[WebTransportSession, None]:
         """Establish a new WebTransport session context for testing."""
         async with WebTransportClient(config=self._config) as client:
-            try:
-                session = await client.connect(url=url)
+            async with await client.connect(url=url) as session:
                 yield session
-                if not session.is_closed:
-                    await session.close()
-            except Exception:
-                raise
 
-    async def _execute_test_with_retry(self, name: str, test_func: Callable[[], Coroutine[Any, Any, None]]) -> None:
+    async def _execute_test_with_retry(self, *, name: str, test_func: Callable[[], Coroutine[Any, Any, None]]) -> None:
         """Execute a test case with retries."""
         for attempt in range(1, self.TEST_MAX_RETRIES + 1):
             try:
@@ -183,7 +138,7 @@ class BasicEndpointsTest:
         if passed != total:
             sys.exit(1)
 
-    async def _run_test(self, test_func: Callable[[], Coroutine[Any, Any, None]]) -> None:
+    async def _run_test(self, *, test_func: Callable[[], Coroutine[Any, Any, None]]) -> None:
         """Execute a single test case with logging and error handling."""
         name = test_func.__name__
         logger.info("RUNNING: %s", name)

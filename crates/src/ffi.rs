@@ -13,14 +13,13 @@ mod tracing;
 mod types;
 mod waker;
 
-// FFI sub-module registration.
-pub(super) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    abi::register(m)?;
-    certificate::register(m)?;
-    constants::register(m)?;
-    endpoint::register(m)?;
-    tracing::register(m)?;
-    waker::register(m)?;
+pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    abi::register(module)?;
+    certificate::register(module)?;
+    constants::register(module)?;
+    endpoint::register(module)?;
+    tracing::register(module)?;
+    waker::register(module)?;
 
     Ok(())
 }

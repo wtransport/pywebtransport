@@ -1,5 +1,3 @@
-# PyWebTransport Feature Proposal GitHub Issue Form
-
 name: "Feature Proposal"
 description: "Submit a technical enhancement proposal."
 labels: ["enhancement", "triage"]
