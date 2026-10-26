@@ -95,9 +95,9 @@ pub(crate) fn build_client_config(
             .set_certificate_verifier(Arc::new(NoCertificateVerification));
     }
 
-    let quic_crypto = QuicCryptoClientConfig::try_from(crypto)
+    let crypto = QuicCryptoClientConfig::try_from(crypto)
         .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
-    let mut client_config = QuicClientConfig::new(Arc::new(quic_crypto));
+    let mut client_config = QuicClientConfig::new(Arc::new(crypto));
     let transport_config = build_transport_config(&config.base)?;
 
     client_config.transport_config(Arc::new(transport_config));
@@ -167,9 +167,9 @@ pub(crate) fn build_server_config(
         .map(|protocol| protocol.as_bytes().to_vec())
         .collect();
 
-    let quic_crypto = QuicCryptoServerConfig::try_from(crypto)
+    let crypto = QuicCryptoServerConfig::try_from(crypto)
         .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
-    let mut server_config = QuicServerConfig::with_crypto(Arc::new(quic_crypto));
+    let mut server_config = QuicServerConfig::with_crypto(Arc::new(crypto));
     let transport_config = build_transport_config(&config.base)?;
 
     server_config.transport_config(Arc::new(transport_config));

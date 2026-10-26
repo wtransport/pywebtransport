@@ -85,6 +85,10 @@ fn test_http3_error_codes_match_specification(#[case] error_code: u64, #[case] e
 #[case(H3_FRAME_TYPE_HEADERS, 0x1)]
 #[case(H3_FRAME_TYPE_MAX_PUSH_ID, 0xD)]
 #[case(H3_FRAME_TYPE_PUSH_PROMISE, 0x5)]
+#[case(H3_FRAME_TYPE_RESERVED_CONTINUATION, 0x9)]
+#[case(H3_FRAME_TYPE_RESERVED_PING, 0x6)]
+#[case(H3_FRAME_TYPE_RESERVED_PRIORITY, 0x2)]
+#[case(H3_FRAME_TYPE_RESERVED_WINDOW_UPDATE, 0x8)]
 #[case(H3_FRAME_TYPE_SETTINGS, 0x4)]
 #[case(H3_FRAME_TYPE_WT_STREAM, 0x41)]
 fn test_http3_frame_types_match_specification(
@@ -307,9 +311,9 @@ fn test_webtransport_frame_types_distinctness() {
         WT_CAPSULE_TYPE_STREAMS_BLOCKED_UNI,
     ];
     let total_count = frames.len();
-    let unique_set: HashSet<u64> = frames.into_iter().collect();
+    let unique_frames: HashSet<u64> = frames.into_iter().collect();
 
-    assert_eq!(unique_set.len(), total_count);
+    assert_eq!(unique_frames.len(), total_count);
 }
 
 #[rstest]

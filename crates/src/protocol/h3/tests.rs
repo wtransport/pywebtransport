@@ -12,8 +12,9 @@ use crate::common::constants::{
     ERR_H3_MESSAGE_ERROR, ERR_H3_MISSING_SETTINGS, ERR_H3_SETTINGS_ERROR,
     ERR_H3_STREAM_CREATION_ERROR, ERR_LIB_INTERNAL_ERROR, ERR_QPACK_DECODER_STREAM_ERROR,
     ERR_QPACK_DECOMPRESSION_FAILED, ERR_QPACK_ENCODER_STREAM_ERROR, ERR_WT_REQUIREMENTS_NOT_MET,
-    ERR_WT_SESSION_GONE, H3_FRAME_TYPE_DATA, H3_FRAME_TYPE_HEADERS, H3_FRAME_TYPE_SETTINGS,
-    H3_FRAME_TYPE_WT_STREAM, WT_UPGRADE_TOKEN,
+    ERR_WT_SESSION_GONE, H3_FRAME_TYPE_DATA, H3_FRAME_TYPE_HEADERS,
+    H3_FRAME_TYPE_RESERVED_PRIORITY, H3_FRAME_TYPE_SETTINGS, H3_FRAME_TYPE_WT_STREAM,
+    WT_UPGRADE_TOKEN,
 };
 use crate::common::error::WebTransportError;
 use crate::common::types::{Headers, StreamId};
@@ -361,10 +362,23 @@ fn test_encode_connect_request_success() {
 }
 
 #[test]
+fn test_encode_datagram_invalid_session_id_failure() {
+    let session_id = 2;
+    let result = H3::encode_datagram(session_id, Bytes::from("d"));
+    assert!(matches!(
+        result,
+        Err(WebTransportError::Protocol(
+            Some(ERR_H3_STREAM_CREATION_ERROR),
+            _
+        ))
+    ));
+}
+
+#[test]
 fn test_encode_datagram_success() {
-    let stream_id = 0;
+    let session_id = 0;
     let data = Bytes::from("datagram");
-    let result = H3::encode_datagram(stream_id, data);
+    let result = H3::encode_datagram(session_id, data);
     match result {
         Ok(parts) => {
             assert_eq!(parts.len(), 2);
@@ -381,19 +395,6 @@ fn test_encode_datagram_success() {
 }
 
 #[test]
-fn test_encode_datagram_wrong_stream_type_failure() {
-    let stream_id = 2;
-    let result = H3::encode_datagram(stream_id, Bytes::from("d"));
-    assert!(matches!(
-        result,
-        Err(WebTransportError::Protocol(
-            Some(ERR_H3_STREAM_CREATION_ERROR),
-            _
-        ))
-    ));
-}
-
-#[test]
 fn test_encode_goaway_invalid_identifier_failure() {
     let result = H3::encode_goaway(u64::MAX);
 
@@ -407,7 +408,7 @@ fn test_encode_goaway_invalid_identifier_failure() {
 fn test_encode_goaway_success() {
     let result = H3::encode_goaway(100);
     match result {
-        Ok(bytes) => assert_eq!(bytes.first(), Some(&0x07)),
+        Ok(frame) => assert_eq!(frame.first(), Some(&0x07)),
         Err(e) => {
             assert_eq!(format!("{e:?}"), "");
         }
@@ -572,15 +573,45 @@ fn test_handle_transport_event_datagram_malformed() {
     ));
 }
 
-#[test]
-fn test_handle_transport_event_datagram_success() {
+#[rstest]
+#[case::limit_exceeded(&[0xD0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])]
+#[case::varint_maximum(&[0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])]
+fn test_handle_transport_event_datagram_session_id_exceeded(#[case] data: &'static [u8]) {
+    let mut h3 = create_h3(true);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+
+    let event = ProtocolEvent::TransportDatagramReceived {
+        data: Bytes::from_static(data),
+    };
+
+    let (events, effects) = h3.handle_transport_event(&event, mock.as_connection());
+
+    assert!(events.is_empty());
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CloseQuicConnection {
+            error_code: ERR_H3_DATAGRAM_ERROR,
+            reason: Some(reason),
+        }] if reason == "wt_datagram validate exceeded"
+    ));
+}
+
+#[rstest]
+#[case::first_session(&[0x01], 4)]
+#[case::last_session(&[0xCF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF], 4_611_686_018_427_387_900)]
+fn test_handle_transport_event_datagram_success(
+    #[case] header: &'static [u8],
+    #[case] expected_session_id: u64,
+) {
     let mut h3 = create_h3(true);
     let mock = MockConnectionLayout {
         _padding: [0; 1024],
     };
 
     let mut data = BytesMut::new();
-    data.extend_from_slice(&[0x00]);
+    data.extend_from_slice(header);
     data.extend_from_slice(b"payload");
 
     let event = ProtocolEvent::TransportDatagramReceived {
@@ -590,8 +621,8 @@ fn test_handle_transport_event_datagram_success() {
     let (events, _) = h3.handle_transport_event(&event, mock.as_connection());
 
     assert_eq!(events.len(), 1);
-    if let Some(ProtocolEvent::H3DatagramReceived { stream_id, data }) = events.first() {
-        assert_eq!(*stream_id, 0);
+    if let Some(ProtocolEvent::H3DatagramReceived { session_id, data }) = events.first() {
+        assert_eq!(*session_id, expected_session_id);
         assert_eq!(data.as_ref(), b"payload");
     } else {
         assert_eq!(events.len(), 0);
@@ -776,6 +807,18 @@ fn test_parse_capsules_incomplete_header_buffered(#[case] data: &'static [u8]) {
 
     assert!(events.is_empty());
     assert_eq!(stream.capsule_buffer.as_ref(), data);
+}
+
+#[rstest]
+#[case::missing(&[])]
+#[case::trailing(&[0x00, 0x00])]
+fn test_parse_push_id_invalid_layout_failure(#[case] data: &'static [u8]) {
+    let result = parse_push_id(data);
+
+    assert!(matches!(
+        result,
+        Err(WebTransportError::Protocol(Some(ERR_H3_FRAME_ERROR), _))
+    ));
 }
 
 #[test]
@@ -1435,6 +1478,56 @@ fn test_recv_control_headers_fails() {
         },
         mock.as_connection(),
     );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CloseQuicConnection {
+            error_code: ERR_H3_FRAME_UNEXPECTED,
+            ..
+        }]
+    ));
+}
+
+#[test]
+fn test_recv_control_reserved_frame_fails() {
+    let mut h3 = create_h3(true);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    let stream_id = 3;
+    h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: Bytes::from(vec![0x00]),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: valid_settings_frame(),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    let mut data = BytesMut::new();
+    assert!(matches!(
+        utils::write_varint(&mut data, H3_FRAME_TYPE_RESERVED_PRIORITY),
+        Ok(())
+    ));
+    assert!(matches!(utils::write_varint(&mut data, 0), Ok(())));
+
+    let (_, effects) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: data.freeze(),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
     assert!(matches!(
         effects.as_slice(),
         [Effect::CloseQuicConnection {
@@ -2463,6 +2556,40 @@ fn test_recv_request_data_wt_stream_frame_fails() {
 }
 
 #[test]
+fn test_recv_request_reserved_frame_fails() {
+    let mut h3 = create_h3(true);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    let stream_id = 0;
+    h3.bind_connect_stream(stream_id);
+
+    let mut data = BytesMut::new();
+    assert!(matches!(
+        utils::write_varint(&mut data, H3_FRAME_TYPE_RESERVED_PRIORITY),
+        Ok(())
+    ));
+    assert!(matches!(utils::write_varint(&mut data, 0), Ok(())));
+
+    let (_, effects) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: data.freeze(),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CloseQuicConnection {
+            error_code: ERR_H3_FRAME_UNEXPECTED,
+            ..
+        }]
+    ));
+}
+
+#[test]
 fn test_recv_request_settings_frame_fails() {
     let mut h3 = create_h3(true);
     let mock = MockConnectionLayout {
@@ -2537,6 +2664,7 @@ fn test_recv_unidirectional_stream_cancel_push_frame_fails() {
 
     let mut data = BytesMut::new();
     data.put_u8(0x03);
+    data.put_u8(0x01);
     data.put_u8(0x00);
 
     let (_, effects) = h3.handle_transport_event(
@@ -2841,7 +2969,7 @@ fn test_recv_unidirectional_stream_id_reuse_failure() {
 }
 
 #[test]
-fn test_recv_unidirectional_stream_max_push_id_frame_ignored() {
+fn test_recv_unidirectional_stream_max_push_id_frame_accepted() {
     let mut h3 = create_h3(false);
     let mock = MockConnectionLayout {
         _padding: [0; 1024],
@@ -2857,15 +2985,10 @@ fn test_recv_unidirectional_stream_max_push_id_frame_ignored() {
         mock.as_connection(),
     );
 
-    let mut data = BytesMut::new();
-    data.put_u8(0x0D);
-    data.put_u8(0x01);
-    data.put_u8(0x00);
-
     let (events, effects) = h3.handle_transport_event(
         &ProtocolEvent::TransportStreamDataReceived {
             stream_id: 2,
-            data: data.freeze(),
+            data: Bytes::from(vec![0x0D, 0x01, 0x05, 0x0D, 0x01, 0x05]),
             end_stream: false,
         },
         mock.as_connection(),
@@ -2879,19 +3002,65 @@ fn test_recv_unidirectional_stream_max_push_id_frame_ignored() {
             max_size: u64::MAX,
         }]
     ));
+    assert_eq!(h3.peer_max_push_id, Some(5));
 }
 
 #[test]
-fn test_recv_unidirectional_stream_push_rejected() {
+fn test_recv_unidirectional_stream_max_push_id_frame_client_fails() {
     let mut h3 = create_h3(true);
     let mock = MockConnectionLayout {
         _padding: [0; 1024],
     };
+    h3.settings_received = true;
+
+    h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id: 3,
+            data: Bytes::from(vec![0x00]),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
 
     let (_, effects) = h3.handle_transport_event(
         &ProtocolEvent::TransportStreamDataReceived {
-            stream_id: 7,
-            data: Bytes::from(vec![0x01]),
+            stream_id: 3,
+            data: Bytes::from(vec![0x0D, 0x01, 0x00]),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CloseQuicConnection {
+            error_code: ERR_H3_FRAME_UNEXPECTED,
+            ..
+        }]
+    ));
+}
+
+#[test]
+fn test_recv_unidirectional_stream_max_push_id_frame_reduced_fails() {
+    let mut h3 = create_h3(false);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    h3.settings_received = true;
+
+    h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id: 2,
+            data: Bytes::from(vec![0x00]),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    let (_, effects) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id: 2,
+            data: Bytes::from(vec![0x0D, 0x01, 0x05, 0x0D, 0x01, 0x04]),
             end_stream: false,
         },
         mock.as_connection(),
@@ -2903,6 +3072,34 @@ fn test_recv_unidirectional_stream_push_rejected() {
             error_code: ERR_H3_ID_ERROR,
             ..
         }]
+    ));
+}
+
+#[rstest]
+#[case::client(ERR_H3_ID_ERROR, true, 7)]
+#[case::server(ERR_H3_STREAM_CREATION_ERROR, false, 6)]
+fn test_recv_unidirectional_stream_push_rejected(
+    #[case] expected_error_code: u64,
+    #[case] is_client: bool,
+    #[case] stream_id: StreamId,
+) {
+    let mut h3 = create_h3(is_client);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+
+    let (_, effects) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: Bytes::from(vec![0x01]),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CloseQuicConnection { error_code, .. }] if *error_code == expected_error_code
     ));
 }
 
@@ -3380,6 +3577,27 @@ fn test_validate_request_headers_extended_connect_success() {
 }
 
 #[rstest]
+#[case::asterisk_with_get(b"GET", b"*", false)]
+#[case::asterisk_with_options(b"OPTIONS", b"*", true)]
+#[case::inner_space(b"GET", b"/a b", false)]
+#[case::non_ascii(b"GET", b"/caf\xe9", false)]
+#[case::relative(b"GET", b"a", false)]
+fn test_validate_request_headers_http_path(
+    #[case] method: &'static [u8],
+    #[case] path: &'static [u8],
+    #[case] is_valid: bool,
+) {
+    let headers = vec![
+        (Bytes::from(":method"), Bytes::from_static(method)),
+        (Bytes::from(":scheme"), Bytes::from("https")),
+        (Bytes::from(":authority"), Bytes::from("localhost")),
+        (Bytes::from(":path"), Bytes::from_static(path)),
+    ];
+    let result = validate_request_headers(0, &headers);
+    assert_eq!(result.is_ok(), is_valid);
+}
+
+#[rstest]
 #[case::connection_specific(b"connection", b"close")]
 #[case::invalid_value(b"custom", b"line\nbreak")]
 #[case::te_not_trailers(b"te", b"gzip")]
@@ -3672,11 +3890,11 @@ fn test_validate_settings_enable_connect_protocol_invalid() {
 
 #[test]
 fn test_validate_settings_missing_wt_enabled() {
-    let map = H3Settings::default();
+    let settings = H3Settings::default();
     let mock = MockConnectionLayout {
         _padding: [0; 1024],
     };
-    let result = validate_settings(&map, mock.as_connection());
+    let result = validate_settings(&settings, mock.as_connection());
     assert!(matches!(
         result,
         Err(WebTransportError::Protocol(

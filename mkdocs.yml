@@ -27,11 +27,11 @@ theme:
         name: Switch to light mode
 
   features:
-    - content.code.copy
     - content.code.annotate
+    - content.code.copy
+    - navigation.sections
     - navigation.tabs
     - navigation.tabs.sticky
-    - navigation.sections
     - navigation.top
     - navigation.tracking
     - search.highlight
@@ -74,23 +74,23 @@ plugins:
         python:
           paths: [src]
           options:
-            docstring_style: google
-            show_symbol_type_heading: true
-            show_root_heading: true
+            show_bases: false
             show_source: false
+            show_root_heading: true
             show_root_full_path: false
             show_object_full_path: false
             show_category_heading: false
-            separate_signature: true
-            docstring_section_style: table
+            show_symbol_type_heading: true
             members_order: source
-            show_signature_annotations: true
-            show_bases: false
-            unwrap_annotated: true
-            merge_init_into_class: false
-            show_if_no_docstring: false
             filters:
               - "!^_"
+            docstring_style: google
+            docstring_section_style: table
+            merge_init_into_class: false
+            show_if_no_docstring: false
+            show_signature_annotations: true
+            separate_signature: true
+            unwrap_annotated: true
 
 markdown_extensions:
   - admonition

@@ -117,13 +117,8 @@ async def test_datagram_sizes() -> bool:
     try:
         async with WebTransportClient(config=config) as client:
             async with await client.connect(url=SERVER_URL) as session:
-                connection = session._connection()
-                if not connection:
-                    logger.error("FAILURE: Connection lost unexpectedly")
-                    return False
-
-                diags = await connection.diagnose()
-                remote_max = diags.peer_max_datagram_frame_size
+                diagnostics = await session.connection.diagnose()
+                remote_max = diagnostics.peer_max_datagram_frame_size
                 logger.info("Max datagram size from diagnostics: remote=%d", remote_max)
 
                 if remote_max is None:

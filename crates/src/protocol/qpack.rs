@@ -43,35 +43,35 @@ unsafe impl Send for Decoder {}
 
 impl Decoder {
     pub(super) fn new(max_table_capacity: u32, blocked_streams: u32) -> Self {
-        let mut inner = Box::pin(InnerDecoder {
-            _pin: PhantomPinned,
-            decoder: unsafe { MaybeUninit::zeroed().assume_init() },
-            decoder_buffer: Vec::with_capacity(DECODER_INSTRUCTION_BUFFER_SIZE),
-            header_set_interface: lsqpack_dec_hset_if {
-                dhi_unblocked: Some(dhi_unblocked),
-                dhi_prepare_decode: Some(dhi_prepare_decode),
-                dhi_process_header: Some(dhi_process_header),
-            },
-            unblocked_queue: UnsafeCell::new(Vec::new()),
-        });
+        let mut decoder = Self {
+            inner: Box::pin(InnerDecoder {
+                _pin: PhantomPinned,
+                decoder: unsafe { MaybeUninit::zeroed().assume_init() },
+                decoder_buffer: Vec::with_capacity(DECODER_INSTRUCTION_BUFFER_SIZE),
+                header_set_interface: lsqpack_dec_hset_if {
+                    dhi_unblocked: Some(dhi_unblocked),
+                    dhi_prepare_decode: Some(dhi_prepare_decode),
+                    dhi_process_header: Some(dhi_process_header),
+                },
+                unblocked_queue: UnsafeCell::new(Vec::new()),
+            }),
+            pending_blocks: FxHashMap::default(),
+        };
 
-        let inner_ptr = unsafe { inner.as_mut().get_unchecked_mut() };
+        let inner = unsafe { decoder.inner.as_mut().get_unchecked_mut() };
 
         unsafe {
             sys::lsqpack_dec_init(
-                &raw mut inner_ptr.decoder,
+                &raw mut inner.decoder,
                 ptr::null_mut(),
                 max_table_capacity,
                 blocked_streams,
-                &raw const inner_ptr.header_set_interface,
+                &raw const inner.header_set_interface,
                 0,
             );
         }
 
-        Self {
-            inner,
-            pending_blocks: FxHashMap::default(),
-        }
+        decoder
     }
 
     pub(super) fn abandon_header_block(&mut self, stream_id: u64) -> Vec<u8> {
@@ -80,13 +80,13 @@ impl Decoder {
         };
 
         let inner = unsafe { self.inner.as_mut().get_unchecked_mut() };
-        let pending_ptr = unsafe { pending.as_mut().get_unchecked_mut() };
+        let pending = unsafe { pending.as_mut().get_unchecked_mut() };
         let mut cancel_buffer = [0u8; 16];
 
         let result = unsafe {
             sys::lsqpack_dec_cancel_stream(
                 &raw mut inner.decoder,
-                (&raw mut pending_ptr.context).cast::<c_void>(),
+                (&raw mut pending.context).cast::<c_void>(),
                 cancel_buffer.as_mut_ptr(),
                 cancel_buffer.len(),
             )
@@ -99,6 +99,7 @@ impl Decoder {
         self.pending_blocks.remove(&stream_id);
 
         let len = usize::try_from(result).unwrap_or(0);
+
         cancel_buffer.get(..len).unwrap_or_default().to_vec()
     }
 
@@ -111,8 +112,8 @@ impl Decoder {
 
         let context = HeaderBlockContext {
             error: None,
+            header: unsafe { MaybeUninit::zeroed().assume_init() },
             header_buffer: Vec::with_capacity(4096),
-            header_struct: unsafe { MaybeUninit::zeroed().assume_init() },
             headers: Headers::new(),
             stream_id,
             unblocked_queue_ptr: inner.unblocked_queue.get(),
@@ -156,25 +157,25 @@ impl Decoder {
     }
 
     fn advance_pending_cursor(
-        pending_ptr: &mut PendingBlock,
-        new_ptr: *const u8,
+        pending: &mut PendingBlock,
+        cursor: *const u8,
     ) -> Result<(), QpackError> {
-        let base = pending_ptr.data.as_ptr() as usize;
-        let end = base + pending_ptr.data.len();
-        let new = new_ptr as usize;
+        let base = pending.data.as_ptr() as usize;
+        let end = base + pending.data.len();
+        let cursor = cursor as usize;
 
-        if new < base || new > end {
+        if cursor < base || cursor > end {
             debug!(
-                "qpack_field_section validate invalid actual={new} ptr={base} size={}",
-                pending_ptr.data.len()
+                "qpack_field_section validate invalid actual={cursor} ptr={base} size={}",
+                pending.data.len()
             );
             return Err(QpackError::DecoderError);
         }
 
-        let consumed = new - base;
+        let consumed = cursor - base;
 
         if consumed > 0 {
-            pending_ptr.data = pending_ptr.data.slice(consumed..);
+            pending.data = pending.data.slice(consumed..);
         }
 
         Ok(())
@@ -208,15 +209,16 @@ impl Decoder {
         }
 
         let decoder_instructions = inner.decoder_buffer.clone();
-        let pending_ptr = unsafe { pending.as_mut().get_unchecked_mut() };
 
         if status == lsqpack_read_header_status::LQRHS_DONE {
-            if let Some(e) = pending_ptr.context.error {
+            let pending = unsafe { pending.as_mut().get_unchecked_mut() };
+
+            if let Some(e) = pending.context.error {
                 Err(e)
             } else {
                 Ok((
                     decoder_instructions,
-                    DecodeStatus::Done(mem::take(&mut pending_ptr.context.headers)),
+                    DecodeStatus::Done(mem::take(&mut pending.context.headers)),
                 ))
             }
         } else {
@@ -247,24 +249,28 @@ impl Decoder {
             .reserve(DECODER_INSTRUCTION_BUFFER_SIZE);
         let mut decoder_len = DECODER_INSTRUCTION_BUFFER_SIZE;
 
-        let pending_ptr = unsafe { pending.as_mut().get_unchecked_mut() };
-        let mut ffi_ptr = pending_ptr.data.as_ptr();
-        let data_len = pending_ptr.data.len();
+        let status = {
+            let pending = unsafe { pending.as_mut().get_unchecked_mut() };
+            let mut cursor = pending.data.as_ptr();
+            let data_len = pending.data.len();
 
-        let status = unsafe {
-            sys::lsqpack_dec_header_in(
-                &raw mut inner.decoder,
-                (&raw mut pending_ptr.context).cast::<c_void>(),
-                stream_id,
-                data_len,
-                &raw mut ffi_ptr,
-                data_len,
-                inner.decoder_buffer.as_mut_ptr(),
-                &raw mut decoder_len,
-            )
+            let status = unsafe {
+                sys::lsqpack_dec_header_in(
+                    &raw mut inner.decoder,
+                    (&raw mut pending.context).cast::<c_void>(),
+                    stream_id,
+                    data_len,
+                    &raw mut cursor,
+                    data_len,
+                    inner.decoder_buffer.as_mut_ptr(),
+                    &raw mut decoder_len,
+                )
+            };
+
+            Self::advance_pending_cursor(pending, cursor)?;
+
+            status
         };
-
-        Self::advance_pending_cursor(pending_ptr, ffi_ptr)?;
 
         self.evaluate_decode_status(stream_id, pending, status, decoder_len)
     }
@@ -282,22 +288,26 @@ impl Decoder {
             .reserve(DECODER_INSTRUCTION_BUFFER_SIZE);
         let mut decoder_len = DECODER_INSTRUCTION_BUFFER_SIZE;
 
-        let pending_ptr = unsafe { pending.as_mut().get_unchecked_mut() };
-        let mut ffi_ptr = pending_ptr.data.as_ptr();
-        let data_len = pending_ptr.data.len();
+        let status = {
+            let pending = unsafe { pending.as_mut().get_unchecked_mut() };
+            let mut cursor = pending.data.as_ptr();
+            let data_len = pending.data.len();
 
-        let status = unsafe {
-            sys::lsqpack_dec_header_read(
-                &raw mut inner.decoder,
-                (&raw mut pending_ptr.context).cast::<c_void>(),
-                &raw mut ffi_ptr,
-                data_len,
-                inner.decoder_buffer.as_mut_ptr(),
-                &raw mut decoder_len,
-            )
+            let status = unsafe {
+                sys::lsqpack_dec_header_read(
+                    &raw mut inner.decoder,
+                    (&raw mut pending.context).cast::<c_void>(),
+                    &raw mut cursor,
+                    data_len,
+                    inner.decoder_buffer.as_mut_ptr(),
+                    &raw mut decoder_len,
+                )
+            };
+
+            Self::advance_pending_cursor(pending, cursor)?;
+
+            status
         };
-
-        Self::advance_pending_cursor(pending_ptr, ffi_ptr)?;
 
         self.evaluate_decode_status(stream_id, pending, status, decoder_len)
     }
@@ -311,20 +321,22 @@ unsafe impl Send for Encoder {}
 
 impl Encoder {
     pub(super) fn new(max_table_capacity: u32, blocked_streams: u32) -> Self {
-        let mut inner = Box::pin(InnerEncoder {
-            _pin: PhantomPinned,
-            encoder: unsafe { MaybeUninit::zeroed().assume_init() },
-            encoder_buffer: Vec::new(),
-            header_buffer: Vec::new(),
-            initialized: false,
-            max_table_capacity,
-        });
+        let mut encoder = Self {
+            inner: Box::pin(InnerEncoder {
+                _pin: PhantomPinned,
+                encoder: unsafe { MaybeUninit::zeroed().assume_init() },
+                encoder_buffer: Vec::new(),
+                header_buffer: Vec::new(),
+                initialized: false,
+                max_table_capacity,
+            }),
+        };
 
-        let inner_ptr = unsafe { inner.as_mut().get_unchecked_mut() };
+        let inner = unsafe { encoder.inner.as_mut().get_unchecked_mut() };
 
         let result = unsafe {
             sys::lsqpack_enc_init(
-                &raw mut inner_ptr.encoder,
+                &raw mut inner.encoder,
                 ptr::null_mut(),
                 max_table_capacity,
                 0,
@@ -336,12 +348,12 @@ impl Encoder {
         };
 
         if result == 0 {
-            inner_ptr.initialized = true;
+            inner.initialized = true;
         } else {
             debug!("qpack_encoder create failed actual={result}");
         }
 
-        Self { inner }
+        encoder
     }
 
     pub(super) fn apply_settings(
@@ -524,8 +536,8 @@ impl Header {
 
 struct HeaderBlockContext {
     error: Option<QpackError>,
+    header: lsxpack_header,
     header_buffer: Vec<u8>,
-    header_struct: lsxpack_header,
     headers: Headers,
     stream_id: u64,
     unblocked_queue_ptr: *mut Vec<u64>,
@@ -644,11 +656,11 @@ unsafe extern "C" fn dhi_prepare_decode(
     let hblock_ctx = unsafe { &mut *hblock_ctx.cast::<HeaderBlockContext>() };
 
     let used_bytes = if header.is_null() {
-        hblock_ctx.header_struct = unsafe { mem::zeroed() };
+        hblock_ctx.header = unsafe { mem::zeroed() };
         0
     } else {
-        hblock_ctx.header_struct = unsafe { *header };
-        let header = &hblock_ctx.header_struct;
+        hblock_ctx.header = unsafe { *header };
+        let header = &hblock_ctx.header;
 
         let name_offset = usize::try_from(header.name_offset).unwrap_or(0);
         let val_offset = usize::try_from(header.val_offset).unwrap_or(0);
@@ -671,10 +683,10 @@ unsafe extern "C" fn dhi_prepare_decode(
         .header_buffer
         .reserve(space.saturating_sub(used_bytes));
 
-    hblock_ctx.header_struct.buf = hblock_ctx.header_buffer.as_mut_ptr().cast::<c_char>();
-    hblock_ctx.header_struct.val_len = val_len;
+    hblock_ctx.header.buf = hblock_ctx.header_buffer.as_mut_ptr().cast::<c_char>();
+    hblock_ctx.header.val_len = val_len;
 
-    &raw mut hblock_ctx.header_struct
+    &raw mut hblock_ctx.header
 }
 
 unsafe extern "C" fn dhi_process_header(
@@ -696,23 +708,22 @@ unsafe extern "C" fn dhi_process_header(
         return 1;
     };
 
-    let name_slice = unsafe {
+    let name = unsafe {
         slice::from_raw_parts(
             header.buf.add(name_offset).cast::<u8>(),
             usize::from(header.name_len),
         )
     };
-    let value_slice = unsafe {
+    let value = unsafe {
         slice::from_raw_parts(
             header.buf.add(val_offset).cast::<u8>(),
             usize::from(header.val_len),
         )
     };
 
-    hblock_ctx.headers.push((
-        Bytes::copy_from_slice(name_slice),
-        Bytes::copy_from_slice(value_slice),
-    ));
+    hblock_ctx
+        .headers
+        .push((Bytes::copy_from_slice(name), Bytes::copy_from_slice(value)));
 
     0
 }

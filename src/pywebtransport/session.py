@@ -30,7 +30,7 @@ from pywebtransport.stream import (
     WebTransportSendStream,
     WebTransportStream,
 )
-from pywebtransport.types import Address, Buffer, ErrorCode, Headers, SessionId, SessionState
+from pywebtransport.types import Buffer, ErrorCode, Headers, SessionId, SessionState
 
 if TYPE_CHECKING:
     from pywebtransport.connection import WebTransportConnection
@@ -138,6 +138,14 @@ class WebTransportSession:
         await self.close(error_code=error_code)
 
     @property
+    def connection(self) -> WebTransportConnection:
+        """Return the connection."""
+        connection = self._connection()
+        if connection is None:
+            raise ConnectionError(message="wt_connection resolve failed")
+        return connection
+
+    @property
     def headers(self) -> Headers:
         """Return the headers."""
         return self._headers.copy()
@@ -151,14 +159,6 @@ class WebTransportSession:
     def path(self) -> str:
         """Return the path."""
         return self._path
-
-    @property
-    def remote_address(self) -> Address | None:
-        """Return the remote address."""
-        connection = self._connection()
-        if connection is not None:
-            return connection.remote_address
-        return None
 
     @property
     def session_id(self) -> SessionId:
@@ -182,9 +182,7 @@ class WebTransportSession:
                 message=f"wt_session resolve failed session_id={self.session_id}", session_id=self.session_id
             )
 
-        connection = self._connection()
-        if connection is None:
-            raise ConnectionError(message="wt_connection resolve failed")
+        connection = self.connection
 
         try:
             await connection._execute_request(
@@ -209,9 +207,7 @@ class WebTransportSession:
 
         _logger.debug("wt_session close session_id=%d err=%s", self.session_id, error_code)
 
-        connection = self._connection()
-        if connection is None:
-            return
+        connection = self.connection
 
         try:
             await connection._execute_request(
@@ -258,9 +254,7 @@ class WebTransportSession:
                 message=f"wt_session resolve failed session_id={self.session_id}", session_id=self.session_id
             )
 
-        connection = self._connection()
-        if connection is None:
-            raise ConnectionError(message="wt_connection resolve failed")
+        connection = self.connection
 
         try:
             diagnostic_data: dict[str, Any] = await connection._execute_request(
@@ -288,9 +282,7 @@ class WebTransportSession:
                 message=f"wt_session resolve failed session_id={self.session_id}", session_id=self.session_id
             )
 
-        connection = self._connection()
-        if connection is None:
-            raise ConnectionError(message="wt_connection resolve failed")
+        connection = self.connection
 
         try:
             return cast(
@@ -336,9 +328,7 @@ class WebTransportSession:
                         message=f"wt_session resolve failed session_id={self.session_id}", session_id=self.session_id
                     )
 
-                connection = self._connection()
-                if connection is None:
-                    raise ConnectionError(message="wt_connection resolve failed")
+                connection = self.connection
 
                 async def receive(*, request: Awaitable[bytes]) -> bytes | Exception:
                     try:
@@ -379,9 +369,7 @@ class WebTransportSession:
                 message=f"wt_session resolve failed session_id={self.session_id}", session_id=self.session_id
             )
 
-        connection = self._connection()
-        if connection is None:
-            raise ConnectionError(message="wt_connection resolve failed")
+        connection = self.connection
 
         try:
             await connection._execute_request(
@@ -406,9 +394,7 @@ class WebTransportSession:
                 message=f"wt_session resolve failed session_id={self.session_id}", session_id=self.session_id
             )
 
-        connection = self._connection()
-        if connection is None:
-            raise ConnectionError(message="wt_connection resolve failed")
+        connection = self.connection
 
         try:
             await connection._execute_request(
@@ -431,9 +417,7 @@ class WebTransportSession:
                 message=f"wt_session resolve failed session_id={self.session_id}", session_id=self.session_id
             )
 
-        connection = self._connection()
-        if connection is None:
-            raise ConnectionError(message="wt_connection resolve failed")
+        connection = self.connection
 
         try:
             timeout = connection.config.stream_create_timeout

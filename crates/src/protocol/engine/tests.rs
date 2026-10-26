@@ -383,7 +383,7 @@ fn test_encode_capsule() {
     let result = WebTransportEngine::encode_capsule(0, 0x1, data, false);
 
     let effects = match result {
-        Ok(e) => e,
+        Ok(effects) => effects,
         Err(e) => {
             assert_eq!(format!("{e:?}"), "");
             return;
@@ -412,7 +412,7 @@ fn test_encode_connect_request(mut fixture_engine_client: WebTransportEngine) {
     );
 
     let effects = match result {
-        Ok(e) => e,
+        Ok(effects) => effects,
         Err(e) => {
             assert_eq!(format!("{e:?}"), "");
             return;
@@ -438,7 +438,7 @@ fn test_encode_datagram() {
     let result = WebTransportEngine::encode_datagram(0, data.clone());
 
     let effects = match result {
-        Ok(e) => e,
+        Ok(effects) => effects,
         Err(e) => {
             assert_eq!(format!("{e:?}"), "");
             return;
@@ -487,7 +487,7 @@ fn test_encode_headers(mut fixture_engine_server: WebTransportEngine) {
     let result = fixture_engine_server.encode_headers(100, &headers, true);
 
     let effects = match result {
-        Ok(e) => e,
+        Ok(effects) => effects,
         Err(e) => {
             assert_eq!(format!("{e:?}"), "");
             return;
@@ -648,7 +648,7 @@ fn test_handle_transport_capsule_close_session_stops_connect_stream(
 })]
 #[case::connect_stream_closed(ProtocolEvent::H3ConnectStreamClosed { stream_id: 0 })]
 #[case::datagram_received(ProtocolEvent::H3DatagramReceived {
-    stream_id: 0,
+    session_id: 0,
     data: Bytes::from_static(b"datagram"),
 })]
 #[case::goaway_received(ProtocolEvent::H3GoawayReceived)]

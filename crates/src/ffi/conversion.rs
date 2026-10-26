@@ -259,7 +259,7 @@ impl<'py> IntoPyObject<'py> for RuntimeEvent {
                 remote_address,
                 effects,
             } => {
-                let address_tuple = PyTuple::new(
+                let remote_address = PyTuple::new(
                     py,
                     &[
                         remote_address
@@ -274,7 +274,7 @@ impl<'py> IntoPyObject<'py> for RuntimeEvent {
                     py,
                     &[
                         handle.0.into_pyobject(py)?.into_any(),
-                        address_tuple.into_any(),
+                        remote_address.into_any(),
                         effects.into_pyobject(py)?.into_any(),
                     ],
                 )?;
@@ -308,13 +308,12 @@ impl<'a, 'py> FromPyObject<'a, 'py> for ProtocolEvent {
     type Error = PyErr;
 
     fn extract(obj: Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
-        let bound = obj.as_borrowed();
-        let tuple = bound
+        let event = obj
             .extract::<Bound<'_, PyTuple>>()
             .map_err(|e| PyValueError::new_err(format!("rt_event convert invalid err={e}")))?;
 
-        let opcode = tuple.get_item(0)?.extract::<u8>()?;
-        let payload = tuple
+        let opcode = event.get_item(0)?.extract::<u8>()?;
+        let payload = event
             .get_item(1)?
             .extract::<Bound<'_, PyTuple>>()
             .map_err(|e| PyValueError::new_err(format!("rt_event convert invalid err={e}")))?;
@@ -440,40 +439,40 @@ fn connection_diagnostics_to_py<'py>(
     py: Python<'py>,
     diagnostics: &ConnectionDiagnostics,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let dict = PyDict::new(py);
-    dict.set_item("close_code", diagnostics.close_code)?;
-    dict.set_item("close_reason", &diagnostics.close_reason)?;
-    dict.set_item("closed_at", diagnostics.closed_at)?;
-    dict.set_item("connected_at", diagnostics.connected_at)?;
-    dict.set_item("connection_handle", diagnostics.connection_handle)?;
-    dict.set_item("handshake_completed", diagnostics.handshake_completed)?;
-    dict.set_item("is_client", diagnostics.is_client)?;
-    dict.set_item("local_goaway_sent", diagnostics.local_goaway_sent)?;
-    dict.set_item("peer_goaway_received", diagnostics.peer_goaway_received)?;
-    dict.set_item("peer_initial_max_data", diagnostics.peer_initial_max_data)?;
-    dict.set_item(
+    let py_diagnostics = PyDict::new(py);
+    py_diagnostics.set_item("close_code", diagnostics.close_code)?;
+    py_diagnostics.set_item("close_reason", &diagnostics.close_reason)?;
+    py_diagnostics.set_item("closed_at", diagnostics.closed_at)?;
+    py_diagnostics.set_item("connected_at", diagnostics.connected_at)?;
+    py_diagnostics.set_item("connection_handle", diagnostics.connection_handle)?;
+    py_diagnostics.set_item("handshake_completed", diagnostics.handshake_completed)?;
+    py_diagnostics.set_item("is_client", diagnostics.is_client)?;
+    py_diagnostics.set_item("local_goaway_sent", diagnostics.local_goaway_sent)?;
+    py_diagnostics.set_item("peer_goaway_received", diagnostics.peer_goaway_received)?;
+    py_diagnostics.set_item("peer_initial_max_data", diagnostics.peer_initial_max_data)?;
+    py_diagnostics.set_item(
         "peer_initial_max_streams_bidi",
         diagnostics.peer_initial_max_streams_bidi,
     )?;
-    dict.set_item(
+    py_diagnostics.set_item(
         "peer_initial_max_streams_uni",
         diagnostics.peer_initial_max_streams_uni,
     )?;
-    dict.set_item(
+    py_diagnostics.set_item(
         "peer_max_datagram_frame_size",
         diagnostics.peer_max_datagram_frame_size,
     )?;
-    dict.set_item("peer_settings_received", diagnostics.peer_settings_received)?;
-    dict.set_item("state", diagnostics.state)?;
+    py_diagnostics.set_item("peer_settings_received", diagnostics.peer_settings_received)?;
+    py_diagnostics.set_item("state", diagnostics.state)?;
 
-    Ok(dict.into_any())
+    Ok(py_diagnostics.into_any())
 }
 
 fn extract_bytes(object: &Bound<'_, PyAny>) -> PyResult<Bytes> {
     if let Ok(buffer) = object.extract::<PyBuffer<u8>>() {
         Ok(Bytes::from(buffer.to_vec(object.py())?))
-    } else if let Ok(string) = object.extract::<Bound<'_, PyString>>() {
-        Ok(Bytes::copy_from_slice(string.to_str()?.as_bytes()))
+    } else if let Ok(object) = object.extract::<Bound<'_, PyString>>() {
+        Ok(Bytes::copy_from_slice(object.to_str()?.as_bytes()))
     } else {
         Err(PyValueError::new_err("mem_buffer convert invalid"))
     }
@@ -482,24 +481,24 @@ fn extract_bytes(object: &Bound<'_, PyAny>) -> PyResult<Bytes> {
 fn extract_headers(object: &Bound<'_, PyAny>) -> PyResult<Headers> {
     let mut headers = Vec::new();
 
-    if let Ok(dict) = object.extract::<Bound<'_, PyDict>>() {
-        for (key, value) in dict {
+    if let Ok(object) = object.extract::<Bound<'_, PyDict>>() {
+        for (key, value) in object {
             process_header_item(&key, &value, &mut headers)?;
         }
-    } else if let Ok(list) = object.extract::<Bound<'_, PyList>>() {
-        for item in list {
-            let tuple = item.extract::<Bound<'_, PyTuple>>().map_err(|e| {
+    } else if let Ok(object) = object.extract::<Bound<'_, PyList>>() {
+        for item in object {
+            let item = item.extract::<Bound<'_, PyTuple>>().map_err(|e| {
                 PyValueError::new_err(format!("h3_headers convert invalid err={e}"))
             })?;
 
-            if tuple.len() != 2 {
+            if item.len() != 2 {
                 return Err(PyValueError::new_err(format!(
                     "h3_headers convert invalid actual={}",
-                    tuple.len()
+                    item.len()
                 )));
             }
 
-            process_header_item(&tuple.get_item(0)?, &tuple.get_item(1)?, &mut headers)?;
+            process_header_item(&item.get_item(0)?, &item.get_item(1)?, &mut headers)?;
         }
     } else {
         return Err(PyValueError::new_err("h3_headers convert invalid"));
@@ -509,17 +508,16 @@ fn extract_headers(object: &Bound<'_, PyAny>) -> PyResult<Headers> {
 }
 
 fn headers_to_py<'py>(py: Python<'py>, headers: &Headers) -> PyResult<Bound<'py, PyList>> {
-    let list = PyList::empty(py);
+    let py_headers = PyList::empty(py);
 
     for (key, value) in headers {
         let key = PyBytes::new(py, key);
         let value = PyBytes::new(py, value);
-        let tuple = PyTuple::new(py, &[key, value])?;
 
-        list.append(tuple)?;
+        py_headers.append(PyTuple::new(py, &[key, value])?)?;
     }
 
-    Ok(list)
+    Ok(py_headers)
 }
 
 fn process_header_item(
@@ -527,16 +525,16 @@ fn process_header_item(
     value: &Bound<'_, PyAny>,
     headers: &mut Headers,
 ) -> PyResult<()> {
-    let key_bytes = extract_bytes(key)?;
-    let value_bytes = extract_bytes(value)?;
+    let key = extract_bytes(key)?;
+    let value = extract_bytes(value)?;
 
-    let key_lower = if key_bytes.iter().any(u8::is_ascii_uppercase) {
-        Bytes::from(key_bytes.to_ascii_lowercase())
+    let key = if key.iter().any(u8::is_ascii_uppercase) {
+        Bytes::from(key.to_ascii_lowercase())
     } else {
-        key_bytes
+        key
     };
 
-    headers.push((key_lower, value_bytes));
+    headers.push((key, value));
 
     Ok(())
 }
@@ -545,78 +543,78 @@ fn session_diagnostics_to_py<'py>(
     py: Python<'py>,
     diagnostics: &SessionDiagnostics,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let dict = PyDict::new(py);
+    let py_diagnostics = PyDict::new(py);
 
-    dict.set_item("close_code", diagnostics.close_code)?;
-    dict.set_item("close_reason", &diagnostics.close_reason)?;
-    dict.set_item("closed_at", diagnostics.closed_at)?;
-    dict.set_item("created_at", diagnostics.created_at)?;
-    dict.set_item("data_consumed", diagnostics.data_consumed)?;
-    dict.set_item("data_received", diagnostics.data_received)?;
-    dict.set_item("data_sent", diagnostics.data_sent)?;
-    dict.set_item(
+    py_diagnostics.set_item("close_code", diagnostics.close_code)?;
+    py_diagnostics.set_item("close_reason", &diagnostics.close_reason)?;
+    py_diagnostics.set_item("closed_at", diagnostics.closed_at)?;
+    py_diagnostics.set_item("created_at", diagnostics.created_at)?;
+    py_diagnostics.set_item("data_consumed", diagnostics.data_consumed)?;
+    py_diagnostics.set_item("data_received", diagnostics.data_received)?;
+    py_diagnostics.set_item("data_sent", diagnostics.data_sent)?;
+    py_diagnostics.set_item(
         "flow_control_negotiated",
         diagnostics.flow_control_negotiated,
     )?;
-    dict.set_item("headers", headers_to_py(py, &diagnostics.headers)?)?;
-    dict.set_item("is_client", diagnostics.is_client)?;
-    dict.set_item("local_max_data", diagnostics.local_max_data)?;
-    dict.set_item("local_max_streams_bidi", diagnostics.local_max_streams_bidi)?;
-    dict.set_item("local_max_streams_uni", diagnostics.local_max_streams_uni)?;
-    dict.set_item(
+    py_diagnostics.set_item("headers", headers_to_py(py, &diagnostics.headers)?)?;
+    py_diagnostics.set_item("is_client", diagnostics.is_client)?;
+    py_diagnostics.set_item("local_max_data", diagnostics.local_max_data)?;
+    py_diagnostics.set_item("local_max_streams_bidi", diagnostics.local_max_streams_bidi)?;
+    py_diagnostics.set_item("local_max_streams_uni", diagnostics.local_max_streams_uni)?;
+    py_diagnostics.set_item(
         "local_streams_bidi_opened",
         diagnostics.local_streams_bidi_opened,
     )?;
-    dict.set_item(
+    py_diagnostics.set_item(
         "local_streams_uni_opened",
         diagnostics.local_streams_uni_opened,
     )?;
-    dict.set_item("path", &diagnostics.path)?;
-    dict.set_item("peer_max_data", diagnostics.peer_max_data)?;
-    dict.set_item("peer_max_streams_bidi", diagnostics.peer_max_streams_bidi)?;
-    dict.set_item("peer_max_streams_uni", diagnostics.peer_max_streams_uni)?;
-    dict.set_item(
+    py_diagnostics.set_item("path", &diagnostics.path)?;
+    py_diagnostics.set_item("peer_max_data", diagnostics.peer_max_data)?;
+    py_diagnostics.set_item("peer_max_streams_bidi", diagnostics.peer_max_streams_bidi)?;
+    py_diagnostics.set_item("peer_max_streams_uni", diagnostics.peer_max_streams_uni)?;
+    py_diagnostics.set_item(
         "peer_streams_bidi_closed",
         diagnostics.peer_streams_bidi_closed,
     )?;
-    dict.set_item(
+    py_diagnostics.set_item(
         "peer_streams_bidi_opened",
         diagnostics.peer_streams_bidi_opened,
     )?;
-    dict.set_item(
+    py_diagnostics.set_item(
         "peer_streams_uni_closed",
         diagnostics.peer_streams_uni_closed,
     )?;
-    dict.set_item(
+    py_diagnostics.set_item(
         "peer_streams_uni_opened",
         diagnostics.peer_streams_uni_opened,
     )?;
-    dict.set_item("ready_at", diagnostics.ready_at)?;
-    dict.set_item("session_id", diagnostics.session_id)?;
-    dict.set_item("state", diagnostics.state)?;
-    dict.set_item(
+    py_diagnostics.set_item("ready_at", diagnostics.ready_at)?;
+    py_diagnostics.set_item("session_id", diagnostics.session_id)?;
+    py_diagnostics.set_item("state", diagnostics.state)?;
+    py_diagnostics.set_item(
         "wt_available_protocols",
         &diagnostics.wt_available_protocols,
     )?;
-    dict.set_item("wt_protocol", &diagnostics.wt_protocol)?;
+    py_diagnostics.set_item("wt_protocol", &diagnostics.wt_protocol)?;
 
-    Ok(dict.into_any())
+    Ok(py_diagnostics.into_any())
 }
 
 fn stream_diagnostics_to_py<'py>(
     py: Python<'py>,
     diagnostics: &StreamDiagnostics,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let dict = PyDict::new(py);
-    dict.set_item("created_at", diagnostics.created_at)?;
-    dict.set_item("direction", diagnostics.direction)?;
-    dict.set_item("is_peer_initiated", diagnostics.is_peer_initiated)?;
-    dict.set_item("receive_error_code", diagnostics.receive_error_code)?;
-    dict.set_item("receive_state", diagnostics.receive_state)?;
-    dict.set_item("send_error_code", diagnostics.send_error_code)?;
-    dict.set_item("send_state", diagnostics.send_state)?;
-    dict.set_item("session_id", diagnostics.session_id)?;
-    dict.set_item("stream_id", diagnostics.stream_id)?;
+    let py_diagnostics = PyDict::new(py);
+    py_diagnostics.set_item("created_at", diagnostics.created_at)?;
+    py_diagnostics.set_item("direction", diagnostics.direction)?;
+    py_diagnostics.set_item("is_peer_initiated", diagnostics.is_peer_initiated)?;
+    py_diagnostics.set_item("receive_error_code", diagnostics.receive_error_code)?;
+    py_diagnostics.set_item("receive_state", diagnostics.receive_state)?;
+    py_diagnostics.set_item("send_error_code", diagnostics.send_error_code)?;
+    py_diagnostics.set_item("send_state", diagnostics.send_state)?;
+    py_diagnostics.set_item("session_id", diagnostics.session_id)?;
+    py_diagnostics.set_item("stream_id", diagnostics.stream_id)?;
 
-    Ok(dict.into_any())
+    Ok(py_diagnostics.into_any())
 }

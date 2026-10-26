@@ -75,9 +75,10 @@ fn instantiate_py_exception(
 }
 
 fn make_kwargs(py: Python<'_>, error_code: Option<ErrorCode>) -> Bound<'_, PyDict> {
-    let dict = PyDict::new(py);
+    let kwargs = PyDict::new(py);
     if let Some(error_code) = error_code {
-        dict.set_item("error_code", error_code).ok();
+        kwargs.set_item("error_code", error_code).ok();
     }
-    dict
+
+    kwargs
 }

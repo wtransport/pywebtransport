@@ -104,15 +104,15 @@ impl Reactor {
             };
 
             select! {
-                command_option = self.command_rx.recv() => {
-                    let Some(command) = command_option else { break; };
+                command = self.command_rx.recv() => {
+                    let Some(command) = command else { break; };
 
                     if !self.handle_command(command).await {
                         break;
                     }
                 }
-                datagram_option = self.datagram_rx.recv() => {
-                    let Some((remote_address, local_address, data)) = datagram_option else { break; };
+                datagram = self.datagram_rx.recv() => {
+                    let Some((remote_address, local_address, data)) = datagram else { break; };
 
                     self.handle_datagram(remote_address, local_address, data).await;
 

@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(No planned changes for the next release yet.)_
 
+## [0.21.1] - 2026-10-26
+
+This release completes the HTTP/3 receive rules for server push and reserved frame types, tightens request and WebTransport field parsing, and exposes the owning connection of a session.
+
+### Added
+
+- **Session Connection**: Introduced `WebTransportSession.connection`, resolving the owning connection as `WebTransportStream.session` resolves its session.
+
+### Changed
+
+- **Session Resolution Errors**: `WebTransportStream.session` raises `SessionError` in place of `ConnectionError` when the session cannot be resolved.
+
+### Removed
+
+- **Session Remote Address**: Removed `WebTransportSession.remote_address`, superseded by `session.connection.remote_address`.
+
+### Fixed
+
+- **Server Push Frames**: Treated `MAX_PUSH_ID` received by a client as `H3_FRAME_UNEXPECTED` and a `MAX_PUSH_ID` that reduces the maximum push ID as `H3_ID_ERROR`, rejected `CANCEL_PUSH` and `MAX_PUSH_ID` payloads not containing exactly one push ID with `H3_FRAME_ERROR`, and rejected client-initiated push streams with `H3_STREAM_CREATION_ERROR` instead of `H3_ID_ERROR` (RFC 9114, Sec. 6.2.2, 7.1 & 7.2.7).
+- **Reserved Frame Types**: Rejected the reserved HTTP/2 frame types on control and request streams with `H3_FRAME_UNEXPECTED` (RFC 9114, Sec. 7.2.8).
+- **Protocol Negotiation Fields**: Combined repeated `WT-Protocol` and `WT-Available-Protocols` field lines before parsing, and parsed both as structured fields, ignoring parameters and requiring `WT-Protocol` to be a single String item (Draft-16, Sec. 3.3).
+- **Request Validation**: Rejected `:path` values containing non-visible-ASCII bytes, and required `http` and `https` paths to start with `/` or be `*` with `OPTIONS` (RFC 9114, Sec. 4.3.1).
+- **Datagram Quarter Stream ID**: Closed the connection with `H3_DATAGRAM_ERROR` when a received Quarter Stream ID exceeds 2^60-1 (RFC 9297, Sec. 2.1).
+
 ## [0.21.0] - 2026-10-23
 
 This release establishes precise semantics, abstractions, and boundaries across the protocol stack. Protocol decisions are made solely by the Rust core, the connection, session, and stream objects act as thin handles of the facts the core delivers, the stream lifecycle follows the RFC 9000 state model, and components outside the protocol library's boundary are removed.
@@ -1124,7 +1148,8 @@ This is a major release focused on enhancing runtime safety and modernizing the 
 - cryptography (>=45.0.4,<46.0.0) for SSL/TLS operations
 - typing-extensions (>=4.14.0,<5.0.0) for Python <3.10 support
 
-[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.21.0...HEAD
+[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.21.1...HEAD
+[0.21.1]: https://github.com/wtransport/pywebtransport/compare/v0.21.0...v0.21.1
 [0.21.0]: https://github.com/wtransport/pywebtransport/compare/v0.20.1...v0.21.0
 [0.20.1]: https://github.com/wtransport/pywebtransport/compare/v0.20.0...v0.20.1
 [0.20.0]: https://github.com/wtransport/pywebtransport/compare/v0.19.1...v0.20.0

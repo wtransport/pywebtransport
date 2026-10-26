@@ -52,13 +52,13 @@ dev = [
 ]
 docs = [
     "mkdocs>=1.6.1,<2.0.0",
-    "mkdocs-material>=9.7.7,<10.0.0",
+    "mkdocs-material>=9.8.0,<10.0.0",
     "mkdocstrings[python]>=1.0.8,<2.0.0",
 ]
 test = [
     "psutil>=7.2.2,<8.0.0",
     "pytest>=9.1.1,<10.0.0",
-    "pytest-asyncio>=1.4.0,<2.0.0",
+    "pytest-asyncio>=1.4.1,<2.0.0",
     "pytest-benchmark>=5.3.0,<6.0.0",
     "pytest-cov>=7.1.0,<8.0.0",
     "pytest-mock>=3.17.0,<4.0.0",
@@ -77,30 +77,12 @@ Repository = "https://github.com/wtransport/pywebtransport.git"
 line-length = 120
 target-version = ["py312"]
 
-[tool.coverage.report]
-exclude_lines = [
-    "@(abc\\.)?abstractmethod",
-    "^\\s*\\.\\.\\.$",
-    "class .*\\bProtocol\\):",
-    "def __repr__",
-    "if 0:",
-    "if TYPE_CHECKING:",
-    "if __name__ == .__main__.:",
-    "if self.debug:",
-    "if settings.DEBUG",
-    "pragma: no cover",
-    "raise AssertionError",
-    "raise NotImplementedError",
-]
-show_missing = true
-precision = 2
-
 [tool.coverage.run]
-source = ["src"]
+source = ["pywebtransport"]
 branch = true
-parallel = true
-data_file = ".cache/coverage/.coverage"
-omit = ["tests/*"]
+
+[tool.coverage.report]
+show_missing = true
 
 [tool.isort]
 profile = "black"
@@ -127,8 +109,8 @@ module = ["pytest_benchmark.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
 minversion = "9.0"
+pythonpath = ["src"]
 addopts = "-ra -q --strict-markers --strict-config"
 testpaths = ["tests"]
 norecursedirs = [
@@ -146,7 +128,6 @@ markers = [
 ]
 
 [tool.tox]
-requires = ["tox>=4"]
 env_list = ["lint", "py312", "py313", "py314", "py315"]
 venv_redirect = false
 
@@ -154,14 +135,7 @@ venv_redirect = false
 description = "Test python ({env_name})"
 package = "editable"
 deps = "-r dev-requirements.txt"
-commands = [
-    [
-        "pytest",
-        "--cov=pywebtransport",
-        "--cov-report=term",
-        "{posargs}",
-    ],
-]
+commands = [["pytest", "--cov", "--cov-report=term"]]
 
 [tool.tox.env.lint]
 description = "Run linters"

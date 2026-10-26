@@ -7,31 +7,31 @@ site/
 .env.*
 
 # IDE
+*.sublime-project
+*.sublime-workspace
 .idea/
 .vscode/*
 !.vscode/settings.json
-*.sublime-project
-*.sublime-workspace
 
 # OS
 .DS_Store
 Thumbs.db
 
 # Package building
-.eggs/
 *.egg-info/
 *.tar.gz
 *.whl
+.eggs/
 build/
 dist/
 
 # Python
-__pycache__/
 *.dll
 *.dylib
 *.py[cod]
 *.pyd
 *.so
+__pycache__/
 
 # Rust
 target/
@@ -46,9 +46,9 @@ target/
 .benchmarks/
 .cache/
 .coverage*
-.htmlcov/
 .pytest_cache/
 .tox/
+htmlcov/
 
 # Type checking
 .mypy_cache/

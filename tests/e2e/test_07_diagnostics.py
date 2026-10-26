@@ -34,11 +34,7 @@ async def test_connection_diagnostics() -> bool:
     try:
         async with WebTransportClient(config=config) as client:
             async with await client.connect(url=SERVER_URL) as session:
-                connection = session._connection()
-                if not connection:
-                    logger.error("FAILURE: No connection object available on session")
-                    return False
-
+                connection = session.connection
                 diagnostics = await connection.diagnose()
                 logger.info("Connection diagnostics retrieved")
                 logger.info("   - Connection Handle: %d", diagnostics.connection_handle)

@@ -132,6 +132,7 @@ impl Stream {
         }
 
         let is_request_complete = data_len <= available_credit;
+
         if !is_request_complete {
             let sendable = usize::try_from(available_credit).unwrap_or(usize::MAX);
             let remaining_data = data.split_off(sendable);

@@ -164,12 +164,12 @@ fn build_cert_parameters(hostname: &str, validity_days: i64) -> io::Result<Certi
     distinguished_name.push(DnType::CommonName, hostname);
     parameters.distinguished_name = distinguished_name;
 
-    let subject_alt_name = if let Ok(ip) = IpAddr::from_str(hostname) {
-        SanType::IpAddress(ip)
+    let subject_alt_name = if let Ok(hostname) = IpAddr::from_str(hostname) {
+        SanType::IpAddress(hostname)
     } else {
-        let ia5 =
+        let hostname =
             Ia5String::try_from(hostname).map_err(|e| Error::new(ErrorKind::InvalidInput, e))?;
-        SanType::DnsName(ia5)
+        SanType::DnsName(hostname)
     };
 
     parameters.subject_alt_names = vec![subject_alt_name];

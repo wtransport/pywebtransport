@@ -163,9 +163,9 @@ class EndpointController:
             self._waker_task = waker_task
 
     def _process_effects(self, *, handle: ConnectionHandle, effects: list[tuple[int, Any]]) -> None:
-        for event_tuple in effects:
+        for effect_tuple in effects:
             try:
-                effect = conversion.convert_effect(event_tuple=event_tuple)
+                effect = conversion.convert_effect(effect_tuple=effect_tuple)
 
                 match effect:
                     case EmitConnectionEvent():
@@ -228,7 +228,7 @@ class EndpointController:
                         self._pending_manager.fail_request(request_id=effect.request_id, exception=effect.exception)
             except Exception as e:
                 _logger.warning(
-                    "rt_event receive failed actual=%s ptr=%s err=%s", event_tuple[0], handle, e, exc_info=True
+                    "rt_event receive failed actual=%s ptr=%s err=%s", effect_tuple[0], handle, e, exc_info=True
                 )
 
     def _process_runtime_event(self, *, event_tuple: tuple[int, Any]) -> None:

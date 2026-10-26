@@ -11,28 +11,24 @@ use crate::common::constants::{
     ERR_WT_APPLICATION_ERROR_LAST, QUIC_STREAM_DIRECTION_MASK, QUIC_STREAM_INITIATOR_MASK,
     WT_AVAILABLE_PROTOCOLS, WT_PROTOCOL,
 };
-use crate::common::types::{ErrorCode, Headers, StreamDirection, StreamId};
+use crate::common::types::{ErrorCode, Headers, SessionId, StreamDirection, StreamId};
 
 const H3_ERROR_RESERVED_MODULO: u64 = 0x1F;
 const H3_ERROR_RESERVED_OFFSET: u64 = 0x21;
 const WT_ERROR_MAP_DIVISOR: u64 = 0x1E;
 
-pub(super) fn can_receive_on_stream(stream_id: StreamId, is_client: bool) -> bool {
-    if is_bidirectional_stream(stream_id) {
-        return true;
+pub(super) fn combine_header<'a>(headers: &'a Headers, key: &[u8]) -> Option<Cow<'a, [u8]>> {
+    let values: Vec<&[u8]> = headers
+        .iter()
+        .filter(|(header_key, _)| header_key == key)
+        .map(|(_, header_value)| header_value.as_ref())
+        .collect();
+
+    match values.as_slice() {
+        [] => None,
+        [value] => Some(Cow::Borrowed(*value)),
+        _ => Some(Cow::Owned(values.join(b", ".as_slice()))),
     }
-
-    (is_client && is_server_initiated_stream(stream_id))
-        || (!is_client && is_client_initiated_stream(stream_id))
-}
-
-pub(super) fn can_send_on_stream(stream_id: StreamId, is_client: bool) -> bool {
-    if is_bidirectional_stream(stream_id) {
-        return true;
-    }
-
-    (is_client && is_client_initiated_stream(stream_id))
-        || (!is_client && is_server_initiated_stream(stream_id))
 }
 
 pub(super) fn encode_wt_protocol_list(protocols: &[String]) -> Result<Bytes, Cow<'static, str>> {
@@ -59,21 +55,14 @@ pub(super) fn encode_wt_protocol_list(protocols: &[String]) -> Result<Bytes, Cow
     Ok(buffer.freeze())
 }
 
-pub(super) fn find_header(headers: &Headers, key: &str) -> Option<Bytes> {
-    let key_bytes = key.as_bytes();
-
+pub(super) fn find_header<'a>(headers: &'a Headers, key: &[u8]) -> Option<&'a Bytes> {
     for (header_key, header_value) in headers {
-        if header_key.len() == key_bytes.len() && header_key.eq_ignore_ascii_case(key_bytes) {
-            return Some(header_value.clone());
+        if header_key == key {
+            return Some(header_value);
         }
     }
 
     None
-}
-
-pub(super) fn find_header_str(headers: &Headers, key: &str) -> Option<String> {
-    let value = find_header(headers, key)?;
-    String::from_utf8(value.to_vec()).ok()
 }
 
 pub(super) fn http_code_to_webtransport_code(http_error_code: ErrorCode) -> Option<u32> {
@@ -92,10 +81,6 @@ pub(super) fn http_code_to_webtransport_code(http_error_code: ErrorCode) -> Opti
     u32::try_from(result).ok()
 }
 
-pub(super) fn is_bidirectional_stream(stream_id: StreamId) -> bool {
-    (stream_id & QUIC_STREAM_DIRECTION_MASK) == 0
-}
-
 pub(super) fn is_connection_specific_header(key: &[u8], value: &[u8], is_request: bool) -> bool {
     if key == b"te" {
         return !(is_request && value.eq_ignore_ascii_case(b"trailers"));
@@ -108,15 +93,9 @@ pub(super) fn is_connection_specific_header(key: &[u8], value: &[u8], is_request
 }
 
 pub(super) fn is_peer_initiated_stream(stream_id: StreamId, is_client: bool) -> bool {
-    if is_client {
-        is_server_initiated_stream(stream_id)
-    } else {
-        is_client_initiated_stream(stream_id)
-    }
-}
+    let is_client_initiated = (stream_id & QUIC_STREAM_INITIATOR_MASK) == 0;
 
-pub(super) fn is_request_response_stream(stream_id: StreamId) -> bool {
-    is_bidirectional_stream(stream_id) && is_client_initiated_stream(stream_id)
+    is_client_initiated != is_client
 }
 
 pub(super) fn is_unidirectional_stream(stream_id: StreamId) -> bool {
@@ -154,6 +133,10 @@ pub(super) fn is_valid_header(key: &[u8], value: &[u8]) -> bool {
             .all(|&byte| matches!(byte, b'\t' | b' '..=b'~' | 0x80..=0xFF))
 }
 
+pub(super) fn is_valid_session_id(session_id: SessionId) -> bool {
+    (session_id & (QUIC_STREAM_DIRECTION_MASK | QUIC_STREAM_INITIATOR_MASK)) == 0
+}
+
 pub(super) fn is_valid_user_headers(headers: &Headers, is_request: bool) -> bool {
     headers.iter().all(|(key, value)| {
         let key = key.as_ref();
@@ -170,86 +153,67 @@ pub(super) fn is_valid_user_headers(headers: &Headers, is_request: bool) -> bool
     })
 }
 
-pub(super) fn next_data_limit(
-    current_limit: u64,
-    consumed: u64,
-    window_size: u64,
-    force_update: bool,
-) -> Option<u64> {
-    let new_limit = consumed.saturating_add(window_size);
-    let threshold = if force_update { 0 } else { window_size / 2 };
-
-    if new_limit > current_limit.saturating_add(threshold) {
-        Some(new_limit)
-    } else {
-        None
-    }
-}
-
-pub(super) fn next_stream_limit(
-    current_limit: u64,
-    closed_count: u64,
-    initial_window: u64,
-    force_update: bool,
-) -> Option<u64> {
-    let new_limit = closed_count.saturating_add(initial_window);
-    let threshold = if force_update { 0 } else { initial_window / 2 };
-
-    if new_limit > current_limit && (new_limit >= current_limit.saturating_add(threshold)) {
-        Some(new_limit)
-    } else {
-        None
-    }
-}
-
 pub(super) fn parse_wt_protocol_list(header: &[u8]) -> Option<Vec<String>> {
-    let mut result = Vec::new();
-    let mut current = String::new();
-    let mut in_string = false;
-    let mut escaping = false;
-    let mut has_parsed_item = false;
+    let mut cursor = Cursor::new(header);
+    let mut protocols = Vec::new();
 
-    for &byte in header {
-        if escaping {
-            match byte {
-                b'"' | b'\\' => {
-                    current.push(byte as char);
-                    escaping = false;
-                }
-                _ => return None,
-            }
-        } else if in_string {
-            match byte {
-                b'\\' => escaping = true,
-                b'"' => {
-                    in_string = false;
-                    result.push(current.clone());
-                    current.clear();
-                    has_parsed_item = true;
-                }
-                0x20..=0x7E => current.push(byte as char),
-                _ => return None,
-            }
-        } else {
-            match byte {
-                b' ' | b'\t' => {}
-                b'"' if !has_parsed_item => in_string = true,
-                b',' if has_parsed_item => has_parsed_item = false,
-                _ => return None,
-            }
+    let spaces_len = cursor
+        .chunk()
+        .iter()
+        .take_while(|&&byte| byte == b' ')
+        .count();
+    cursor.advance(spaces_len);
+
+    while cursor.has_remaining() {
+        protocols.push(parse_string(&mut cursor)?);
+        discard_parameters(&mut cursor)?;
+
+        let whitespace_len = cursor
+            .chunk()
+            .iter()
+            .take_while(|&&byte| matches!(byte, b' ' | b'\t'))
+            .count();
+        cursor.advance(whitespace_len);
+        if !cursor.has_remaining() {
+            break;
+        }
+        if cursor.get_u8() != b',' {
+            return None;
+        }
+
+        let whitespace_len = cursor
+            .chunk()
+            .iter()
+            .take_while(|&&byte| matches!(byte, b' ' | b'\t'))
+            .count();
+        cursor.advance(whitespace_len);
+        if !cursor.has_remaining() {
+            return None;
         }
     }
 
-    if in_string || escaping || (!has_parsed_item && !result.is_empty()) || result.is_empty() {
-        return None;
-    }
-
-    Some(result)
+    (!protocols.is_empty()).then_some(protocols)
 }
 
 pub(super) fn parse_wt_protocol_string(header: &[u8]) -> Option<String> {
-    let mut list = parse_wt_protocol_list(header)?;
-    if list.len() == 1 { list.pop() } else { None }
+    let mut cursor = Cursor::new(header);
+
+    let spaces_len = cursor
+        .chunk()
+        .iter()
+        .take_while(|&&byte| byte == b' ')
+        .count();
+    cursor.advance(spaces_len);
+    let protocol = parse_string(&mut cursor)?;
+    discard_parameters(&mut cursor)?;
+    let spaces_len = cursor
+        .chunk()
+        .iter()
+        .take_while(|&&byte| byte == b' ')
+        .count();
+    cursor.advance(spaces_len);
+
+    (!cursor.has_remaining()).then_some(protocol)
 }
 
 pub(super) fn read_varint(buffer: &mut Cursor<&[u8]>) -> Result<u64, ErrorCode> {
@@ -279,13 +243,12 @@ pub(super) fn read_varint(buffer: &mut Cursor<&[u8]>) -> Result<u64, ErrorCode> 
 
 pub(super) fn stream_direction_from_id(stream_id: StreamId, is_client: bool) -> StreamDirection {
     match (
-        can_send_on_stream(stream_id, is_client),
-        can_receive_on_stream(stream_id, is_client),
+        is_unidirectional_stream(stream_id),
+        is_peer_initiated_stream(stream_id, is_client),
     ) {
-        (true, true) => StreamDirection::Bidirectional,
+        (false, _) => StreamDirection::Bidirectional,
         (true, false) => StreamDirection::SendOnly,
-        (false, true) => StreamDirection::ReceiveOnly,
-        (false, false) => unreachable!("quic_stream resolve failed"),
+        (true, true) => StreamDirection::ReceiveOnly,
     }
 }
 
@@ -328,12 +291,187 @@ pub(super) fn write_varint(buffer: &mut BytesMut, value: u64) -> Result<(), Erro
     Ok(())
 }
 
-fn is_client_initiated_stream(stream_id: StreamId) -> bool {
-    (stream_id & QUIC_STREAM_INITIATOR_MASK) == 0
+fn discard_number(cursor: &mut Cursor<&[u8]>) -> Option<bool> {
+    if cursor.chunk().first() == Some(&b'-') {
+        cursor.advance(1);
+    }
+
+    let integer_len = cursor
+        .chunk()
+        .iter()
+        .take_while(|&&byte| byte.is_ascii_digit())
+        .count();
+    if integer_len == 0 {
+        return None;
+    }
+    cursor.advance(integer_len);
+
+    if cursor.chunk().first() != Some(&b'.') {
+        return (integer_len <= 15).then_some(false);
+    }
+    cursor.advance(1);
+
+    let fraction_len = cursor
+        .chunk()
+        .iter()
+        .take_while(|&&byte| byte.is_ascii_digit())
+        .count();
+    cursor.advance(fraction_len);
+
+    (integer_len <= 12 && (1..=3).contains(&fraction_len)).then_some(true)
 }
 
-fn is_server_initiated_stream(stream_id: StreamId) -> bool {
-    (stream_id & QUIC_STREAM_INITIATOR_MASK) != 0
+fn discard_parameters(cursor: &mut Cursor<&[u8]>) -> Option<()> {
+    while cursor.chunk().first() == Some(&b';') {
+        cursor.advance(1);
+        let spaces_len = cursor
+            .chunk()
+            .iter()
+            .take_while(|&&byte| byte == b' ')
+            .count();
+        cursor.advance(spaces_len);
+
+        if !cursor
+            .chunk()
+            .first()
+            .is_some_and(|&byte| byte.is_ascii_lowercase() || byte == b'*')
+        {
+            return None;
+        }
+        let key_len = cursor
+            .chunk()
+            .iter()
+            .take_while(
+                |&&byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-' | b'.' | b'*'),
+            )
+            .count();
+        cursor.advance(key_len);
+
+        if cursor.chunk().first() != Some(&b'=') {
+            continue;
+        }
+        cursor.advance(1);
+
+        match cursor.chunk().first().copied()? {
+            b'-' | b'0'..=b'9' => {
+                discard_number(cursor)?;
+            }
+            b'"' => {
+                parse_string(cursor)?;
+            }
+            b'*' | b'A'..=b'Z' | b'a'..=b'z' => {
+                let token_len = cursor
+                    .chunk()
+                    .iter()
+                    .take_while(|&&byte| {
+                        byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~:/".contains(&byte)
+                    })
+                    .count();
+                cursor.advance(token_len);
+            }
+            b':' => {
+                cursor.advance(1);
+
+                let content_len = cursor.chunk().iter().position(|&byte| byte == b':')?;
+                let content = cursor.chunk().get(..content_len).unwrap_or_default();
+                let data_len = content
+                    .iter()
+                    .rposition(|&byte| byte != b'=')
+                    .map_or(0, |index| index + 1);
+                let padding_len = content_len - data_len;
+
+                let is_valid = content
+                    .get(..data_len)
+                    .unwrap_or_default()
+                    .iter()
+                    .all(|&byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/'))
+                    && padding_len <= 2
+                    && data_len % 4 != 1
+                    && (padding_len == 0 || content_len % 4 == 0);
+                if !is_valid {
+                    return None;
+                }
+                cursor.advance(content_len + 1);
+            }
+            b'?' => {
+                cursor.advance(1);
+                if !matches!(cursor.chunk().first(), Some(b'0' | b'1')) {
+                    return None;
+                }
+                cursor.advance(1);
+            }
+            b'@' => {
+                cursor.advance(1);
+                let is_decimal = discard_number(cursor)?;
+                if is_decimal {
+                    return None;
+                }
+            }
+            b'%' => {
+                cursor.advance(1);
+                if cursor.chunk().first() != Some(&b'"') {
+                    return None;
+                }
+                cursor.advance(1);
+
+                let mut value = Vec::new();
+
+                loop {
+                    if !cursor.has_remaining() {
+                        return None;
+                    }
+                    match cursor.get_u8() {
+                        b'%' => {
+                            let mut octet = 0;
+                            for _ in 0..2 {
+                                if !cursor.has_remaining() {
+                                    return None;
+                                }
+                                let digit = match cursor.get_u8() {
+                                    byte @ b'0'..=b'9' => byte - b'0',
+                                    byte @ b'a'..=b'f' => byte - b'a' + 10,
+                                    _ => return None,
+                                };
+                                octet = octet * 16 + digit;
+                            }
+                            value.push(octet);
+                        }
+                        b'"' => break,
+                        byte @ 0x20..=0x7E => value.push(byte),
+                        _ => return None,
+                    }
+                }
+
+                str::from_utf8(&value).ok()?;
+            }
+            _ => return None,
+        }
+    }
+
+    Some(())
+}
+
+fn parse_string(cursor: &mut Cursor<&[u8]>) -> Option<String> {
+    if cursor.chunk().first() != Some(&b'"') {
+        return None;
+    }
+    cursor.advance(1);
+
+    let mut value = String::new();
+
+    while cursor.has_remaining() {
+        match cursor.get_u8() {
+            b'\\' if cursor.has_remaining() => match cursor.get_u8() {
+                byte @ (b'"' | b'\\') => value.push(char::from(byte)),
+                _ => return None,
+            },
+            b'"' => return Some(value),
+            byte @ 0x20..=0x7E => value.push(char::from(byte)),
+            _ => return None,
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]

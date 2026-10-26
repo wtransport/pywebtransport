@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::collections::VecDeque;
 
 use bytes::Bytes;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use tracing::debug;
 
 use crate::common::constants::{
@@ -15,7 +15,7 @@ use crate::common::constants::{
 };
 use crate::common::types::{
     ConnectionHandle, ConnectionState, ErrorCode, ErrorSource, EventType, Headers, RequestId,
-    SessionId, StreamDirection, StreamId,
+    SessionId, StreamId,
 };
 use crate::protocol::events::{Effect, ProtocolEvent, RequestResult};
 use crate::protocol::h3::H3Settings;
@@ -329,6 +329,7 @@ impl Connection {
             request_id,
             result: RequestResult::None,
         });
+
         effects
     }
 
@@ -500,6 +501,7 @@ impl Connection {
 
     pub(super) fn defer_session(&mut self, request_id: RequestId) -> Vec<Effect> {
         self.blocked_session_requests.push_back(request_id);
+
         Vec::new()
     }
 
@@ -526,6 +528,7 @@ impl Connection {
 
     pub(super) fn diagnose(&self, request_id: RequestId) -> Vec<Effect> {
         let diagnostics = self.diagnostics_snapshot();
+
         vec![Effect::NotifyRequestDone {
             request_id,
             result: RequestResult::ConnectionDiagnostics(Box::new(diagnostics)),
@@ -608,6 +611,7 @@ impl Connection {
             self.handle
         );
         self.session_requests.remove(&request_id);
+
         vec![Effect::NotifyRequestFailed {
             request_id,
             source: ErrorSource::Session,
@@ -830,24 +834,16 @@ impl Connection {
                                 "wt_stream abort connection_handle={} stream_id={stream_id}",
                                 self.handle
                             );
-                            let direction =
-                                utils::stream_direction_from_id(stream_id, self.is_client);
-                            let can_send = matches!(
-                                direction,
-                                StreamDirection::Bidirectional | StreamDirection::SendOnly
-                            );
-                            let can_receive = matches!(
-                                direction,
-                                StreamDirection::Bidirectional | StreamDirection::ReceiveOnly
-                            );
-
-                            if can_send {
+                            if utils::is_unidirectional_stream(stream_id) {
+                                effects.push(Effect::StopQuicStream {
+                                    stream_id,
+                                    error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
+                                });
+                            } else {
                                 effects.push(Effect::ResetQuicStream {
                                     stream_id,
                                     error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
                                 });
-                            }
-                            if can_receive {
                                 effects.push(Effect::StopQuicStream {
                                     stream_id,
                                     error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
@@ -881,19 +877,18 @@ impl Connection {
             .collect();
 
         closed_session_ids.sort_unstable();
-        let closed_session_set: FxHashSet<SessionId> = closed_session_ids.iter().copied().collect();
 
-        for session_id in closed_session_ids {
+        for session_id in &closed_session_ids {
             debug!(
                 "wt_session destroy connection_handle={} session_id={session_id}",
                 self.handle
             );
-            self.sessions.remove(&session_id);
+            self.sessions.remove(session_id);
         }
 
-        if !closed_session_set.is_empty() {
+        if !closed_session_ids.is_empty() {
             self.stream_map
-                .retain(|_, session_id| !closed_session_set.contains(session_id));
+                .retain(|_, session_id| closed_session_ids.binary_search(session_id).is_err());
         }
     }
 
@@ -974,10 +969,7 @@ impl Connection {
             return session.recv_datagram(data);
         }
 
-        let event = ProtocolEvent::H3DatagramReceived {
-            stream_id: session_id,
-            data,
-        };
+        let event = ProtocolEvent::H3DatagramReceived { session_id, data };
 
         self.buffer_early_event(session_id, event, now);
 
@@ -1011,6 +1003,7 @@ impl Connection {
                 effects.extend(session.drain());
             }
         }
+
         effects
     }
 
@@ -1055,13 +1048,11 @@ impl Connection {
                 session_request.wt_available_protocols.clone()
             };
 
-            let status_str = utils::find_header_str(&headers, ":status");
-            let status_ok = status_str.as_deref() == Some("200");
+            let status = utils::find_header(&headers, b":status");
+            let status_ok = status.is_some_and(|status| status == b"200".as_slice());
 
             if status_ok {
-                let wt_protocol = str::from_utf8(WT_PROTOCOL)
-                    .ok()
-                    .and_then(|key| utils::find_header(&headers, key))
+                let wt_protocol = utils::combine_header(&headers, WT_PROTOCOL)
                     .and_then(|value| utils::parse_wt_protocol_string(&value));
 
                 if let Some(ref wt_available_protocols) = wt_available_protocols {
@@ -1144,9 +1135,8 @@ impl Connection {
 
                 effects.extend(self.replay_early_events(stream_id, now));
             } else {
-                let status_value = status_str.unwrap_or_else(|| "Unknown".to_owned());
                 debug!(
-                    "wt_session abort connection_handle={} err={status_value:?}",
+                    "wt_session abort connection_handle={} err={status:?}",
                     self.handle
                 );
 
@@ -1244,12 +1234,10 @@ impl Connection {
                 return effects;
             }
 
-            let method = utils::find_header_str(&headers, ":method");
-            let protocol = utils::find_header_str(&headers, ":protocol");
-
-            let is_connect_method = method.as_deref() == Some("CONNECT");
-            let is_webtransport_upgrade =
-                protocol.as_deref().map(str::as_bytes) == Some(WT_UPGRADE_TOKEN);
+            let is_connect_method = utils::find_header(&headers, b":method")
+                .is_some_and(|method| method == b"CONNECT".as_slice());
+            let is_webtransport_upgrade = utils::find_header(&headers, b":protocol")
+                .is_some_and(|protocol| protocol == WT_UPGRADE_TOKEN);
 
             if !is_connect_method || !is_webtransport_upgrade {
                 debug!(
@@ -1268,12 +1256,12 @@ impl Connection {
                 return effects;
             }
 
-            let path_header = utils::find_header_str(&headers, ":path");
-            let path = path_header.unwrap_or_else(|| "/".to_owned());
+            let path = utils::find_header(&headers, b":path")
+                .and_then(|path| str::from_utf8(path).ok())
+                .unwrap_or("/")
+                .to_owned();
 
-            let wt_available_protocols = str::from_utf8(WT_AVAILABLE_PROTOCOLS)
-                .ok()
-                .and_then(|key| utils::find_header(&headers, key))
+            let wt_available_protocols = utils::combine_header(&headers, WT_AVAILABLE_PROTOCOLS)
                 .and_then(|value| utils::parse_wt_protocol_list(&value));
 
             let session = Session::new(
@@ -1441,6 +1429,7 @@ impl Connection {
             self.handle
         );
         self.peer_max_datagram_frame_size = Some(peer_max_datagram_frame_size);
+
         Vec::new()
     }
 
@@ -1672,8 +1661,8 @@ impl Connection {
 
         for (_, event) in events {
             match event {
-                ProtocolEvent::H3DatagramReceived { stream_id, data } if is_session_present => {
-                    effects.extend(self.recv_datagram(stream_id, data, now));
+                ProtocolEvent::H3DatagramReceived { session_id, data } if is_session_present => {
+                    effects.extend(self.recv_datagram(session_id, data, now));
                 }
                 ProtocolEvent::H3WebTransportStreamOpened {
                     session_id,

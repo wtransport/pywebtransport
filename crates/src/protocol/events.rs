@@ -92,7 +92,7 @@ pub(crate) enum Effect {
         end_stream: bool,
     },
     SendH3Datagram {
-        stream_id: StreamId,
+        session_id: SessionId,
         data: Bytes,
     },
     SendH3Goaway {
@@ -129,7 +129,7 @@ pub(crate) enum ProtocolEvent {
         stream_id: StreamId,
     },
     H3DatagramReceived {
-        stream_id: StreamId,
+        session_id: SessionId,
         data: Bytes,
     },
     H3GoawayReceived,

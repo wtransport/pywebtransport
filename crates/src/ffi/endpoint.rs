@@ -46,13 +46,13 @@ impl PyEndpoint {
         waker: &PyWaker,
     ) -> PyResult<Self> {
         let (endpoint, std_sockets) = if is_client {
-            let rust_config = RustClientConfig::try_from(config)?;
-            let quic_config = config::build_client_config(&rust_config)?;
-            let endpoint_config = Arc::new(config::build_endpoint_config(&rust_config.base)?);
+            let config = RustClientConfig::try_from(config)?;
+            let client_config = config::build_client_config(&config)?;
+            let endpoint_config = Arc::new(config::build_endpoint_config(&config.base)?);
             let quic_endpoint = QuicEndpoint::new(endpoint_config, None, false, None);
 
             let transport_endpoint =
-                TransportEndpoint::new_client(quic_endpoint, rust_config.base, quic_config)?;
+                TransportEndpoint::new_client(quic_endpoint, config.base, client_config)?;
 
             let mut sockets = Vec::new();
 
@@ -72,24 +72,21 @@ impl PyEndpoint {
 
             (transport_endpoint, sockets)
         } else {
-            let rust_config = RustServerConfig::try_from(config)?;
-            let bind_address_tuple = (rust_config.bind_host.clone(), rust_config.bind_port);
-            let server_crypto = config::build_server_config(&rust_config)?;
-            let endpoint_config = Arc::new(config::build_endpoint_config(&rust_config.base)?);
+            let config = RustServerConfig::try_from(config)?;
+            let bind_address = (config.bind_host.clone(), config.bind_port);
+            let server_config = config::build_server_config(&config)?;
+            let endpoint_config = Arc::new(config::build_endpoint_config(&config.base)?);
             let quic_endpoint =
-                QuicEndpoint::new(endpoint_config, Some(Arc::new(server_crypto)), false, None);
+                QuicEndpoint::new(endpoint_config, Some(Arc::new(server_config)), false, None);
 
-            let transport_endpoint = TransportEndpoint::new_server(
-                quic_endpoint,
-                rust_config.base.clone(),
-                rust_config,
-            )?;
+            let transport_endpoint =
+                TransportEndpoint::new_server(quic_endpoint, config.base.clone(), config)?;
 
             let mut sockets = Vec::new();
             let mut bound_v4 = false;
             let mut bound_v6 = false;
 
-            match bind_address_tuple.to_socket_addrs() {
+            match bind_address.to_socket_addrs() {
                 Ok(addresses) => {
                     for address in addresses {
                         if address.is_ipv4() && bound_v4 {
@@ -150,7 +147,7 @@ impl PyEndpoint {
 
                             for socket in std_sockets {
                                 match TokioUdpSocket::from_std(socket) {
-                                    Ok(tokio_socket) => tokio_sockets.push(tokio_socket),
+                                    Ok(socket) => tokio_sockets.push(socket),
                                     Err(e) => {
                                         debug!("sys_socket convert failed err={e:?}");
                                     }
@@ -244,14 +241,14 @@ impl PyEndpoint {
             return Err(PyRuntimeError::new_err("rt_channel validate exceeded"));
         }
 
-        let protocol_event: ProtocolEvent = event.extract()?;
-        let connection_handle = QuicConnectionHandle(handle);
+        let event: ProtocolEvent = event.extract()?;
+        let handle = QuicConnectionHandle(handle);
 
         self.command_tx
             .try_send(RuntimeCommand::ProtocolEvent {
                 request_id,
-                handle: connection_handle,
-                event: protocol_event,
+                handle,
+                event,
             })
             .map_err(|e| PyRuntimeError::new_err(format!("rt_event send failed err={e}")))?;
 
@@ -268,13 +265,13 @@ impl PyEndpoint {
 
     #[pyo3(signature = ())]
     fn poll_runtime_events<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let py_list = PyList::empty(py);
+        let runtime_events = PyList::empty(py);
 
         while let Some(event) = self.event_rx.pop() {
-            py_list.append(event.into_pyobject(py)?)?;
+            runtime_events.append(event.into_pyobject(py)?)?;
         }
 
-        Ok(py_list)
+        Ok(runtime_events)
     }
 }
 
@@ -287,16 +284,16 @@ impl Debug for PyEndpoint {
 }
 
 fn extract_socket_address(object: &Bound<'_, PyAny>) -> PyResult<SocketAddr> {
-    if let Ok((ip_str, port, flowinfo, scope_id)) = object.extract::<(String, u16, u32, u32)>() {
-        let ip: Ipv6Addr = ip_str
+    if let Ok((ip, port, flowinfo, scope_id)) = object.extract::<(String, u16, u32, u32)>() {
+        let ip: Ipv6Addr = ip
             .parse()
             .map_err(|e| PyValueError::new_err(format!("ipv6_address convert failed err={e}")))?;
 
         Ok(SocketAddr::V6(SocketAddrV6::new(
             ip, port, flowinfo, scope_id,
         )))
-    } else if let Ok((ip_str, port)) = object.extract::<(String, u16)>() {
-        let ip = ip_str
+    } else if let Ok((ip, port)) = object.extract::<(String, u16)>() {
+        let ip = ip
             .parse()
             .map_err(|e| PyValueError::new_err(format!("ip_address convert failed err={e}")))?;
 

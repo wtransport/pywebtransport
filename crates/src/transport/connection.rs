@@ -208,8 +208,8 @@ impl TransportConnection {
                         now_instant,
                         QuicVarInt::try_from(error_code).unwrap_or(QuicVarInt::from(0u32)),
                         match &reason {
-                            Some(Cow::Borrowed(string)) => Bytes::from_static(string.as_bytes()),
-                            Some(Cow::Owned(string)) => Bytes::from(string.clone()),
+                            Some(Cow::Borrowed(reason)) => Bytes::from_static(reason.as_bytes()),
+                            Some(Cow::Owned(reason)) => Bytes::from(reason.clone()),
                             None => Bytes::new(),
                         },
                     );
@@ -225,8 +225,8 @@ impl TransportConnection {
                     path,
                     headers,
                 } => {
-                    if let Some(quic_stream_id) = self.connection.streams().open(QuicDir::Bi) {
-                        let stream_id = u64::from(quic_stream_id);
+                    if let Some(stream_id) = self.connection.streams().open(QuicDir::Bi) {
+                        let stream_id = u64::from(stream_id);
 
                         match self
                             .engine
@@ -284,8 +284,8 @@ impl TransportConnection {
                         QuicDir::Bi
                     };
 
-                    if let Some(quic_stream_id) = self.connection.streams().open(direction) {
-                        let stream_id = u64::from(quic_stream_id);
+                    if let Some(stream_id) = self.connection.streams().open(direction) {
+                        let stream_id = u64::from(stream_id);
                         let effects = WebTransportEngine::encode_stream_header(
                             stream_id,
                             session_id,
@@ -341,14 +341,14 @@ impl TransportConnection {
                     stream_id,
                     max_size,
                 } => {
-                    let Ok(varint) = QuicVarInt::try_from(stream_id) else {
+                    let Ok(stream_id) = QuicVarInt::try_from(stream_id) else {
                         continue;
                     };
 
-                    let quic_stream_id = QuicStreamId::from(varint);
-                    self.pending_receives.insert(quic_stream_id, max_size);
+                    let stream_id = QuicStreamId::from(stream_id);
+                    self.pending_receives.insert(stream_id, max_size);
 
-                    if let Some(event) = self.recv_stream_data(quic_stream_id) {
+                    if let Some(event) = self.recv_stream_data(stream_id) {
                         event_queue.push_back(event);
                     }
                 }
@@ -356,18 +356,18 @@ impl TransportConnection {
                     stream_id,
                     error_code,
                 } => {
-                    let Ok(varint) = QuicVarInt::try_from(stream_id) else {
+                    let Ok(stream_id) = QuicVarInt::try_from(stream_id) else {
                         continue;
                     };
 
-                    let quic_stream_id = QuicStreamId::from(varint);
+                    let stream_id = QuicStreamId::from(stream_id);
                     let error_code =
                         QuicVarInt::try_from(error_code).unwrap_or(QuicVarInt::from(0u32));
-                    let mut stream = self.connection.send_stream(quic_stream_id);
+                    let mut stream = self.connection.send_stream(stream_id);
 
                     stream.reset(error_code).ok();
 
-                    self.send_buffers.remove(&quic_stream_id);
+                    self.send_buffers.remove(&stream_id);
                 }
                 Effect::SendH3Capsule {
                     stream_id,
@@ -389,8 +389,8 @@ impl TransportConnection {
                         }
                     }
                 }
-                Effect::SendH3Datagram { stream_id, data } => {
-                    match WebTransportEngine::encode_datagram(stream_id, data) {
+                Effect::SendH3Datagram { session_id, data } => {
+                    match WebTransportEngine::encode_datagram(session_id, data) {
                         Ok(effects) => {
                             self.process_effects(effects, event_queue, now_instant);
                         }
@@ -421,12 +421,12 @@ impl TransportConnection {
                     data,
                     end_stream,
                 } => {
-                    let Ok(varint) = QuicVarInt::try_from(stream_id) else {
+                    let Ok(stream_id) = QuicVarInt::try_from(stream_id) else {
                         continue;
                     };
 
-                    let quic_stream_id = QuicStreamId::from(varint);
-                    let buffer = self.send_buffers.entry(quic_stream_id).or_default();
+                    let stream_id = QuicStreamId::from(stream_id);
+                    let buffer = self.send_buffers.entry(stream_id).or_default();
 
                     if !data.is_empty() {
                         buffer.chunks.push_back(data);
@@ -436,7 +436,7 @@ impl TransportConnection {
                         buffer.finished = true;
                     }
 
-                    if let Some(event) = self.flush_stream(quic_stream_id) {
+                    if let Some(event) = self.flush_stream(stream_id) {
                         event_queue.push_back(event);
                     }
                 }
@@ -452,18 +452,15 @@ impl TransportConnection {
                     stream_id,
                     error_code,
                 } => {
-                    let Ok(varint) = QuicVarInt::try_from(stream_id) else {
+                    let Ok(stream_id) = QuicVarInt::try_from(stream_id) else {
                         continue;
                     };
 
-                    let quic_stream_id = QuicStreamId::from(varint);
+                    let stream_id = QuicStreamId::from(stream_id);
                     let error_code =
                         QuicVarInt::try_from(error_code).unwrap_or(QuicVarInt::from(0u32));
-                    self.pending_receives.remove(&quic_stream_id);
-                    self.connection
-                        .recv_stream(quic_stream_id)
-                        .stop(error_code)
-                        .ok();
+                    self.pending_receives.remove(&stream_id);
+                    self.connection.recv_stream(stream_id).stop(error_code).ok();
                 }
                 effect => {
                     self.pending_effects.push_back(effect);

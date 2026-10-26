@@ -322,9 +322,9 @@ def _merge_headers(*, base: Headers, update: Headers | None) -> Headers:
         new_headers.update(update)
         return new_headers
 
-    base_list = list(base.items()) if isinstance(base, Mapping) else list(base)
-    update_list = list(update.items()) if isinstance(update, Mapping) else list(update)
-    return base_list + update_list
+    base = list(base.items()) if isinstance(base, Mapping) else list(base)
+    update = list(update.items()) if isinstance(update, Mapping) else list(update)
+    return base + update
 
 
 def _normalize_headers(*, headers: Headers) -> Headers:

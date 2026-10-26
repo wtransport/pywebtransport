@@ -116,10 +116,10 @@ impl WebTransportEngine {
     }
 
     pub(crate) fn encode_datagram(
-        stream_id: StreamId,
+        session_id: SessionId,
         data: Bytes,
     ) -> Result<Vec<Effect>, WebTransportError> {
-        let mut parts = H3::encode_datagram(stream_id, data)?.into_iter();
+        let mut parts = H3::encode_datagram(session_id, data)?.into_iter();
         let header = parts.next().unwrap_or_default();
         let payload = parts.next().unwrap_or_default();
 
@@ -191,8 +191,8 @@ impl WebTransportEngine {
                 ProtocolEvent::H3ConnectStreamClosed { stream_id } => {
                     new_effects.extend(self.connection.recv_connect_close(stream_id, now));
                 }
-                ProtocolEvent::H3DatagramReceived { stream_id, data } => {
-                    new_effects.extend(self.connection.recv_datagram(stream_id, data, now));
+                ProtocolEvent::H3DatagramReceived { session_id, data } => {
+                    new_effects.extend(self.connection.recv_datagram(session_id, data, now));
                 }
                 ProtocolEvent::H3GoawayReceived => {
                     new_effects.extend(self.connection.recv_goaway());

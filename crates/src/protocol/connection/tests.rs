@@ -503,6 +503,47 @@ fn test_client_recv_headers_completes_session(mut fixture_client_connection: Con
 }
 
 #[rstest]
+fn test_client_recv_headers_duplicate_wt_protocol_fails_request(
+    mut fixture_client_connection: Connection,
+) {
+    fixture_client_connection.state = ConnectionState::Connected;
+    fixture_client_connection
+        .pending_session_requests
+        .insert(0, 100);
+    fixture_client_connection.create_session(
+        100,
+        create_session_request(vec![], Some(vec!["h3".into()]), false),
+    );
+
+    let response_headers = vec![
+        (Bytes::from_static(b":status"), Bytes::from_static(b"200")),
+        (
+            Bytes::from_static(WT_PROTOCOL),
+            Bytes::from_static(b"\"h3\""),
+        ),
+        (
+            Bytes::from_static(WT_PROTOCOL),
+            Bytes::from_static(b"\"h3\""),
+        ),
+    ];
+    let effects = fixture_client_connection.recv_headers(0, response_headers, 2.0);
+
+    assert!(!fixture_client_connection.sessions.contains_key(&0));
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            Effect::NotifyRequestFailed {
+                request_id: 100,
+                source: ErrorSource::Session,
+                ..
+            },
+            Effect::StopQuicStream { stream_id: 0, .. },
+            Effect::ResetQuicStream { stream_id: 0, .. }
+        ]
+    ));
+}
+
+#[rstest]
 fn test_client_recv_headers_missing_config(mut fixture_client_connection: Connection) {
     fixture_client_connection
         .pending_session_requests
@@ -2442,6 +2483,37 @@ fn test_send_datagram_not_found(mut fixture_server_connection: Connection) {
 }
 
 #[rstest]
+fn test_server_recv_headers_combines_wt_available_protocols(
+    mut fixture_server_connection: Connection,
+    fixture_headers: Headers,
+) {
+    fixture_server_connection.state = ConnectionState::Connected;
+    let mut headers = fixture_headers;
+    headers.push((
+        Bytes::from_static(WT_AVAILABLE_PROTOCOLS),
+        Bytes::from_static(b"\"h3\""),
+    ));
+    headers.push((
+        Bytes::from_static(WT_AVAILABLE_PROTOCOLS),
+        Bytes::from_static(b"\"p1\";q=1"),
+    ));
+
+    let effects = fixture_server_connection.recv_headers(0, headers, 1.0);
+
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            Effect::EmitSessionEvent {
+                event_type: EventType::SessionRequestReceived,
+                wt_available_protocols: Some(protocols),
+                ..
+            },
+            ..
+        ] if *protocols == ["h3", "p1"]
+    ));
+}
+
+#[rstest]
 fn test_server_recv_headers_creates_session(
     mut fixture_server_connection: Connection,
     fixture_headers: Headers,
@@ -2543,6 +2615,33 @@ fn test_server_recv_headers_no_flow_control_limit_reached(
     assert!(matches!(
         effects.as_slice(),
         [Effect::SendH3Headers { .. }, Effect::StopQuicStream { .. }]
+    ));
+}
+
+#[rstest]
+fn test_server_recv_headers_non_utf8_path_defaults_path(mut fixture_server_connection: Connection) {
+    fixture_server_connection.state = ConnectionState::Connected;
+    let headers = vec![
+        (
+            Bytes::from_static(b":method"),
+            Bytes::from_static(b"CONNECT"),
+        ),
+        (
+            Bytes::from_static(b":protocol"),
+            Bytes::from_static(b"webtransport-h3"),
+        ),
+        (Bytes::from_static(b":path"), Bytes::from_static(b"/\xff")),
+    ];
+
+    let effects = fixture_server_connection.recv_headers(0, headers, 1.0);
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::EmitSessionEvent {
+            event_type: EventType::SessionRequestReceived,
+            path: Some(path),
+            ..
+        }] if path == "/"
     ));
 }
 

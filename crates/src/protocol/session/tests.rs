@@ -3249,6 +3249,42 @@ fn test_replay_pending_queues_stops_on_state_change_mid_replay(
 }
 
 #[rstest]
+#[case(100, 10, 100, true, Some(110))]
+#[case(100, 50, 100, false, None)]
+#[case(100, 60, 100, false, Some(160))]
+#[case(u64::MAX - 10, 20, 10, true, None)]
+fn test_replenish_data_credit_threshold(
+    mut fixture_server_session: Session,
+    #[case] local_max_data: u64,
+    #[case] data_consumed: u64,
+    #[case] receive_window: u64,
+    #[case] force_send: bool,
+    #[case] expected: Option<u64>,
+) {
+    fixture_server_session.state = SessionState::Connected;
+    fixture_server_session.local_max_data = local_max_data;
+    fixture_server_session.data_consumed = data_consumed;
+    fixture_server_session.receive_window = receive_window;
+
+    let effect = fixture_server_session.replenish_data_credit(force_send);
+
+    assert_eq!(
+        effect.is_some_and(|effect| matches!(
+            effect,
+            Effect::SendH3Capsule {
+                capsule_type: WT_CAPSULE_TYPE_MAX_DATA,
+                ..
+            }
+        )),
+        expected.is_some()
+    );
+    assert_eq!(
+        fixture_server_session.local_max_data,
+        expected.unwrap_or(local_max_data)
+    );
+}
+
+#[rstest]
 fn test_replenish_data_credit_varint_encode_failure(mut fixture_server_session: Session) {
     fixture_server_session.state = SessionState::Connected;
     fixture_server_session.local_max_data = 1u64 << 62;
@@ -3278,6 +3314,42 @@ fn test_replenish_streams_credit_disabled_returns_none(mut fixture_server_sessio
     let effect = fixture_server_session.replenish_streams_credit(false, true);
 
     assert!(effect.is_none());
+}
+
+#[rstest]
+#[case(10, 2, 10, true, Some(12))]
+#[case(10, 4, 10, false, None)]
+#[case(10, 6, 10, false, Some(16))]
+#[case(20, 5, 10, true, None)]
+fn test_replenish_streams_credit_threshold(
+    mut fixture_server_session: Session,
+    #[case] local_max_streams_bidi: u64,
+    #[case] peer_streams_bidi_closed: u64,
+    #[case] initial_max_streams_bidi: u64,
+    #[case] force_send: bool,
+    #[case] expected: Option<u64>,
+) {
+    fixture_server_session.state = SessionState::Connected;
+    fixture_server_session.local_max_streams_bidi = local_max_streams_bidi;
+    fixture_server_session.peer_streams_bidi_closed = peer_streams_bidi_closed;
+    fixture_server_session.initial_max_streams_bidi = initial_max_streams_bidi;
+
+    let effect = fixture_server_session.replenish_streams_credit(false, force_send);
+
+    assert_eq!(
+        effect.is_some_and(|effect| matches!(
+            effect,
+            Effect::SendH3Capsule {
+                capsule_type: WT_CAPSULE_TYPE_MAX_STREAMS_BIDI,
+                ..
+            }
+        )),
+        expected.is_some()
+    );
+    assert_eq!(
+        fixture_server_session.local_max_streams_bidi,
+        expected.unwrap_or(local_max_streams_bidi)
+    );
 }
 
 #[rstest]

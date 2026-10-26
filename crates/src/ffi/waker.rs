@@ -16,10 +16,10 @@ mod sys {
 
     #[inline]
     pub(super) fn write_waker(fd: usize) -> io::Result<()> {
-        let raw_fd = RawFd::try_from(fd)
+        let fd = RawFd::try_from(fd)
             .map_err(|_e| Error::new(ErrorKind::InvalidInput, "sys_fd convert invalid"))?;
 
-        let mut file = ManuallyDrop::new(unsafe { File::from_raw_fd(raw_fd) });
+        let mut file = ManuallyDrop::new(unsafe { File::from_raw_fd(fd) });
 
         file.write_all(&[1])
     }
@@ -34,10 +34,10 @@ mod sys {
 
     #[inline]
     pub(super) fn write_waker(fd: usize) -> io::Result<()> {
-        let raw_socket = RawSocket::try_from(fd)
+        let fd = RawSocket::try_from(fd)
             .map_err(|_e| Error::new(ErrorKind::InvalidInput, "sys_socket convert invalid"))?;
 
-        let mut stream = ManuallyDrop::new(unsafe { TcpStream::from_raw_socket(raw_socket) });
+        let mut stream = ManuallyDrop::new(unsafe { TcpStream::from_raw_socket(fd) });
 
         stream.write_all(&[1])
     }

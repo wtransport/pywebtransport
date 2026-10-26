@@ -179,11 +179,11 @@ fn create_client_config() -> QuicClientConfig {
     crypto
         .dangerous()
         .set_certificate_verifier(Arc::new(DummyVerifier));
-    let Ok(quic_crypto) = QuicCryptoClientConfig::try_from(crypto) else {
+    let Ok(crypto) = QuicCryptoClientConfig::try_from(crypto) else {
         assert_eq!("ok", "err");
         unreachable!()
     };
-    let mut client_config = QuicClientConfig::new(Arc::new(quic_crypto));
+    let mut client_config = QuicClientConfig::new(Arc::new(crypto));
     client_config.transport_config(Arc::new(QuicTransportConfig::default()));
 
     client_config
@@ -298,11 +298,11 @@ fn create_server_config(transport_config: QuicTransportConfig) -> QuicServerConf
         assert_eq!("ok", "err");
         unreachable!()
     };
-    let Ok(quic_crypto) = QuicCryptoServerConfig::try_from(crypto) else {
+    let Ok(crypto) = QuicCryptoServerConfig::try_from(crypto) else {
         assert_eq!("ok", "err");
         unreachable!()
     };
-    let mut server_config = QuicServerConfig::with_crypto(Arc::new(quic_crypto));
+    let mut server_config = QuicServerConfig::with_crypto(Arc::new(crypto));
     server_config.transport_config(Arc::new(transport_config));
 
     server_config
@@ -374,13 +374,13 @@ fn drain_effects(connection: &mut TransportConnection) -> Vec<Effect> {
 }
 
 fn open_server_webtransport_stream(pair: &mut ConnectedPair, payload: &[u8]) -> QuicStreamId {
-    let Some(quic_stream_id) = pair.server.connection.streams().open(QuicDir::Uni) else {
+    let Some(stream_id) = pair.server.connection.streams().open(QuicDir::Uni) else {
         assert_eq!("some", "none");
         unreachable!()
     };
     let mut data = vec![0x40, 0x54, 0x00];
     data.extend_from_slice(payload);
-    let mut send_stream = pair.server.connection.send_stream(quic_stream_id);
+    let mut send_stream = pair.server.connection.send_stream(stream_id);
     assert!(
         send_stream
             .write(&data)
@@ -388,7 +388,7 @@ fn open_server_webtransport_stream(pair: &mut ConnectedPair, payload: &[u8]) -> 
     );
     pair.drive();
 
-    quic_stream_id
+    stream_id
 }
 
 fn server_address() -> SocketAddr {
@@ -398,7 +398,7 @@ fn server_address() -> SocketAddr {
 #[test]
 fn test_flush_stream_blocked_resumes_on_writable() {
     let mut pair = create_connected_pair(QuicTransportConfig::default());
-    let Some(quic_stream_id) = pair.client.connection.streams().open(QuicDir::Uni) else {
+    let Some(stream_id) = pair.client.connection.streams().open(QuicDir::Uni) else {
         assert_eq!("some", "none");
         unreachable!()
     };
@@ -409,7 +409,7 @@ fn test_flush_stream_blocked_resumes_on_writable() {
 
     pair.client.process_effects(
         vec![Effect::SendQuicData {
-            stream_id: u64::from(quic_stream_id),
+            stream_id: u64::from(stream_id),
             data: payload.freeze(),
             end_stream: true,
         }],
@@ -418,13 +418,13 @@ fn test_flush_stream_blocked_resumes_on_writable() {
     );
 
     assert!(event_queue.is_empty());
-    assert!(pair.client.send_buffers.contains_key(&quic_stream_id));
+    assert!(pair.client.send_buffers.contains_key(&stream_id));
 
     let mut received_size = 0;
     let mut is_finished = false;
     while !is_finished {
         pair.drive();
-        let mut stream = pair.server.connection.recv_stream(quic_stream_id);
+        let mut stream = pair.server.connection.recv_stream(stream_id);
         let Ok(mut chunks) = stream.read(true) else {
             assert_eq!("ok", "err");
             unreachable!()
@@ -444,20 +444,20 @@ fn test_flush_stream_blocked_resumes_on_writable() {
     pair.drive();
 
     assert_eq!(received_size, 4 * 1024 * 1024);
-    assert!(!pair.client.send_buffers.contains_key(&quic_stream_id));
+    assert!(!pair.client.send_buffers.contains_key(&stream_id));
 }
 
 #[test]
 fn test_flush_stream_closed_stream_discards_buffer() {
     let mut pair = create_connected_pair(QuicTransportConfig::default());
-    let Some(quic_stream_id) = pair.client.connection.streams().open(QuicDir::Uni) else {
+    let Some(stream_id) = pair.client.connection.streams().open(QuicDir::Uni) else {
         assert_eq!("some", "none");
         unreachable!()
     };
     let mut event_queue = VecDeque::new();
     pair.client.process_effects(
         vec![Effect::ResetQuicStream {
-            stream_id: u64::from(quic_stream_id),
+            stream_id: u64::from(stream_id),
             error_code: 0,
         }],
         &mut event_queue,
@@ -465,39 +465,39 @@ fn test_flush_stream_closed_stream_discards_buffer() {
     );
     let mut buffer = SendBuffer::default();
     buffer.chunks.push_back(Bytes::from_static(b"data"));
-    pair.client.send_buffers.insert(quic_stream_id, buffer);
+    pair.client.send_buffers.insert(stream_id, buffer);
 
-    let event = pair.client.flush_stream(quic_stream_id);
+    let event = pair.client.flush_stream(stream_id);
 
     assert!(event.is_none());
-    assert!(!pair.client.send_buffers.contains_key(&quic_stream_id));
+    assert!(!pair.client.send_buffers.contains_key(&stream_id));
 }
 
 #[test]
 fn test_flush_stream_finished_buffer_removes_from_map() {
     let mut connection = create_test_connection();
-    let quic_stream_id = QuicStreamId::from(QuicVarInt::from_u32(1));
+    let stream_id = QuicStreamId::from(QuicVarInt::from_u32(1));
     let buffer = SendBuffer {
         finished: true,
         ..Default::default()
     };
-    connection.send_buffers.insert(quic_stream_id, buffer);
+    connection.send_buffers.insert(stream_id, buffer);
 
-    let event = connection.flush_stream(quic_stream_id);
+    let event = connection.flush_stream(stream_id);
 
     assert!(matches!(
         event,
         Some(ProtocolEvent::InternalCompleteQuicData { stream_id: 1 })
     ));
-    assert!(!connection.send_buffers.contains_key(&quic_stream_id));
+    assert!(!connection.send_buffers.contains_key(&stream_id));
 }
 
 #[test]
 fn test_flush_stream_without_buffer_returns_none() {
     let mut connection = create_test_connection();
-    let quic_stream_id = QuicStreamId::from(QuicVarInt::from_u32(1));
+    let stream_id = QuicStreamId::from(QuicVarInt::from_u32(1));
 
-    let event = connection.flush_stream(quic_stream_id);
+    let event = connection.flush_stream(stream_id);
 
     assert!(event.is_none());
 }
@@ -1037,8 +1037,8 @@ fn test_process_effects_receive_quic_data_closed_stream_ignored() {
 #[test]
 fn test_process_effects_receive_quic_data_concatenates_chunks() {
     let mut pair = create_connected_pair(QuicTransportConfig::default());
-    let quic_stream_id = open_server_webtransport_stream(&mut pair, b"abc");
-    let mut send_stream = pair.server.connection.send_stream(quic_stream_id);
+    let stream_id = open_server_webtransport_stream(&mut pair, b"abc");
+    let mut send_stream = pair.server.connection.send_stream(stream_id);
     assert!(matches!(send_stream.write(b"def"), Ok(3)));
     assert!(matches!(send_stream.finish(), Ok(())));
     pair.drive();
@@ -1046,7 +1046,7 @@ fn test_process_effects_receive_quic_data_concatenates_chunks() {
 
     pair.client.process_effects(
         vec![Effect::ReceiveQuicData {
-            stream_id: u64::from(quic_stream_id),
+            stream_id: u64::from(stream_id),
             max_size: 100,
         }],
         &mut event_queue,
@@ -1061,7 +1061,7 @@ fn test_process_effects_receive_quic_data_concatenates_chunks() {
             ..
         }) if data.as_ref() == b"abcdef"
     ));
-    assert!(!pair.client.pending_receives.contains_key(&quic_stream_id));
+    assert!(!pair.client.pending_receives.contains_key(&stream_id));
 }
 
 #[test]
@@ -1110,15 +1110,15 @@ fn test_process_effects_receive_quic_data_reads_up_to_limit() {
 #[test]
 fn test_process_effects_receive_quic_data_reports_reset() {
     let mut pair = create_connected_pair(QuicTransportConfig::default());
-    let quic_stream_id = open_server_webtransport_stream(&mut pair, b"");
-    let mut send_stream = pair.server.connection.send_stream(quic_stream_id);
+    let stream_id = open_server_webtransport_stream(&mut pair, b"");
+    let mut send_stream = pair.server.connection.send_stream(stream_id);
     assert!(matches!(send_stream.reset(QuicVarInt::from_u32(7)), Ok(())));
     pair.drive();
     let mut event_queue = VecDeque::new();
 
     pair.client.process_effects(
         vec![Effect::ReceiveQuicData {
-            stream_id: u64::from(quic_stream_id),
+            stream_id: u64::from(stream_id),
             max_size: 100,
         }],
         &mut event_queue,
@@ -1129,45 +1129,45 @@ fn test_process_effects_receive_quic_data_reports_reset() {
         event_queue.pop_front(),
         Some(ProtocolEvent::TransportResetStreamReceived { error_code: 7, .. })
     ));
-    assert!(!pair.client.pending_receives.contains_key(&quic_stream_id));
+    assert!(!pair.client.pending_receives.contains_key(&stream_id));
 }
 
 #[test]
 fn test_process_effects_receive_quic_data_waits_for_data() {
     let mut pair = create_connected_pair(QuicTransportConfig::default());
-    let Some(quic_stream_id) = pair.server.connection.streams().open(QuicDir::Uni) else {
+    let Some(stream_id) = pair.server.connection.streams().open(QuicDir::Uni) else {
         assert_eq!("some", "none");
         unreachable!()
     };
-    let mut send_stream = pair.server.connection.send_stream(quic_stream_id);
+    let mut send_stream = pair.server.connection.send_stream(stream_id);
     assert!(matches!(send_stream.write(&[0x40]), Ok(1)));
     pair.drive();
 
-    assert_eq!(pair.client.pending_receives.get(&quic_stream_id), Some(&1));
+    assert_eq!(pair.client.pending_receives.get(&stream_id), Some(&1));
 
-    let mut send_stream = pair.server.connection.send_stream(quic_stream_id);
+    let mut send_stream = pair.server.connection.send_stream(stream_id);
     assert!(matches!(send_stream.write(&[0x54, 0x00]), Ok(2)));
     pair.drive();
 
-    assert!(!pair.client.pending_receives.contains_key(&quic_stream_id));
+    assert!(!pair.client.pending_receives.contains_key(&stream_id));
 }
 
 #[test]
 fn test_process_effects_reset_quic_stream_removes_send_buffer() {
     let mut connection = create_test_connection();
     let mut event_queue = VecDeque::new();
-    let quic_stream_id = QuicStreamId::from(QuicVarInt::from_u32(1));
+    let stream_id = QuicStreamId::from(QuicVarInt::from_u32(1));
     let effects = vec![Effect::ResetQuicStream {
         stream_id: 1,
         error_code: 0,
     }];
     connection
         .send_buffers
-        .insert(quic_stream_id, SendBuffer::default());
+        .insert(stream_id, SendBuffer::default());
 
     connection.process_effects(effects, &mut event_queue, Instant::now());
 
-    assert!(!connection.send_buffers.contains_key(&quic_stream_id));
+    assert!(!connection.send_buffers.contains_key(&stream_id));
 }
 
 #[test]
@@ -1189,13 +1189,13 @@ fn test_process_effects_send_h3_capsule_processes_safely() {
 #[test]
 fn test_process_effects_send_h3_capsule_writes_connect_stream() {
     let mut pair = create_connected_pair(QuicTransportConfig::default());
-    let Some(quic_stream_id) = pair.client.connection.streams().open(QuicDir::Bi) else {
+    let Some(stream_id) = pair.client.connection.streams().open(QuicDir::Bi) else {
         assert_eq!("some", "none");
         unreachable!()
     };
     let mut event_queue = VecDeque::new();
     let effects = vec![Effect::SendH3Capsule {
-        stream_id: u64::from(quic_stream_id),
+        stream_id: u64::from(stream_id),
         capsule_type: 0,
         capsule_value: Bytes::from_static(b"test"),
         end_stream: false,
@@ -1217,7 +1217,7 @@ fn test_process_effects_send_h3_datagram_processes_safely() {
     let mut connection = create_test_connection();
     let mut event_queue = VecDeque::new();
     let effects = vec![Effect::SendH3Datagram {
-        stream_id: 1,
+        session_id: 1,
         data: Bytes::from_static(b"test"),
     }];
 
@@ -1231,7 +1231,7 @@ fn test_process_effects_send_h3_datagram_transmits_datagram() {
     let mut pair = create_connected_pair(QuicTransportConfig::default());
     let mut event_queue = VecDeque::new();
     let effects = vec![Effect::SendH3Datagram {
-        stream_id: 0,
+        session_id: 0,
         data: Bytes::from_static(b"datagram"),
     }];
 
@@ -1496,7 +1496,7 @@ fn test_process_quic_events_stream_stopped_discards_send_buffer() {
     let mut server_transport_config = QuicTransportConfig::default();
     server_transport_config.stream_receive_window(QuicVarInt::from_u32(16));
     let mut pair = create_connected_pair(server_transport_config);
-    let Some(quic_stream_id) = pair.client.connection.streams().open(QuicDir::Bi) else {
+    let Some(stream_id) = pair.client.connection.streams().open(QuicDir::Bi) else {
         assert_eq!("some", "none");
         unreachable!()
     };
@@ -1504,24 +1504,24 @@ fn test_process_quic_events_stream_stopped_discards_send_buffer() {
     data.extend_from_slice(&[0u8; 1024]);
     let mut event_queue = VecDeque::new();
     let effects = vec![Effect::SendQuicData {
-        stream_id: u64::from(quic_stream_id),
+        stream_id: u64::from(stream_id),
         data: Bytes::from(data),
         end_stream: false,
     }];
     pair.client
         .process_effects(effects, &mut event_queue, pair.now);
     pair.drive();
-    assert!(pair.client.send_buffers.contains_key(&quic_stream_id));
+    assert!(pair.client.send_buffers.contains_key(&stream_id));
 
     assert!(matches!(
         pair.server
             .connection
-            .recv_stream(quic_stream_id)
+            .recv_stream(stream_id)
             .stop(QuicVarInt::from_u32(0)),
         Ok(())
     ));
     pair.drive();
 
-    assert!(!pair.client.send_buffers.contains_key(&quic_stream_id));
+    assert!(!pair.client.send_buffers.contains_key(&stream_id));
     assert!(drain_effects(&mut pair.client).is_empty());
 }

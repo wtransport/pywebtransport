@@ -18,7 +18,7 @@ from pywebtransport._controller.events import (
 )
 from pywebtransport.constants import ErrorCodes
 from pywebtransport.events import EventEmitter
-from pywebtransport.exceptions import ConnectionError, StreamError, TimeoutError
+from pywebtransport.exceptions import ConnectionError, SessionError, StreamError, TimeoutError
 from pywebtransport.types import (
     Buffer,
     ErrorCode,
@@ -85,10 +85,10 @@ class WebTransportStream:
 
     @property
     def session(self) -> WebTransportSession:
-        """Return the session handle."""
+        """Return the session."""
         session = self._session()
         if session is None:
-            raise ConnectionError(message="wt_session resolve failed")
+            raise SessionError(message="wt_session resolve failed")
         return session
 
     @property
@@ -101,9 +101,7 @@ class WebTransportStream:
         if self._is_closed:
             raise StreamError(message=f"wt_stream resolve failed stream_id={self.stream_id}", stream_id=self.stream_id)
 
-        connection = self.session._connection()
-        if connection is None:
-            raise ConnectionError(message="wt_connection resolve failed")
+        connection = self.session.connection
 
         try:
             diagnostic_data: dict[str, Any] = await connection._execute_request(
@@ -280,9 +278,7 @@ class WebTransportReceiveStream(WebTransportStream):
                         message=f"wt_stream resolve failed stream_id={self.stream_id}", stream_id=self.stream_id
                     )
 
-                connection = self.session._connection()
-                if connection is None:
-                    raise ConnectionError(message="wt_connection resolve failed")
+                connection = self.session.connection
 
                 size = max_size if max_size >= 0 else None
 
@@ -358,9 +354,7 @@ class WebTransportReceiveStream(WebTransportStream):
             await self.read(max_size=0)
             return b""
 
-        connection = self.session._connection()
-        if connection is None:
-            raise ConnectionError(message="wt_connection resolve failed")
+        connection = self.session.connection
         read_timeout = connection.config.read_timeout
 
         chunks: list[bytes] = []
@@ -393,9 +387,7 @@ class WebTransportReceiveStream(WebTransportStream):
         if max_size < -1:
             raise ValueError(f"wt_stream validate invalid actual={max_size}")
 
-        connection = self.session._connection()
-        if connection is None:
-            raise ConnectionError(message="wt_connection resolve failed")
+        connection = self.session.connection
         read_timeout = connection.config.read_timeout
 
         data = bytearray()
@@ -433,9 +425,7 @@ class WebTransportReceiveStream(WebTransportStream):
         if self._is_closed:
             return
 
-        connection = self.session._connection()
-        if connection is None:
-            return
+        connection = self.session.connection
 
         try:
             await connection._execute_request(
@@ -505,9 +495,7 @@ class WebTransportSendStream(WebTransportStream):
         if self._is_closed:
             return
 
-        connection = self.session._connection()
-        if connection is None:
-            return
+        connection = self.session.connection
 
         try:
             await connection._execute_request(
@@ -534,9 +522,7 @@ class WebTransportSendStream(WebTransportStream):
         if self._is_closed:
             raise StreamError(message=f"wt_stream resolve failed stream_id={self.stream_id}", stream_id=self.stream_id)
 
-        connection = self.session._connection()
-        if connection is None:
-            raise ConnectionError(message="wt_connection resolve failed")
+        connection = self.session.connection
 
         try:
             await connection._execute_request(

@@ -151,7 +151,7 @@ jobs:
 
       - name: Test python
         run: |
-          pytest --cov=pywebtransport --cov-report=xml:coverage-${{ matrix.python-version }}.xml
+          pytest --cov --cov-report=xml:coverage-${{ matrix.python-version }}.xml
 
       - name: Upload coverage
         uses: actions/upload-artifact@v7
@@ -161,8 +161,8 @@ jobs:
 
   report:
     needs: test
-    runs-on: ubuntu-26.04
     if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v7

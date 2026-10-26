@@ -15,14 +15,16 @@ use crate::common::constants::{
     ERR_QPACK_DECOMPRESSION_FAILED, ERR_QPACK_ENCODER_STREAM_ERROR, ERR_WT_REQUIREMENTS_NOT_MET,
     ERR_WT_SESSION_GONE, H3_FRAME_TYPE_CANCEL_PUSH, H3_FRAME_TYPE_DATA, H3_FRAME_TYPE_GOAWAY,
     H3_FRAME_TYPE_HEADERS, H3_FRAME_TYPE_MAX_PUSH_ID, H3_FRAME_TYPE_PUSH_PROMISE,
-    H3_FRAME_TYPE_SETTINGS, H3_FRAME_TYPE_WT_STREAM, H3_STREAM_TYPE_CONTROL, H3_STREAM_TYPE_PUSH,
+    H3_FRAME_TYPE_RESERVED_CONTINUATION, H3_FRAME_TYPE_RESERVED_PING,
+    H3_FRAME_TYPE_RESERVED_PRIORITY, H3_FRAME_TYPE_RESERVED_WINDOW_UPDATE, H3_FRAME_TYPE_SETTINGS,
+    H3_FRAME_TYPE_WT_STREAM, H3_STREAM_TYPE_CONTROL, H3_STREAM_TYPE_PUSH,
     H3_STREAM_TYPE_QPACK_DECODER, H3_STREAM_TYPE_QPACK_ENCODER, H3_STREAM_TYPE_WEBTRANSPORT,
-    SETTINGS_ENABLE_CONNECT_PROTOCOL, SETTINGS_H3_DATAGRAM, SETTINGS_MAX_FIELD_SECTION_SIZE,
-    SETTINGS_QPACK_BLOCKED_STREAMS, SETTINGS_QPACK_MAX_TABLE_CAPACITY,
-    SETTINGS_RESERVED_ENABLE_PUSH, SETTINGS_RESERVED_INITIAL_WINDOW_SIZE,
-    SETTINGS_RESERVED_MAX_CONCURRENT_STREAMS, SETTINGS_RESERVED_MAX_FRAME_SIZE,
-    SETTINGS_WT_ENABLED, SETTINGS_WT_INITIAL_MAX_DATA, SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI,
-    SETTINGS_WT_INITIAL_MAX_STREAMS_UNI, WT_UPGRADE_TOKEN,
+    QUIC_VARINT_LIMIT, SETTINGS_ENABLE_CONNECT_PROTOCOL, SETTINGS_H3_DATAGRAM,
+    SETTINGS_MAX_FIELD_SECTION_SIZE, SETTINGS_QPACK_BLOCKED_STREAMS,
+    SETTINGS_QPACK_MAX_TABLE_CAPACITY, SETTINGS_RESERVED_ENABLE_PUSH,
+    SETTINGS_RESERVED_INITIAL_WINDOW_SIZE, SETTINGS_RESERVED_MAX_CONCURRENT_STREAMS,
+    SETTINGS_RESERVED_MAX_FRAME_SIZE, SETTINGS_WT_ENABLED, SETTINGS_WT_INITIAL_MAX_DATA,
+    SETTINGS_WT_INITIAL_MAX_STREAMS_BIDI, SETTINGS_WT_INITIAL_MAX_STREAMS_UNI, WT_UPGRADE_TOKEN,
 };
 use crate::common::error::WebTransportError;
 use crate::common::types::{Headers, SessionId, StreamId};
@@ -69,6 +71,7 @@ pub(super) struct H3 {
     peer_control_stream_id: Option<StreamId>,
     peer_decoder_stream_id: Option<StreamId>,
     peer_encoder_stream_id: Option<StreamId>,
+    peer_max_push_id: Option<u64>,
     settings_received: bool,
     streams: FxHashMap<StreamId, H3Stream>,
 }
@@ -98,6 +101,7 @@ impl H3 {
             peer_control_stream_id: None,
             peer_decoder_stream_id: None,
             peer_encoder_stream_id: None,
+            peer_max_push_id: None,
             settings_received: false,
             streams: FxHashMap::default(),
         }
@@ -125,8 +129,8 @@ impl H3 {
         encoder_stream_id: StreamId,
         decoder_stream_id: StreamId,
     ) -> Vec<Effect> {
-        let settings_bytes = match self.initialize_settings() {
-            Ok(bytes) => bytes,
+        let settings_frame = match self.initialize_settings() {
+            Ok(settings_frame) => settings_frame,
             Err(e) => {
                 debug!("h3_settings encode failed err={e:?}");
                 return vec![Effect::CloseQuicConnection {
@@ -140,7 +144,7 @@ impl H3 {
             control_stream_id,
             encoder_stream_id,
             decoder_stream_id,
-            &settings_bytes,
+            &settings_frame,
         ) {
             Ok(streams) => streams,
             Err(e) => {
@@ -186,6 +190,7 @@ impl H3 {
         }
 
         self.streams.remove(&stream_id);
+
         effects
     }
 
@@ -194,8 +199,8 @@ impl H3 {
         capsule_type: u64,
         capsule_value: Bytes,
     ) -> Result<Vec<Bytes>, WebTransportError> {
-        if !utils::is_request_response_stream(stream_id) {
-            debug!("h3_stream validate invalid actual={stream_id} expected=request_response");
+        if !utils::is_valid_session_id(stream_id) {
+            debug!("h3_stream validate invalid actual={stream_id}");
             return Err(WebTransportError::Protocol(
                 Some(ERR_H3_STREAM_CREATION_ERROR),
                 "h3_stream validate invalid".into(),
@@ -248,20 +253,20 @@ impl H3 {
     }
 
     pub(super) fn encode_datagram(
-        stream_id: StreamId,
+        session_id: SessionId,
         data: Bytes,
     ) -> Result<Vec<Bytes>, WebTransportError> {
-        if !utils::is_request_response_stream(stream_id) {
-            debug!("h3_stream validate invalid actual={stream_id} expected=request_response");
+        if !utils::is_valid_session_id(session_id) {
+            debug!("wt_session validate invalid actual={session_id}");
             return Err(WebTransportError::Protocol(
                 Some(ERR_H3_STREAM_CREATION_ERROR),
-                "h3_stream validate invalid".into(),
+                "wt_session validate invalid".into(),
             ));
         }
 
         let mut header = BytesMut::new();
 
-        utils::write_varint(&mut header, stream_id / 4).map_err(|e| {
+        utils::write_varint(&mut header, session_id / 4).map_err(|e| {
             debug!("varint encode failed err={e:?}");
             WebTransportError::Protocol(Some(ERR_LIB_INTERNAL_ERROR), "varint encode failed".into())
         })?;
@@ -314,9 +319,8 @@ impl H3 {
             });
         }
 
-        let frame_payload_bytes = Bytes::from(frame_payload);
-        let frame_len = frame_payload_bytes.len();
-        let frame_header = encode_frame_header(H3_FRAME_TYPE_HEADERS, frame_len)?;
+        let frame_payload = Bytes::from(frame_payload);
+        let frame_header = encode_frame_header(H3_FRAME_TYPE_HEADERS, frame_payload.len())?;
 
         effects.push(Effect::SendQuicData {
             stream_id,
@@ -325,7 +329,7 @@ impl H3 {
         });
         effects.push(Effect::SendQuicData {
             stream_id,
-            data: frame_payload_bytes,
+            data: frame_payload,
             end_stream,
         });
 
@@ -469,6 +473,7 @@ impl H3 {
             error_code: ERR_WT_SESSION_GONE,
         }];
         effects.extend(self.cleanup_stream(stream_id));
+
         effects
     }
 
@@ -551,13 +556,20 @@ impl H3 {
 
         match frame_type {
             H3_FRAME_TYPE_CANCEL_PUSH => {
+                parse_push_id(frame_data)?;
                 debug!("h3_cancel_push validate invalid");
                 return Err(WebTransportError::Protocol(
                     Some(ERR_H3_ID_ERROR),
                     "h3_cancel_push validate invalid".into(),
                 ));
             }
-            H3_FRAME_TYPE_DATA | H3_FRAME_TYPE_HEADERS | H3_FRAME_TYPE_PUSH_PROMISE => {
+            H3_FRAME_TYPE_DATA
+            | H3_FRAME_TYPE_HEADERS
+            | H3_FRAME_TYPE_PUSH_PROMISE
+            | H3_FRAME_TYPE_RESERVED_CONTINUATION
+            | H3_FRAME_TYPE_RESERVED_PING
+            | H3_FRAME_TYPE_RESERVED_PRIORITY
+            | H3_FRAME_TYPE_RESERVED_WINDOW_UPDATE => {
                 debug!("h3_control_stream validate invalid");
                 return Err(WebTransportError::Protocol(
                     Some(ERR_H3_FRAME_UNEXPECTED),
@@ -569,6 +581,24 @@ impl H3 {
                 events.push(ProtocolEvent::H3GoawayReceived);
             }
             H3_FRAME_TYPE_MAX_PUSH_ID => {
+                if self.is_client {
+                    debug!("h3_max_push_id validate invalid");
+                    return Err(WebTransportError::Protocol(
+                        Some(ERR_H3_FRAME_UNEXPECTED),
+                        "h3_max_push_id validate invalid".into(),
+                    ));
+                }
+
+                let peer_max_push_id = parse_push_id(frame_data)?;
+
+                if self.peer_max_push_id > Some(peer_max_push_id) {
+                    debug!("h3_max_push_id validate invalid actual={peer_max_push_id}");
+                    return Err(WebTransportError::Protocol(
+                        Some(ERR_H3_ID_ERROR),
+                        "h3_max_push_id validate invalid".into(),
+                    ));
+                }
+                self.peer_max_push_id = Some(peer_max_push_id);
                 debug!("h3_max_push_id receive");
             }
             H3_FRAME_TYPE_SETTINGS => {
@@ -635,6 +665,10 @@ impl H3 {
             H3_FRAME_TYPE_CANCEL_PUSH
             | H3_FRAME_TYPE_GOAWAY
             | H3_FRAME_TYPE_MAX_PUSH_ID
+            | H3_FRAME_TYPE_RESERVED_CONTINUATION
+            | H3_FRAME_TYPE_RESERVED_PING
+            | H3_FRAME_TYPE_RESERVED_PRIORITY
+            | H3_FRAME_TYPE_RESERVED_WINDOW_UPDATE
             | H3_FRAME_TYPE_SETTINGS => {
                 debug!("h3_stream validate invalid actual={frame_type} stream_id={stream_id}");
                 return Err(WebTransportError::Protocol(
@@ -680,21 +714,19 @@ impl H3 {
                     HeaderDecodeStatus::Done(headers, decoder_effects) => {
                         effects.extend(decoder_effects);
 
-                        let is_webtransport_upgrade = headers.iter().any(|(key, value)| {
-                            key.as_ref() == b":protocol" && value.as_ref() == WT_UPGRADE_TOKEN
-                        });
-
-                        if is_webtransport_upgrade {
-                            stream.is_connect_stream = true;
-                        }
-                        stream.blocked = false;
-
                         if self.is_client {
                             validate_response_headers(stream_id, &headers)?;
                         } else {
                             validate_request_headers(stream_id, &headers)?;
                         }
 
+                        let is_webtransport_upgrade = utils::find_header(&headers, b":protocol")
+                            .is_some_and(|protocol| protocol == WT_UPGRADE_TOKEN);
+
+                        if is_webtransport_upgrade {
+                            stream.is_connect_stream = true;
+                        }
+                        stream.blocked = false;
                         stream.headers_processed = true;
 
                         let len = frame_data
@@ -741,7 +773,7 @@ impl H3 {
         control_stream_id: StreamId,
         encoder_stream_id: StreamId,
         decoder_stream_id: StreamId,
-        settings_bytes: &Bytes,
+        settings_frame: &Bytes,
     ) -> Result<[Bytes; 3], WebTransportError> {
         self.set_local_stream_ids(control_stream_id, encoder_stream_id, decoder_stream_id)?;
 
@@ -750,7 +782,7 @@ impl H3 {
             debug!("varint encode failed err={e:?}");
             WebTransportError::Protocol(Some(ERR_LIB_INTERNAL_ERROR), "varint encode failed".into())
         })?;
-        control_data.extend_from_slice(settings_bytes);
+        control_data.extend_from_slice(settings_frame);
 
         let mut encoder_data = BytesMut::new();
         utils::write_varint(&mut encoder_data, H3_STREAM_TYPE_QPACK_ENCODER).map_err(|e| {
@@ -1028,8 +1060,8 @@ impl H3 {
             ));
         };
 
-        if !utils::is_request_response_stream(session_id) {
-            debug!("wt_session validate invalid actual={session_id} expected=request_response");
+        if !utils::is_valid_session_id(session_id) {
+            debug!("wt_session validate invalid actual={session_id}");
             return Err(WebTransportError::Protocol(
                 Some(ERR_H3_ID_ERROR),
                 "wt_session validate invalid".into(),
@@ -1052,35 +1084,27 @@ impl H3 {
             debug!("varint decode invalid err={e:?}");
             WebTransportError::Protocol(Some(ERR_H3_DATAGRAM_ERROR), "varint decode invalid".into())
         })?;
-        let stream_id = quarter_stream_id * 4;
+        let session_id = quarter_stream_id * 4;
 
-        if !utils::is_request_response_stream(stream_id) {
-            debug!("wt_datagram validate invalid actual={stream_id} expected=request_response");
+        if session_id > QUIC_VARINT_LIMIT {
+            debug!("wt_datagram validate exceeded actual={session_id} expected=quic_varint_limit");
             return Err(WebTransportError::Protocol(
-                Some(ERR_H3_ID_ERROR),
-                "wt_datagram validate invalid".into(),
+                Some(ERR_H3_DATAGRAM_ERROR),
+                "wt_datagram validate exceeded".into(),
             ));
         }
 
         let position = usize::try_from(cursor.position()).map_err(|e| {
-            debug!("wt_datagram convert failed expected=usize stream_id={stream_id} err={e:?}");
+            debug!("wt_datagram convert failed expected=usize session_id={session_id} err={e:?}");
             WebTransportError::Protocol(
-                Some(ERR_H3_EXCESSIVE_LOAD),
+                Some(ERR_H3_INTERNAL_ERROR),
                 "wt_datagram convert failed".into(),
             )
         })?;
 
-        if position > data.len() {
-            debug!("wt_datagram validate invalid stream_id={stream_id}");
-            return Err(WebTransportError::Protocol(
-                Some(ERR_H3_INTERNAL_ERROR),
-                "wt_datagram validate invalid".into(),
-            ));
-        }
-
         data.advance(position);
 
-        Ok(vec![ProtocolEvent::H3DatagramReceived { stream_id, data }])
+        Ok(vec![ProtocolEvent::H3DatagramReceived { session_id, data }])
     }
 
     fn recv_request_data(
@@ -1153,6 +1177,7 @@ impl H3 {
         }
 
         let is_headers_received = !was_headers_processed && stream.headers_processed;
+
         if !stream.blocked && !stream.ended && !is_headers_received {
             effects.push(Effect::ReceiveQuicData {
                 stream_id,
@@ -1255,9 +1280,14 @@ impl H3 {
                     self.register_peer_infrastructure_stream(stream_id, stream_type)?;
                 }
                 H3_STREAM_TYPE_PUSH => {
+                    let error_code = if self.is_client {
+                        ERR_H3_ID_ERROR
+                    } else {
+                        ERR_H3_STREAM_CREATION_ERROR
+                    };
                     debug!("h3_push_stream validate invalid stream_id={stream_id}");
                     return Err(WebTransportError::Protocol(
-                        Some(ERR_H3_ID_ERROR),
+                        Some(error_code),
                         "h3_push_stream validate invalid".into(),
                     ));
                 }
@@ -1354,8 +1384,8 @@ impl H3 {
             }
             H3_STREAM_TYPE_QPACK_DECODER => {
                 if !stream.buffer.is_empty() {
-                    let slice_data = stream.buffer.split_to(stream.buffer.len()).freeze();
-                    self.encoder.feed_decoder(&slice_data).map_err(|e| {
+                    let decoder_instructions = stream.buffer.split_to(stream.buffer.len()).freeze();
+                    self.encoder.feed_decoder(&decoder_instructions).map_err(|e| {
                         debug!(
                             "qpack_decoder_stream decode invalid stream_id={stream_id} err={e:?}"
                         );
@@ -1368,8 +1398,8 @@ impl H3 {
             }
             H3_STREAM_TYPE_QPACK_ENCODER => {
                 if !stream.buffer.is_empty() {
-                    let slice_data = stream.buffer.split_to(stream.buffer.len()).freeze();
-                    match self.decoder.feed_encoder(&slice_data) {
+                    let encoder_instructions = stream.buffer.split_to(stream.buffer.len()).freeze();
+                    match self.decoder.feed_encoder(&encoder_instructions) {
                         Ok(unblocked) => {
                             for unblocked_stream_id in unblocked {
                                 let should_resume = {
@@ -1649,6 +1679,25 @@ fn encode_settings(settings: &H3Settings) -> Result<Bytes, WebTransportError> {
     Ok(buffer.freeze())
 }
 
+fn parse_push_id(data: &[u8]) -> Result<u64, WebTransportError> {
+    let mut cursor = Cursor::new(data);
+
+    let push_id = utils::read_varint(&mut cursor).map_err(|e| {
+        debug!("varint decode invalid err={e:?}");
+        WebTransportError::Protocol(Some(ERR_H3_FRAME_ERROR), "varint decode invalid".into())
+    })?;
+
+    if cursor.has_remaining() {
+        debug!("h3_frame validate invalid");
+        return Err(WebTransportError::Protocol(
+            Some(ERR_H3_FRAME_ERROR),
+            "h3_frame validate invalid".into(),
+        ));
+    }
+
+    Ok(push_id)
+}
+
 fn parse_settings(data: &[u8]) -> Result<H3Settings, WebTransportError> {
     let mut settings = H3Settings::default();
     let mut cursor = Cursor::new(data);
@@ -1796,7 +1845,9 @@ fn validate_request_headers(
         (Some(b"CONNECT"), Some(_)) | (Some(_), None) => scheme.is_some() && path.is_some(),
         _ => false,
     };
-    if !is_valid_pseudo {
+    let is_valid_path = path.is_none_or(|path| path.iter().all(u8::is_ascii_graphic));
+
+    if !is_valid_pseudo || !is_valid_path {
         debug!("h3_headers validate invalid stream_id={stream_id}");
         return Err(WebTransportError::Stream(
             stream_id,
@@ -1812,7 +1863,11 @@ fn validate_request_headers(
             (None, [_, ..]) => hosts.iter().all(|host| !host.is_empty()),
             _ => false,
         };
-        if !is_valid_authority || path.is_none_or(<[u8]>::is_empty) {
+        if !is_valid_authority
+            || !path.is_some_and(|path| {
+                matches!((path, method), ([b'/', ..], _) | (b"*", Some(b"OPTIONS")))
+            })
+        {
             debug!("h3_headers validate invalid stream_id={stream_id}");
             return Err(WebTransportError::Stream(
                 stream_id,
@@ -1892,6 +1947,7 @@ fn validate_settings(
         .peer_max_datagram_frame_size()
         .unwrap_or_default()
         > 0;
+
     if !quic_supports_datagrams && settings.h3_datagram == Some(1) {
         debug!("h3_settings validate invalid expected=max_datagram_frame_size");
         return Err(WebTransportError::Protocol(

@@ -1,6 +1,6 @@
 [package]
 name = "pywebtransport-engine"
-version = "0.21.0"
+version = "0.21.1"
 edition = "2024"
 license = "Apache-2.0"
 rust-version = "1.97.1"
@@ -36,14 +36,14 @@ tokio = { version = "1.54.1", features = [
 ] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-webpki-roots = "1.0.10"
-
-[build-dependencies]
-bindgen = "0.73.2"
-cc = "1.9.0"
+webpki-roots = "1.0.11"
 
 [dev-dependencies]
 rstest = "0.28.0"
+
+[build-dependencies]
+bindgen = "0.73.2"
+cc = "1.10.0"
 
 [lints.rust]
 absolute_paths_not_starting_with_crate = "warn"

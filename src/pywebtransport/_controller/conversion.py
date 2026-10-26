@@ -41,8 +41,8 @@ from pywebtransport._controller.events import (
 __all__: list[str] = []
 
 
-def convert_effect(*, event_tuple: tuple[int, Any]) -> Effect:
-    opcode, payload = event_tuple
+def convert_effect(*, effect_tuple: tuple[int, Any]) -> Effect:
+    opcode, payload = effect_tuple
 
     match opcode:
         case abi.EMIT_CONNECTION_EVENT:

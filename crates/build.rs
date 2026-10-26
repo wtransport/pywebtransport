@@ -43,8 +43,8 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     println!("cargo:rerun-if-changed={}", lsxpack_header_h.display());
 
     let mut builder = Builder::default()
-        .header(path_to_str(&lsqpack_h)?)
-        .header(path_to_str(&lsxpack_header_h)?)
+        .header(path_to_string(&lsqpack_h)?)
+        .header(path_to_string(&lsxpack_header_h)?)
         .clang_arg(format!("-I{}", lsqpack_dir.display()))
         .clang_arg(format!("-I{}", xxhash_dir.display()));
 
@@ -70,8 +70,8 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     Ok(())
 }
 
-fn path_to_str(path: &Path) -> Result<&str, io::Error> {
-    path.to_str().ok_or_else(|| {
+fn path_to_string(path: &Path) -> Result<String, io::Error> {
+    path.to_str().map(String::from).ok_or_else(|| {
         io::Error::new(
             ErrorKind::InvalidData,
             format!(

@@ -78,12 +78,12 @@ fn test_generate_self_signed_cert_io_operations_success() {
 
     assert!(result.is_ok(), "should succeed");
 
-    let Ok((ca_path_str, cert_path_str, key_path_str)) = result else {
+    let Ok((ca_path, cert_path, key_path)) = result else {
         return;
     };
-    let ca_path = Path::new(&ca_path_str);
-    let cert_path = Path::new(&cert_path_str);
-    let key_path = Path::new(&key_path_str);
+    let ca_path = Path::new(&ca_path);
+    let cert_path = Path::new(&cert_path);
+    let key_path = Path::new(&key_path);
 
     assert!(ca_path.exists());
     assert!(cert_path.exists());
@@ -111,10 +111,10 @@ fn test_generate_self_signed_cert_key_permissions_unix_success() {
 
     assert!(result.is_ok(), "should succeed");
 
-    let Ok((_, _, key_path_str)) = result else {
+    let Ok((_, _, key_path)) = result else {
         return;
     };
-    let metadata_result = fs::metadata(key_path_str);
+    let metadata_result = fs::metadata(key_path);
 
     assert!(metadata_result.is_ok(), "should succeed");
 
@@ -146,12 +146,12 @@ fn test_load_certs_succeeds_with_valid_pem() {
     drop(fs::remove_dir_all(&temp_dir));
     let hostname = "load-certs-node";
 
-    let Ok((ca_path_str, _, _)) = generate_self_signed_cert(hostname, &temp_dir, 1) else {
+    let Ok((ca_path, _, _)) = generate_self_signed_cert(hostname, &temp_dir, 1) else {
         assert_eq!("ok", "err");
         unreachable!()
     };
 
-    let result = load_certs(Path::new(&ca_path_str));
+    let result = load_certs(Path::new(&ca_path));
 
     let Ok(certs) = result else {
         assert_eq!("ok", "err");

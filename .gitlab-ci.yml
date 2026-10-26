@@ -102,7 +102,7 @@ test:
     - pip install -e .
   script:
     - cargo test --manifest-path crates/Cargo.toml
-    - pytest --cov=pywebtransport --cov-report=term
+    - pytest --cov --cov-report=term
   coverage: '/TOTAL.*\s+(\d+%)$/'
   rules:
     - if: '$CI_COMMIT_BRANCH == "dev" || $CI_COMMIT_BRANCH == "main"'

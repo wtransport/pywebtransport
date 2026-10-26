@@ -16,7 +16,7 @@ _An async-native WebTransport stack_
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![CI](https://github.com/wtransport/pywebtransport/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/wtransport/pywebtransport/actions/workflows/ci.yml)
 [![Coverage](https://codecov.io/gh/wtransport/pywebtransport/branch/main/graph/badge.svg)](https://codecov.io/gh/wtransport/pywebtransport)
-[![Docs](https://app.readthedocs.org/projects/pywebtransport/badge/?version=latest)](https://python.wtransport.org/)
+[![Docs](https://img.shields.io/readthedocs/pywebtransport/latest)](https://python.wtransport.org/)
 
 </div>
 
@@ -48,21 +48,19 @@ pip install pywebtransport
 
 <div>
   <br />
-  <a href="https://www.fastly.com/" target="_blank" rel="noopener noreferrer">
-    <img
+  <a href="https://www.fastly.com/" target="_blank" rel="noopener noreferrer"
+    ><img
       src="https://raw.githubusercontent.com/wtransport/pywebtransport/main/docs/assets/sponsor-fastly.svg"
       alt="Fastly"
       width="110"
-    />
-  </a>
+  /></a>
   &nbsp;&nbsp;&nbsp;&nbsp;
-  <a href="https://osuosl.org/" target="_blank" rel="noopener noreferrer">
-    <img
+  <a href="https://osuosl.org/" target="_blank" rel="noopener noreferrer"
+    ><img
       src="https://raw.githubusercontent.com/wtransport/pywebtransport/main/docs/assets/sponsor-osuosl.png"
       alt="OSU Open Source Lab"
       width="90"
-    />
-  </a>
+  /></a>
 </div>
 
 ## License

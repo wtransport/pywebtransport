@@ -119,25 +119,24 @@ fn create_dummy_client_config() -> QuicClientConfig {
     crypto
         .dangerous()
         .set_certificate_verifier(Arc::new(DummyVerifier));
-    let Ok(quic_crypto) = QuicCryptoClientConfig::try_from(crypto) else {
+    let Ok(crypto) = QuicCryptoClientConfig::try_from(crypto) else {
         assert_eq!("ok", "err");
         unreachable!()
     };
-    let mut client_config = QuicClientConfig::new(Arc::new(quic_crypto));
+    let mut client_config = QuicClientConfig::new(Arc::new(crypto));
     client_config.transport_config(Arc::new(QuicTransportConfig::default()));
 
     client_config
 }
 
 fn create_dummy_endpoint(is_server: bool) -> TransportEndpoint {
-    let quinn_endpoint =
+    let quic_endpoint =
         QuicEndpoint::new(Arc::new(QuicEndpointConfig::default()), None, false, None);
     let base_config = mock_base_config();
 
     if is_server {
         let server_config = create_dummy_rust_server_config();
-        let Ok(endpoint) =
-            TransportEndpoint::new_server(quinn_endpoint, base_config, server_config)
+        let Ok(endpoint) = TransportEndpoint::new_server(quic_endpoint, base_config, server_config)
         else {
             assert_eq!("ok", "err");
             unreachable!()
@@ -145,8 +144,7 @@ fn create_dummy_endpoint(is_server: bool) -> TransportEndpoint {
         endpoint
     } else {
         let client_config = create_dummy_client_config();
-        let Ok(endpoint) =
-            TransportEndpoint::new_client(quinn_endpoint, base_config, client_config)
+        let Ok(endpoint) = TransportEndpoint::new_client(quic_endpoint, base_config, client_config)
         else {
             assert_eq!("ok", "err");
             unreachable!()
@@ -196,10 +194,10 @@ async fn create_idle_client_reactor(
         .max_idle_timeout(Some(QuicVarInt::from_u32(10).into()));
     let mut client_config = create_dummy_client_config();
     client_config.transport_config(Arc::new(transport_config));
-    let quinn_endpoint =
+    let quic_endpoint =
         QuicEndpoint::new(Arc::new(QuicEndpointConfig::default()), None, false, None);
     let Ok(endpoint) =
-        TransportEndpoint::new_client(quinn_endpoint, mock_base_config(), client_config)
+        TransportEndpoint::new_client(quic_endpoint, mock_base_config(), client_config)
     else {
         assert_eq!("ok", "err");
         unreachable!()

@@ -1,7 +1,6 @@
 comment: false
 
 coverage:
-  round: down
   status:
     project:
       default:
@@ -10,7 +9,3 @@ coverage:
     patch:
       default:
         target: 100%
-
-ignore:
-  - "crates/**/*"
-  - "**/*.pyi"

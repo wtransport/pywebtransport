@@ -101,8 +101,6 @@ class TestWebTransportSession:
     def mock_connection(self, mock_config: MagicMock, mocker: MockerFixture) -> MagicMock:
         connection = mocker.Mock(spec=WebTransportConnection)
         connection.config = mock_config
-        connection.handle = 42
-        connection.remote_address = ("127.0.0.1", 443)
         connection._execute_request = mocker.AsyncMock()
 
         return cast(MagicMock, connection)
@@ -134,13 +132,6 @@ class TestWebTransportSession:
         mock_connection._execute_request.side_effect = ConnectionError(message="fail")
 
         with pytest.raises(expected_exception=ConnectionError):
-            await session.accept()
-
-    @pytest.mark.asyncio
-    async def test_accept_connection_gone(self, session: WebTransportSession) -> None:
-        session._connection = lambda: None  # type: ignore[assignment]
-
-        with pytest.raises(expected_exception=ConnectionError, match="wt_connection resolve failed"):
             await session.accept()
 
     @pytest.mark.asyncio
@@ -262,12 +253,6 @@ class TestWebTransportSession:
         spy_logger.warning.assert_called_with("wt_session close failed session_id=%d err=%s", 1, mocker.ANY)
 
     @pytest.mark.asyncio
-    async def test_close_connection_gone(self, session: WebTransportSession) -> None:
-        session._connection = lambda: None  # type: ignore[assignment]
-
-        await session.close()
-
-    @pytest.mark.asyncio
     async def test_close_generic_error(
         self, session: WebTransportSession, mock_connection: MagicMock, mocker: MockerFixture
     ) -> None:
@@ -288,6 +273,12 @@ class TestWebTransportSession:
         await session.close()
 
         spy_logger.warning.assert_called_with("wt_session close failed session_id=%d err=%s", 1, mocker.ANY)
+
+    def test_connection_property_gone(self, session: WebTransportSession) -> None:
+        session._connection = lambda: None  # type: ignore[assignment]
+
+        with pytest.raises(expected_exception=ConnectionError, match="wt_connection resolve failed"):
+            _ = session.connection
 
     @pytest.mark.asyncio
     async def test_context_manager(self, session: WebTransportSession, mocker: MockerFixture) -> None:
@@ -343,13 +334,6 @@ class TestWebTransportSession:
         mock_connection._execute_request.side_effect = ConnectionError(message="fail")
 
         with pytest.raises(expected_exception=ConnectionError):
-            await session.create_bidirectional_stream()
-
-    @pytest.mark.asyncio
-    async def test_create_stream_connection_gone(self, session: WebTransportSession) -> None:
-        session._connection = lambda: None  # type: ignore[assignment]
-
-        with pytest.raises(expected_exception=ConnectionError, match="wt_connection resolve failed"):
             await session.create_bidirectional_stream()
 
     @pytest.mark.asyncio
@@ -482,13 +466,6 @@ class TestWebTransportSession:
         mock_connection._execute_request.side_effect = ConnectionError(message="closed")
 
         with pytest.raises(expected_exception=ConnectionError):
-            await session.diagnose()
-
-    @pytest.mark.asyncio
-    async def test_diagnose_connection_gone(self, session: WebTransportSession) -> None:
-        session._connection = lambda: None  # type: ignore[assignment]
-
-        with pytest.raises(expected_exception=ConnectionError, match="wt_connection resolve failed"):
             await session.diagnose()
 
     @pytest.mark.asyncio
@@ -633,13 +610,6 @@ class TestWebTransportSession:
         mock_connection._execute_request.side_effect = ConnectionError(message="fail")
 
         with pytest.raises(expected_exception=ConnectionError):
-            await session.export_keying_material(label="test", context=b"", length=32)
-
-    @pytest.mark.asyncio
-    async def test_export_keying_material_connection_gone(self, session: WebTransportSession) -> None:
-        session._connection = lambda: None  # type: ignore[assignment]
-
-        with pytest.raises(expected_exception=ConnectionError, match="wt_connection resolve failed"):
             await session.export_keying_material(label="test", context=b"", length=32)
 
     @pytest.mark.asyncio
@@ -802,7 +772,8 @@ class TestWebTransportSession:
 
         assert not hasattr(session, "__dict__")
 
-    def test_properties(self, session: WebTransportSession) -> None:
+    def test_properties(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
+        assert session.connection is mock_connection
         assert session.headers == {"User-Agent": "TestClient"}
         assert session.is_closed is False
         assert session.path == "/chat"
@@ -876,13 +847,6 @@ class TestWebTransportSession:
         assert session._datagram_read_task is None
 
     @pytest.mark.asyncio
-    async def test_read_datagram_connection_gone(self, session: WebTransportSession) -> None:
-        session._connection = lambda: None  # type: ignore[assignment]
-
-        with pytest.raises(expected_exception=ConnectionError, match="wt_connection resolve failed"):
-            await session.read_datagram()
-
-    @pytest.mark.asyncio
     async def test_read_datagram_generic_error(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
         mock_connection._execute_request.side_effect = ValueError("fail")
 
@@ -935,13 +899,6 @@ class TestWebTransportSession:
             await session.reject(status_code=404)
 
     @pytest.mark.asyncio
-    async def test_reject_connection_gone(self, session: WebTransportSession) -> None:
-        session._connection = lambda: None  # type: ignore[assignment]
-
-        with pytest.raises(expected_exception=ConnectionError, match="wt_connection resolve failed"):
-            await session.reject()
-
-    @pytest.mark.asyncio
     async def test_reject_generic_error(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
         mock_connection._execute_request.side_effect = ValueError("fail")
 
@@ -989,19 +946,6 @@ class TestWebTransportSession:
         assert session._incoming_streams_bidi.empty()
         assert session._incoming_streams_uni.empty()
 
-    def test_remote_address(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
-        assert session.remote_address == ("127.0.0.1", 443)
-
-    def test_remote_address_connection_gone(self, session: WebTransportSession) -> None:
-        session._connection = lambda: None  # type: ignore[assignment]
-
-        assert session.remote_address is None
-
-    def test_remote_address_none(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
-        mock_connection.remote_address = None
-
-        assert session.remote_address is None
-
     @pytest.mark.asyncio
     async def test_send_datagram_cancelled(self, session: WebTransportSession, mock_connection: MagicMock) -> None:
         mock_connection._execute_request.side_effect = asyncio.CancelledError
@@ -1025,13 +969,6 @@ class TestWebTransportSession:
         mock_connection._execute_request.side_effect = ConnectionError(message="fail")
 
         with pytest.raises(expected_exception=ConnectionError):
-            await session.send_datagram(data=b"test")
-
-    @pytest.mark.asyncio
-    async def test_send_datagram_connection_gone(self, session: WebTransportSession) -> None:
-        session._connection = lambda: None  # type: ignore[assignment]
-
-        with pytest.raises(expected_exception=ConnectionError, match="wt_connection resolve failed"):
             await session.send_datagram(data=b"test")
 
     @pytest.mark.asyncio

@@ -16,7 +16,7 @@ use crate::protocol::session::SessionDiagnostics;
 use crate::protocol::stream::StreamDiagnostics;
 
 #[fixture]
-fn fixture_bytes() -> Bytes {
+fn fixture_data() -> Bytes {
     Bytes::from_static(b"payload_data")
 }
 
@@ -31,7 +31,7 @@ fn fixture_error_source() -> ErrorSource {
 }
 
 #[fixture]
-fn fixture_header_bytes() -> Bytes {
+fn fixture_header() -> Bytes {
     Bytes::from_static(b"header_data")
 }
 
@@ -119,7 +119,7 @@ fn test_effect_emit_session_event_optional_fields_none_success(fixture_session_i
 fn test_effect_emit_session_event_optional_fields_some_success(
     fixture_session_id: SessionId,
     fixture_headers: Headers,
-    fixture_bytes: Bytes,
+    fixture_data: Bytes,
     fixture_error_code: ErrorCode,
 ) {
     let effect = Effect::EmitSessionEvent {
@@ -129,7 +129,7 @@ fn test_effect_emit_session_event_optional_fields_some_success(
         headers: Some(fixture_headers),
         wt_available_protocols: Some(vec!["h3".to_owned()]),
         wt_protocol: Some("h3".to_owned()),
-        data: Some(fixture_bytes),
+        data: Some(fixture_data),
         is_unidirectional: Some(true),
         max_data: Some(4 * 1024 * 1024),
         max_streams: Some(10),
@@ -189,12 +189,12 @@ fn test_effect_emit_stream_event_full_fields_success(
 #[rstest]
 fn test_effect_export_tls_keying_material_success(
     fixture_request_id: RequestId,
-    fixture_bytes: Bytes,
+    fixture_data: Bytes,
 ) {
     let effect = Effect::ExportTlsKeyingMaterial {
         request_id: fixture_request_id,
         label: "EXPORTER-test".to_owned(),
-        context: fixture_bytes,
+        context: fixture_data,
         length: 32,
     };
 
@@ -261,28 +261,25 @@ fn test_effect_send_h3_headers_lifecycle_success(
 }
 
 #[rstest]
-fn test_effect_send_quic_datagram_structure_success(
-    fixture_header_bytes: Bytes,
-    fixture_bytes: Bytes,
-) {
+fn test_effect_send_quic_datagram_structure_success(fixture_header: Bytes, fixture_data: Bytes) {
     let effect = Effect::SendQuicDatagram {
-        header: fixture_header_bytes.clone(),
-        payload: fixture_bytes.clone(),
+        header: fixture_header.clone(),
+        payload: fixture_data.clone(),
     };
 
     assert!(matches!(effect, Effect::SendQuicDatagram { .. }));
 
     if let Effect::SendQuicDatagram { header, payload } = effect {
-        assert_eq!(header, fixture_header_bytes);
-        assert_eq!(payload, fixture_bytes);
+        assert_eq!(header, fixture_header);
+        assert_eq!(payload, fixture_data);
     }
 }
 
 #[rstest]
-fn test_protocol_event_clone_integrity_success(fixture_stream_id: StreamId, fixture_bytes: Bytes) {
+fn test_protocol_event_clone_integrity_success(fixture_session_id: SessionId, fixture_data: Bytes) {
     let original = ProtocolEvent::H3DatagramReceived {
-        stream_id: fixture_stream_id,
-        data: fixture_bytes.clone(),
+        session_id: fixture_session_id,
+        data: fixture_data.clone(),
     };
 
     let cloned = original.clone();
@@ -297,16 +294,16 @@ fn test_protocol_event_clone_integrity_success(fixture_stream_id: StreamId, fixt
 
     if let (
         ProtocolEvent::H3DatagramReceived {
-            stream_id: original_stream_id,
+            session_id: original_session_id,
             data: original_data,
         },
         ProtocolEvent::H3DatagramReceived {
-            stream_id: cloned_stream_id,
+            session_id: cloned_session_id,
             data: cloned_data,
         },
     ) = (original, cloned)
     {
-        assert_eq!(original_stream_id, cloned_stream_id);
+        assert_eq!(original_session_id, cloned_session_id);
         assert_eq!(original_data, cloned_data);
     }
 }
@@ -440,13 +437,13 @@ fn test_protocol_event_user_create_session_success(
 fn test_protocol_event_user_export_keying_material_success(
     fixture_request_id: RequestId,
     fixture_session_id: SessionId,
-    fixture_bytes: Bytes,
+    fixture_data: Bytes,
 ) {
     let event = ProtocolEvent::UserExportKeyingMaterial {
         request_id: fixture_request_id,
         session_id: fixture_session_id,
         label: "EXPORTER-test".to_owned(),
-        context: fixture_bytes,
+        context: fixture_data,
         length: 32,
     };
 
@@ -492,13 +489,13 @@ fn test_protocol_event_user_stop_sending_success(
 }
 
 #[rstest]
-fn test_request_result_read_data_content_success(fixture_bytes: Bytes) {
-    let result = RequestResult::ReadData(fixture_bytes.clone());
+fn test_request_result_read_data_content_success(fixture_data: Bytes) {
+    let result = RequestResult::ReadData(fixture_data.clone());
 
     assert!(matches!(result, RequestResult::ReadData(_)));
 
     if let RequestResult::ReadData(data) = result {
-        assert_eq!(data, fixture_bytes);
+        assert_eq!(data, fixture_data);
     }
 }
 

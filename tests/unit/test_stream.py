@@ -12,6 +12,7 @@ from pywebtransport import (
     ClientConfig,
     ConnectionError,
     ErrorCodes,
+    SessionError,
     StreamError,
     TimeoutError,
     WebTransportBidirectionalStream,
@@ -65,7 +66,6 @@ class TestWebTransportStream:
         connection = mocker.Mock(spec=WebTransportConnection)
         connection.config = mocker.Mock(spec=ClientConfig)
         connection.config.read_timeout = 0.1
-        connection.handle = 42
         connection._execute_request = mocker.AsyncMock()
 
         return cast(MagicMock, connection)
@@ -73,7 +73,7 @@ class TestWebTransportStream:
     @pytest.fixture
     def mock_session(self, mock_connection: MagicMock, mocker: MockerFixture) -> MagicMock:
         session = mocker.Mock(spec=WebTransportSession)
-        session._connection = mocker.Mock(return_value=mock_connection)
+        session.connection = mock_connection
 
         return cast(MagicMock, session)
 
@@ -102,13 +102,6 @@ class TestWebTransportStream:
         mock_connection._execute_request.side_effect = ConnectionError(message="closed")
 
         with pytest.raises(expected_exception=ConnectionError):
-            await stream.diagnose()
-
-    @pytest.mark.asyncio
-    async def test_diagnose_connection_gone(self, stream: WebTransportStream, mock_session: MagicMock) -> None:
-        mock_session._connection.return_value = None
-
-        with pytest.raises(expected_exception=ConnectionError, match="wt_connection resolve failed"):
             await stream.diagnose()
 
     @pytest.mark.asyncio
@@ -181,7 +174,7 @@ class TestWebTransportStream:
     def test_session_property_gone(self, stream: WebTransportStream) -> None:
         stream._session = lambda: None  # type: ignore[assignment]
 
-        with pytest.raises(expected_exception=ConnectionError, match="wt_session resolve failed"):
+        with pytest.raises(expected_exception=SessionError, match="wt_session resolve failed"):
             _ = stream.session
 
 
@@ -601,13 +594,6 @@ class TestWebTransportReceiveStream(TestWebTransportStream):
         assert stream._read_task is None
 
     @pytest.mark.asyncio
-    async def test_read_connection_gone(self, stream: WebTransportReceiveStream, mock_session: MagicMock) -> None:
-        mock_session._connection.return_value = None
-
-        with pytest.raises(expected_exception=ConnectionError, match="wt_connection resolve failed"):
-            await stream.read()
-
-    @pytest.mark.asyncio
     async def test_read_eof(self, stream: WebTransportReceiveStream, mock_connection: MagicMock) -> None:
         mock_connection._execute_request.return_value = b""
 
@@ -724,15 +710,6 @@ class TestWebTransportReceiveStream(TestWebTransportStream):
         spy_read.assert_has_awaits(calls=[call(max_size=4), call(max_size=2)])
 
     @pytest.mark.asyncio
-    async def test_readexactly_connection_gone(
-        self, stream: WebTransportReceiveStream, mock_session: MagicMock
-    ) -> None:
-        mock_session._connection.return_value = None
-
-        with pytest.raises(expected_exception=ConnectionError, match="wt_connection resolve failed"):
-            await stream.readexactly(size=1)
-
-    @pytest.mark.asyncio
     async def test_readexactly_incomplete(self, stream: WebTransportReceiveStream, mocker: MockerFixture) -> None:
         mocker.patch.object(target=WebTransportReceiveStream, attribute="read", side_effect=[b"12", b""])
 
@@ -791,13 +768,6 @@ class TestWebTransportReceiveStream(TestWebTransportStream):
 
         assert await stream.readuntil(separator=b"\n") == b"a\n"
         assert stream._buffer == bytearray(b"b")
-
-    @pytest.mark.asyncio
-    async def test_readuntil_connection_gone(self, stream: WebTransportReceiveStream, mock_session: MagicMock) -> None:
-        mock_session._connection.return_value = None
-
-        with pytest.raises(expected_exception=ConnectionError, match="wt_connection resolve failed"):
-            await stream.readuntil(separator=b"\n")
 
     @pytest.mark.asyncio
     async def test_readuntil_empty_separator(self, stream: WebTransportReceiveStream) -> None:
@@ -907,14 +877,6 @@ class TestWebTransportReceiveStream(TestWebTransportStream):
 
         with pytest.raises(expected_exception=ConnectionError):
             await stream.stop_receiving()
-
-    @pytest.mark.asyncio
-    async def test_stop_receiving_connection_gone(
-        self, stream: WebTransportReceiveStream, mock_session: MagicMock
-    ) -> None:
-        mock_session._connection.return_value = None
-
-        await stream.stop_receiving()
 
     @pytest.mark.asyncio
     async def test_stop_receiving_generic_error(
@@ -1084,12 +1046,6 @@ class TestWebTransportSendStream(TestWebTransportStream):
             await stream.reset()
 
     @pytest.mark.asyncio
-    async def test_reset_connection_gone(self, stream: WebTransportSendStream, mock_session: MagicMock) -> None:
-        mock_session._connection.return_value = None
-
-        await stream.reset()
-
-    @pytest.mark.asyncio
     async def test_reset_generic_error(self, stream: WebTransportSendStream, mock_connection: MagicMock) -> None:
         mock_connection._execute_request.side_effect = ValueError("fail")
 
@@ -1168,13 +1124,6 @@ class TestWebTransportSendStream(TestWebTransportStream):
             await stream.write(data=b"test")
 
         mock_connection._execute_request.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_write_connection_gone(self, stream: WebTransportSendStream, mock_session: MagicMock) -> None:
-        mock_session._connection.return_value = None
-
-        with pytest.raises(expected_exception=ConnectionError):
-            await stream.write(data=b"a")
 
     @pytest.mark.asyncio
     async def test_write_empty_not_end_stream(self, stream: WebTransportSendStream, mock_connection: MagicMock) -> None:

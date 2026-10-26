@@ -85,12 +85,12 @@ impl<'a> TryFrom<&Bound<'a, PyAny>> for RustClientConfig {
         let certfile: Option<String> = config.getattr("certfile")?.extract()?;
         let keyfile: Option<String> = config.getattr("keyfile")?.extract()?;
 
-        let verify_mode_object = config.getattr("verify_mode")?;
-        let verify_server_certificate = if verify_mode_object.is_none() {
+        let verify_mode = config.getattr("verify_mode")?;
+        let verify_server_certificate = if verify_mode.is_none() {
             true
         } else {
-            let mode_value: i32 = verify_mode_object.extract()?;
-            mode_value != 0
+            let verify_mode: i32 = verify_mode.extract()?;
+            verify_mode != 0
         };
 
         Ok(RustClientConfig {
@@ -115,12 +115,12 @@ impl<'a> TryFrom<&Bound<'a, PyAny>> for RustServerConfig {
         let certfile: String = config.getattr("certfile")?.extract()?;
         let keyfile: String = config.getattr("keyfile")?.extract()?;
 
-        let verify_mode_object = config.getattr("verify_mode")?;
-        let require_client_auth = if verify_mode_object.is_none() {
+        let verify_mode = config.getattr("verify_mode")?;
+        let require_client_auth = if verify_mode.is_none() {
             false
         } else {
-            let mode_value: i32 = verify_mode_object.extract()?;
-            mode_value == 2
+            let verify_mode: i32 = verify_mode.extract()?;
+            verify_mode == 2
         };
 
         Ok(RustServerConfig {

@@ -72,7 +72,7 @@ from pywebtransport.types import EventType, StreamDirection
 class TestConversion:
 
     @pytest.mark.parametrize(
-        argnames="event_tuple, expected",
+        argnames="effect_tuple, expected",
         argvalues=[
             (
                 (EMIT_CONNECTION_EVENT, (1, EventType.CONNECTION_CLOSED, 100, "reason")),
@@ -134,22 +134,22 @@ class TestConversion:
             ),
         ],
     )
-    def test_convert_effect_success(self, event_tuple: tuple[int, Any], expected: Effect) -> None:
-        result = convert_effect(event_tuple=event_tuple)
+    def test_convert_effect_success(self, effect_tuple: tuple[int, Any], expected: Effect) -> None:
+        result = convert_effect(effect_tuple=effect_tuple)
 
         assert result == expected
 
     def test_convert_effect_success_notify_request_failed(self) -> None:
         exception = ValueError("boom")
-        event_tuple = (NOTIFY_REQUEST_FAILED, (6, exception))
+        effect_tuple = (NOTIFY_REQUEST_FAILED, (6, exception))
 
-        result = convert_effect(event_tuple=event_tuple)
+        result = convert_effect(effect_tuple=effect_tuple)
 
         assert result == NotifyRequestFailed(request_id=6, exception=exception)
 
     def test_convert_effect_unsupported(self) -> None:
         with pytest.raises(expected_exception=ValueError, match="rt_event convert invalid actual=999"):
-            convert_effect(event_tuple=(999, None))
+            convert_effect(effect_tuple=(999, None))
 
     @pytest.mark.parametrize(
         argnames="event, expected",

@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::io::Cursor;
 use std::slice;
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::debug;
 
@@ -400,13 +400,11 @@ impl Session {
             return effects;
         }
 
-        let is_peer_initiated = utils::is_peer_initiated_stream(stream_id, self.is_client);
-
         let stream = Stream::new(
             stream_id,
             self.id,
             direction,
-            is_peer_initiated,
+            false,
             StreamParameters {
                 max_write_buffer_size: self.max_write_buffer_size,
             },
@@ -421,7 +419,7 @@ impl Session {
                 event_type: EventType::StreamOpened,
                 session_id: Some(self.id),
                 direction: Some(direction),
-                is_peer_initiated: Some(is_peer_initiated),
+                is_peer_initiated: Some(false),
                 error_code: None,
             },
             Effect::NotifyRequestDone {
@@ -479,10 +477,10 @@ impl Session {
                 end_stream: true,
             });
         } else {
-            let reason_str = reason.as_deref().unwrap_or("");
+            let reason = reason.as_deref().unwrap_or("");
             let limit = usize::try_from(WT_CLOSE_REASON_SIZE_LIMIT).unwrap_or(usize::MAX);
-            let safe_limit = reason_str.floor_char_boundary(limit);
-            let truncated_reason = reason_str.as_bytes().get(..safe_limit).unwrap_or_default();
+            let safe_limit = reason.floor_char_boundary(limit);
+            let truncated_reason = reason.as_bytes().get(..safe_limit).unwrap_or_default();
 
             let mut buffer = BytesMut::with_capacity(4 + truncated_reason.len());
             buffer.put_u32(u32::try_from(error_code).unwrap_or(u32::MAX));
@@ -685,6 +683,7 @@ impl Session {
 
     pub(super) fn diagnose(&self, request_id: RequestId) -> Vec<Effect> {
         let diagnostics = self.diagnostics_snapshot();
+
         vec![Effect::NotifyRequestDone {
             request_id,
             result: RequestResult::SessionDiagnostics(Box::new(diagnostics)),
@@ -1140,17 +1139,14 @@ impl Session {
                     );
                 }
 
-                let code_bytes = capsule_value.get(..4).unwrap_or_default();
-                let error_code = u64::from(u32::from_be_bytes(
-                    code_bytes.try_into().unwrap_or_default(),
-                ));
-                let payload = capsule_value.get(4..).unwrap_or_default();
+                let error_code = u64::from(cursor.get_u32());
+                let reason = cursor.chunk();
 
                 let limit = usize::try_from(WT_CLOSE_REASON_SIZE_LIMIT).unwrap_or(usize::MAX);
-                if payload.len() > limit {
+                if reason.len() > limit {
                     debug!(
                         "wt_capsule validate exceeded actual={} expected=wt_close_reason_size_limit session_id={}",
-                        payload.len(),
+                        reason.len(),
                         self.id
                     );
                     return self.abort(
@@ -1160,11 +1156,11 @@ impl Session {
                     );
                 }
 
-                let Ok(reason) = str::from_utf8(payload) else {
+                let Ok(reason) = str::from_utf8(reason) else {
                     debug!(
                         "wt_capsule validate invalid session_id={} size={}",
                         self.id,
-                        payload.len()
+                        reason.len()
                     );
                     return self.abort(
                         ERR_H3_MESSAGE_ERROR,
@@ -1825,7 +1821,7 @@ impl Session {
         }
 
         effects.push(Effect::SendH3Datagram {
-            stream_id: self.id,
+            session_id: self.id,
             data,
         });
         effects.push(Effect::NotifyRequestDone {
@@ -2064,6 +2060,7 @@ impl Session {
         }
 
         let count = self.blocked_streams_queue.len();
+
         for _ in 0..count {
             let Some(stream_id) = self.blocked_streams_queue.pop_front() else {
                 break;
@@ -2164,14 +2161,13 @@ impl Session {
             }
 
             let direction = utils::stream_direction_from_id(stream_id, self.is_client);
-            let is_peer_initiated = utils::is_peer_initiated_stream(stream_id, self.is_client);
 
             effects.push(Effect::EmitStreamEvent {
                 stream_id,
                 event_type: EventType::StreamOpened,
                 session_id: Some(self.id),
                 direction: Some(direction),
-                is_peer_initiated: Some(is_peer_initiated),
+                is_peer_initiated: Some(true),
                 error_code: None,
             });
         }
@@ -2192,12 +2188,16 @@ impl Session {
             return None;
         }
 
-        let new_limit = utils::next_data_limit(
-            self.local_max_data,
-            self.data_consumed,
-            self.receive_window,
-            force_send,
-        )?;
+        let new_limit = self.data_consumed.saturating_add(self.receive_window);
+        let threshold = if force_send {
+            0
+        } else {
+            self.receive_window / 2
+        };
+
+        if new_limit <= self.local_max_data.saturating_add(threshold) {
+            return None;
+        }
 
         let mut buffer = BytesMut::with_capacity(8);
         if let Err(e) = utils::write_varint(&mut buffer, new_limit) {
@@ -2248,7 +2248,12 @@ impl Session {
             )
         };
 
-        let new_limit = utils::next_stream_limit(current, closed, initial, force_send)?;
+        let new_limit = closed.saturating_add(initial);
+        let threshold = if force_send { 0 } else { initial / 2 };
+
+        if new_limit <= current || new_limit < current.saturating_add(threshold) {
+            return None;
+        }
 
         let mut buffer = BytesMut::with_capacity(8);
         if let Err(e) = utils::write_varint(&mut buffer, new_limit) {
