@@ -35,7 +35,6 @@ class WebTransportClient:
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._closed = False
         self._controller_lock = asyncio.Lock()
-        self._default_headers: Headers = []
 
         self._close_task: asyncio.Task[None] | None = None
         self._controller: EndpointController | None = None
@@ -115,10 +114,6 @@ class WebTransportClient:
             timeout=timeout,
         )
 
-    def set_default_headers(self, *, headers: Headers) -> None:
-        """Set the default headers."""
-        self._default_headers = _merge_headers(base=[], update=headers)
-
     async def _close(self) -> None:
         self._closed = True
 
@@ -159,21 +154,10 @@ class WebTransportClient:
 
         try:
             async with asyncio.timeout(delay=connect_timeout):
-                base_headers = _merge_headers(base=self._config.headers or [], update=self._default_headers)
-                final_headers = _merge_headers(base=base_headers, update=headers or [])
-                normalized_headers = _normalize_headers(headers=final_headers)
-
-                if isinstance(normalized_headers, dict):
-                    has_user_agent = "user-agent" in normalized_headers
-                else:
-                    has_user_agent = any(key == "user-agent" for key, _ in normalized_headers)
-
-                if not has_user_agent:
-                    default_user_agent = self._config.user_agent or f"PyWebTransport/{__version__}"
-                    if isinstance(normalized_headers, dict):
-                        normalized_headers["user-agent"] = default_user_agent
-                    else:
-                        normalized_headers.append(("user-agent", default_user_agent))
+                default_headers = _merge_headers(
+                    base=[(b"user-agent", f"PyWebTransport/{__version__}")], update=self._config.headers
+                )
+                request_headers = _merge_headers(base=default_headers, update=headers if headers is not None else [])
 
                 effective_wt_available_protocols = (
                     list(self._config.wt_available_protocols)
@@ -203,14 +187,14 @@ class WebTransportClient:
                     session = await connection.create_session_optimistic(
                         authority=target.authority,
                         path=target.path,
-                        headers=normalized_headers,
+                        headers=request_headers,
                         wt_available_protocols=effective_wt_available_protocols,
                     )
                 else:
                     session = await connection.create_session(
                         authority=target.authority,
                         path=target.path,
-                        headers=normalized_headers,
+                        headers=request_headers,
                         wt_available_protocols=effective_wt_available_protocols,
                     )
 
@@ -311,26 +295,15 @@ class _ConnectionTarget:
     port: int
 
 
-def _merge_headers(*, base: Headers, update: Headers | None) -> Headers:
-    if update is None:
-        if isinstance(base, Mapping):
-            return dict(base)
-        return list(base)
-
-    if isinstance(base, Mapping) and isinstance(update, Mapping):
-        new_headers = dict(base)
-        new_headers.update(update)
-        return new_headers
-
-    base = list(base.items()) if isinstance(base, Mapping) else list(base)
-    update = list(update.items()) if isinstance(update, Mapping) else list(update)
-    return base + update
-
-
-def _normalize_headers(*, headers: Headers) -> Headers:
-    if isinstance(headers, Mapping):
-        return {key.lower(): value for key, value in headers.items()}
-    return [(key.lower(), value) for key, value in headers]
+def _merge_headers(
+    *, base: list[tuple[str | bytes, str | bytes]], update: Headers | tuple[tuple[str | bytes, str | bytes], ...]
+) -> list[tuple[str | bytes, str | bytes]]:
+    items = update.items() if isinstance(update, Mapping) else update
+    update_headers: list[tuple[str | bytes, str | bytes]] = [
+        ((key.encode() if isinstance(key, str) else key).lower(), value) for key, value in items
+    ]
+    update_keys = {key for key, _ in update_headers}
+    return [(key, value) for key, value in base if key not in update_keys] + update_headers
 
 
 def _parse_webtransport_url(*, url: str) -> _ConnectionTarget:

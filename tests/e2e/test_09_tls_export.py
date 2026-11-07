@@ -18,7 +18,7 @@ DEBUG_MODE: Final[bool] = "--debug" in sys.argv
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 if DEBUG_MODE:
-    logging.getLogger().setLevel(logging.DEBUG)
+    logging.getLogger().setLevel(level=logging.DEBUG)
     init_tracing()
 
 logger = logging.getLogger(name="test_tls_export")
@@ -39,7 +39,7 @@ async def test_e2e_symmetry() -> bool:
                 length = 32
 
                 stream = await session.create_bidirectional_stream()
-                req_payload = json.dumps(
+                request_payload = json.dumps(
                     obj={
                         "label": label,
                         "context_hex": context.hex(),
@@ -47,7 +47,7 @@ async def test_e2e_symmetry() -> bool:
                     }
                 ).encode(encoding="utf-8")
 
-                await stream.write_all(data=req_payload, end_stream=True)
+                await stream.write_all(data=request_payload, end_stream=True)
 
                 client_key = await session.export_keying_material(label=label, context=context, length=length)
                 logger.info("Client locally derived key: %s", client_key.hex())
@@ -85,23 +85,23 @@ async def test_context_and_label_isolation() -> bool:
 
                 key_base = await session.export_keying_material(label=base_label, context=base_context, length=16)
 
-                key_diff_label = await session.export_keying_material(
+                key_different_label = await session.export_keying_material(
                     label="test-label-B", context=base_context, length=16
                 )
 
-                key_diff_context = await session.export_keying_material(
+                key_different_context = await session.export_keying_material(
                     label=base_label, context=b"context-beta", length=16
                 )
 
-                logger.info("Base Key:           %s", key_base.hex())
-                logger.info("Diff Label Key:     %s", key_diff_label.hex())
-                logger.info("Diff Context Key:   %s", key_diff_context.hex())
+                logger.info("Base Key:              %s", key_base.hex())
+                logger.info("Different Label Key:   %s", key_different_label.hex())
+                logger.info("Different Context Key: %s", key_different_context.hex())
 
-                if key_base == key_diff_label:
+                if key_base == key_different_label:
                     logger.error("FAILURE: Different labels produced the same key material")
                     return False
 
-                if key_base == key_diff_context:
+                if key_base == key_different_context:
                     logger.error("FAILURE: Different contexts produced the same key material")
                     return False
 
@@ -149,10 +149,10 @@ async def main() -> int:
     passed = 0
     total = len(tests)
 
-    for test_name, test_func in tests:
+    for test_name, test_function in tests:
         logger.info("")
         try:
-            if await test_func():
+            if await test_function():
                 logger.info("%s: PASSED", test_name)
                 passed += 1
             else:
@@ -176,7 +176,7 @@ async def main() -> int:
 if __name__ == "__main__":
     exit_code = 1
     try:
-        exit_code = asyncio.run(main())
+        exit_code = asyncio.run(main=main())
     except KeyboardInterrupt:
         logger.warning("\nTest interrupted by user")
         exit_code = 130

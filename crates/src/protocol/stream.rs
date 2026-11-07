@@ -124,14 +124,14 @@ impl Stream {
             return (Vec::new(), 0);
         };
 
-        let data_len = data.len() as u64;
+        let data_length = data.len() as u64;
 
-        if data_len > 0 && available_credit == 0 {
+        if data_length > 0 && available_credit == 0 {
             self.write_buffer.push_front((data, request_id, end_stream));
             return (Vec::new(), 0);
         }
 
-        let is_request_complete = data_len <= available_credit;
+        let is_request_complete = data_length <= available_credit;
 
         if !is_request_complete {
             let sendable = usize::try_from(available_credit).unwrap_or(usize::MAX);
@@ -241,7 +241,7 @@ impl Stream {
         }
     }
 
-    pub(super) fn recv_data(&mut self, data: Bytes, end_stream: bool) -> Vec<Effect> {
+    pub(super) fn receive_data(&mut self, data: Bytes, end_stream: bool) -> Vec<Effect> {
         if self.receive_state != Some(StreamReceiveState::Receive) {
             return Vec::new();
         }
@@ -283,7 +283,7 @@ impl Stream {
         effects
     }
 
-    pub(super) fn recv_reset(&mut self, error_code: ErrorCode) -> Vec<Effect> {
+    pub(super) fn receive_reset(&mut self, error_code: ErrorCode) -> Vec<Effect> {
         if matches!(
             self.receive_state,
             None | Some(StreamReceiveState::DataRead | StreamReceiveState::ResetRead)
@@ -318,7 +318,7 @@ impl Stream {
         effects
     }
 
-    pub(super) fn recv_stop_sending(&mut self, error_code: ErrorCode) -> Vec<Effect> {
+    pub(super) fn receive_stop_sending(&mut self, error_code: ErrorCode) -> Vec<Effect> {
         if matches!(
             self.send_state,
             None | Some(StreamSendState::DataReceived | StreamSendState::ResetSent)
@@ -475,12 +475,12 @@ impl Stream {
             );
         }
 
-        let data_len = data.len() as u64;
+        let data_length = data.len() as u64;
 
-        if self.write_buffer_size + data_len > self.max_write_buffer_size {
+        if self.write_buffer_size + data_length > self.max_write_buffer_size {
             debug!(
                 "wt_stream validate exceeded actual={} limit={} stream_id={}",
-                self.write_buffer_size + data_len,
+                self.write_buffer_size + data_length,
                 self.max_write_buffer_size,
                 self.id
             );
@@ -496,7 +496,7 @@ impl Stream {
         }
 
         self.write_buffer.push_back((data, request_id, end_stream));
-        self.write_buffer_size += data_len;
+        self.write_buffer_size += data_length;
 
         self.flush_writes(available_credit)
     }

@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import ssl
 from abc import ABC
-from dataclasses import dataclass, field
-from types import MappingProxyType
+from dataclasses import dataclass
 from typing import Final
 
 from pywebtransport.constants import (
@@ -17,13 +16,14 @@ from pywebtransport.constants import (
     DEFAULT_CONNECTION_RECEIVE_WINDOW,
     DEFAULT_CONNECTION_SEND_WINDOW,
     DEFAULT_CONNECT_TIMEOUT,
+    DEFAULT_EARLY_EVENT_TTL,
     DEFAULT_INITIAL_MAX_DATA,
     DEFAULT_INITIAL_MAX_STREAMS_BIDI,
     DEFAULT_INITIAL_MAX_STREAMS_UNI,
     DEFAULT_KEEP_ALIVE_INTERVAL,
     DEFAULT_MAX_CAPSULE_SIZE,
     DEFAULT_MAX_CONNECTIONS,
-    DEFAULT_MAX_CONNECTION_PENDING_EVENTS,
+    DEFAULT_MAX_CONNECTION_EARLY_EVENTS,
     DEFAULT_MAX_DATAGRAM_SIZE,
     DEFAULT_MAX_FIELD_SECTION_SIZE,
     DEFAULT_MAX_IDLE_TIMEOUT,
@@ -31,12 +31,11 @@ from pywebtransport.constants import (
     DEFAULT_MAX_PENDING_DATAGRAMS,
     DEFAULT_MAX_PENDING_STREAMS,
     DEFAULT_MAX_SESSIONS,
-    DEFAULT_MAX_SESSION_PENDING_EVENTS,
+    DEFAULT_MAX_SESSION_EARLY_EVENTS,
     DEFAULT_MAX_STREAMS_BIDI,
     DEFAULT_MAX_STREAMS_UNI,
     DEFAULT_MAX_UDP_PAYLOAD_SIZE,
     DEFAULT_MAX_WRITE_BUFFER_SIZE,
-    DEFAULT_PENDING_EVENT_TTL,
     DEFAULT_READ_TIMEOUT,
     DEFAULT_RESOURCE_CLEANUP_INTERVAL,
     DEFAULT_SESSION_RECEIVE_WINDOW,
@@ -54,9 +53,10 @@ from pywebtransport.types import Headers
 
 __all__: list[str] = ["ClientConfig", "ServerConfig"]
 
+_CLIENT_VERIFY_MODES: Final[tuple[ssl.VerifyMode, ...]] = (ssl.CERT_NONE, ssl.CERT_OPTIONAL, ssl.CERT_REQUIRED)
 _CONGESTION_CONTROL_ALGORITHMS: Final[tuple[str, ...]] = ("bbr", "cubic", "reno")
 _FIELD_SECTION_SIZE_LIMIT: Final[int] = 16 * 1024 * 1024
-_VERIFY_MODES: Final[tuple[ssl.VerifyMode, ...]] = (ssl.CERT_NONE, ssl.CERT_OPTIONAL, ssl.CERT_REQUIRED)
+_SERVER_VERIFY_MODES: Final[tuple[ssl.VerifyMode, ...]] = (ssl.CERT_NONE, ssl.CERT_REQUIRED)
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -67,12 +67,13 @@ class _BaseConfig(ABC):
     congestion_control_algorithm: str = DEFAULT_CONGESTION_CONTROL_ALGORITHM
     connection_receive_window: int = DEFAULT_CONNECTION_RECEIVE_WINDOW
     connection_send_window: int = DEFAULT_CONNECTION_SEND_WINDOW
+    early_event_ttl: float = DEFAULT_EARLY_EVENT_TTL
     initial_max_data: int = DEFAULT_INITIAL_MAX_DATA
     initial_max_streams_bidi: int = DEFAULT_INITIAL_MAX_STREAMS_BIDI
     initial_max_streams_uni: int = DEFAULT_INITIAL_MAX_STREAMS_UNI
     keep_alive_interval: float | None = DEFAULT_KEEP_ALIVE_INTERVAL
     max_capsule_size: int = DEFAULT_MAX_CAPSULE_SIZE
-    max_connection_pending_events: int = DEFAULT_MAX_CONNECTION_PENDING_EVENTS
+    max_connection_early_events: int = DEFAULT_MAX_CONNECTION_EARLY_EVENTS
     max_connections: int = DEFAULT_MAX_CONNECTIONS
     max_datagram_size: int = DEFAULT_MAX_DATAGRAM_SIZE
     max_field_section_size: int = DEFAULT_MAX_FIELD_SECTION_SIZE
@@ -80,13 +81,12 @@ class _BaseConfig(ABC):
     max_pending_capsules: int = DEFAULT_MAX_PENDING_CAPSULES
     max_pending_datagrams: int = DEFAULT_MAX_PENDING_DATAGRAMS
     max_pending_streams: int = DEFAULT_MAX_PENDING_STREAMS
-    max_session_pending_events: int = DEFAULT_MAX_SESSION_PENDING_EVENTS
+    max_session_early_events: int = DEFAULT_MAX_SESSION_EARLY_EVENTS
     max_sessions: int = DEFAULT_MAX_SESSIONS
     max_streams_bidi: int = DEFAULT_MAX_STREAMS_BIDI
     max_streams_uni: int = DEFAULT_MAX_STREAMS_UNI
     max_udp_payload_size: int = DEFAULT_MAX_UDP_PAYLOAD_SIZE
     max_write_buffer_size: int = DEFAULT_MAX_WRITE_BUFFER_SIZE
-    pending_event_ttl: float = DEFAULT_PENDING_EVENT_TTL
     read_timeout: float | None = DEFAULT_READ_TIMEOUT
     resource_cleanup_interval: float = DEFAULT_RESOURCE_CLEANUP_INTERVAL
     session_receive_window: int = DEFAULT_SESSION_RECEIVE_WINDOW
@@ -101,7 +101,7 @@ class _BaseConfig(ABC):
         if (
             not isinstance(self.close_timeout, (int, float))
             or isinstance(self.close_timeout, bool)
-            or self.close_timeout <= 0
+            or not (self.close_timeout > 0)
         ):
             raise ConfigurationError(
                 message=f"cfg_close_timeout validate invalid actual={self.close_timeout}",
@@ -120,6 +120,7 @@ class _BaseConfig(ABC):
             not isinstance(self.connection_receive_window, int)
             or isinstance(self.connection_receive_window, bool)
             or self.connection_receive_window <= 0
+            or self.connection_receive_window > QUIC_VARINT_LIMIT
         ):
             raise ConfigurationError(
                 message=f"cfg_connection_receive_window validate invalid actual={self.connection_receive_window}",
@@ -136,6 +137,17 @@ class _BaseConfig(ABC):
                 message=f"cfg_connection_send_window validate invalid actual={self.connection_send_window}",
                 config_key="connection_send_window",
                 config_value=self.connection_send_window,
+            )
+
+        if (
+            not isinstance(self.early_event_ttl, (int, float))
+            or isinstance(self.early_event_ttl, bool)
+            or not (0.001 <= self.early_event_ttl <= QUIC_VARINT_LIMIT // 1000)
+        ):
+            raise ConfigurationError(
+                message=f"cfg_early_event_ttl validate invalid actual={self.early_event_ttl}",
+                config_key="early_event_ttl",
+                config_value=self.early_event_ttl,
             )
 
         if (
@@ -177,7 +189,7 @@ class _BaseConfig(ABC):
         if self.keep_alive_interval is not None and (
             not isinstance(self.keep_alive_interval, (int, float))
             or isinstance(self.keep_alive_interval, bool)
-            or self.keep_alive_interval <= 0
+            or not (0.001 <= self.keep_alive_interval <= QUIC_VARINT_LIMIT // 1000)
         ):
             raise ConfigurationError(
                 message=f"cfg_keep_alive_interval validate invalid actual={self.keep_alive_interval}",
@@ -197,16 +209,14 @@ class _BaseConfig(ABC):
             )
 
         if (
-            not isinstance(self.max_connection_pending_events, int)
-            or isinstance(self.max_connection_pending_events, bool)
-            or self.max_connection_pending_events <= 0
+            not isinstance(self.max_connection_early_events, int)
+            or isinstance(self.max_connection_early_events, bool)
+            or self.max_connection_early_events <= 0
         ):
             raise ConfigurationError(
-                message=(
-                    f"cfg_max_connection_pending_events validate invalid actual={self.max_connection_pending_events}"
-                ),
-                config_key="max_connection_pending_events",
-                config_value=self.max_connection_pending_events,
+                message=f"cfg_max_connection_early_events validate invalid actual={self.max_connection_early_events}",
+                config_key="max_connection_early_events",
+                config_value=self.max_connection_early_events,
             )
 
         if (
@@ -247,7 +257,7 @@ class _BaseConfig(ABC):
         if (
             not isinstance(self.max_idle_timeout, (int, float))
             or isinstance(self.max_idle_timeout, bool)
-            or self.max_idle_timeout <= 0
+            or not (0.001 <= self.max_idle_timeout <= QUIC_VARINT_LIMIT // 1000)
         ):
             raise ConfigurationError(
                 message=f"cfg_max_idle_timeout validate invalid actual={self.max_idle_timeout}",
@@ -289,14 +299,14 @@ class _BaseConfig(ABC):
             )
 
         if (
-            not isinstance(self.max_session_pending_events, int)
-            or isinstance(self.max_session_pending_events, bool)
-            or self.max_session_pending_events <= 0
+            not isinstance(self.max_session_early_events, int)
+            or isinstance(self.max_session_early_events, bool)
+            or self.max_session_early_events <= 0
         ):
             raise ConfigurationError(
-                message=f"cfg_max_session_pending_events validate invalid actual={self.max_session_pending_events}",
-                config_key="max_session_pending_events",
-                config_value=self.max_session_pending_events,
+                message=f"cfg_max_session_early_events validate invalid actual={self.max_session_early_events}",
+                config_key="max_session_early_events",
+                config_value=self.max_session_early_events,
             )
 
         if not isinstance(self.max_sessions, int) or isinstance(self.max_sessions, bool) or self.max_sessions <= 0:
@@ -353,21 +363,10 @@ class _BaseConfig(ABC):
                 config_value=self.max_write_buffer_size,
             )
 
-        if (
-            not isinstance(self.pending_event_ttl, (int, float))
-            or isinstance(self.pending_event_ttl, bool)
-            or self.pending_event_ttl <= 0
-        ):
-            raise ConfigurationError(
-                message=f"cfg_pending_event_ttl validate invalid actual={self.pending_event_ttl}",
-                config_key="pending_event_ttl",
-                config_value=self.pending_event_ttl,
-            )
-
         if self.read_timeout is not None and (
             not isinstance(self.read_timeout, (int, float))
             or isinstance(self.read_timeout, bool)
-            or self.read_timeout <= 0
+            or not (self.read_timeout > 0)
         ):
             raise ConfigurationError(
                 message=f"cfg_read_timeout validate invalid actual={self.read_timeout}",
@@ -378,7 +377,7 @@ class _BaseConfig(ABC):
         if (
             not isinstance(self.resource_cleanup_interval, (int, float))
             or isinstance(self.resource_cleanup_interval, bool)
-            or self.resource_cleanup_interval <= 0
+            or not (0.001 <= self.resource_cleanup_interval <= QUIC_VARINT_LIMIT // 1000)
         ):
             raise ConfigurationError(
                 message=f"cfg_resource_cleanup_interval validate invalid actual={self.resource_cleanup_interval}",
@@ -390,6 +389,7 @@ class _BaseConfig(ABC):
             not isinstance(self.session_receive_window, int)
             or isinstance(self.session_receive_window, bool)
             or self.session_receive_window <= 0
+            or self.session_receive_window > QUIC_VARINT_LIMIT
         ):
             raise ConfigurationError(
                 message=f"cfg_session_receive_window validate invalid actual={self.session_receive_window}",
@@ -400,7 +400,7 @@ class _BaseConfig(ABC):
         if (
             not isinstance(self.stream_create_timeout, (int, float))
             or isinstance(self.stream_create_timeout, bool)
-            or self.stream_create_timeout <= 0
+            or not (self.stream_create_timeout > 0)
         ):
             raise ConfigurationError(
                 message=f"cfg_stream_create_timeout validate invalid actual={self.stream_create_timeout}",
@@ -412,6 +412,7 @@ class _BaseConfig(ABC):
             not isinstance(self.stream_receive_window, int)
             or isinstance(self.stream_receive_window, bool)
             or self.stream_receive_window <= 0
+            or self.stream_receive_window > QUIC_VARINT_LIMIT
         ):
             raise ConfigurationError(
                 message=f"cfg_stream_receive_window validate invalid actual={self.stream_receive_window}",
@@ -428,18 +429,17 @@ class ClientConfig(_BaseConfig):
     certfile: str | None = None
     connect_timeout: float = DEFAULT_CONNECT_TIMEOUT
     connection_attempt_delay: float = DEFAULT_CONNECTION_ATTEMPT_DELAY
-    headers: Headers = field(default_factory=dict)
+    headers: Headers | tuple[tuple[str | bytes, str | bytes], ...] = ()
     keyfile: str | None = None
-    user_agent: str | None = None
     verify_mode: ssl.VerifyMode = ssl.CERT_REQUIRED
-    wt_available_protocols: list[str] | None = None
+    wt_available_protocols: list[str] | tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         """Validate the configuration after initialization."""
         super(ClientConfig, self).__post_init__()
 
         if isinstance(self.headers, dict):
-            object.__setattr__(self, "headers", MappingProxyType(dict(self.headers)))
+            object.__setattr__(self, "headers", tuple(self.headers.items()))
         else:
             object.__setattr__(self, "headers", tuple(self.headers))
 
@@ -468,7 +468,7 @@ class ClientConfig(_BaseConfig):
         if (
             not isinstance(self.connect_timeout, (int, float))
             or isinstance(self.connect_timeout, bool)
-            or self.connect_timeout <= 0
+            or not (self.connect_timeout > 0)
         ):
             raise ConfigurationError(
                 message=f"cfg_connect_timeout validate invalid actual={self.connect_timeout}",
@@ -479,7 +479,7 @@ class ClientConfig(_BaseConfig):
         if (
             not isinstance(self.connection_attempt_delay, (int, float))
             or isinstance(self.connection_attempt_delay, bool)
-            or self.connection_attempt_delay <= 0
+            or not (self.connection_attempt_delay > 0)
         ):
             raise ConfigurationError(
                 message=f"cfg_connection_attempt_delay validate invalid actual={self.connection_attempt_delay}",
@@ -496,7 +496,7 @@ class ClientConfig(_BaseConfig):
                 )
             )
             or (
-                isinstance(self.headers, list)
+                isinstance(self.headers, (list, tuple))
                 and all(
                     isinstance(item, tuple)
                     and len(item) == 2
@@ -521,29 +521,22 @@ class ClientConfig(_BaseConfig):
                 config_value=self.keyfile,
             )
 
-        if self.user_agent is not None and not isinstance(self.user_agent, str):
-            raise ConfigurationError(
-                message=f"cfg_user_agent validate invalid actual={self.user_agent}",
-                config_key="user_agent",
-                config_value=self.user_agent,
-            )
-
-        if self.verify_mode not in _VERIFY_MODES:
+        if self.verify_mode not in _CLIENT_VERIFY_MODES:
             raise ConfigurationError(
                 message=f"cfg_verify_mode validate invalid actual={self.verify_mode}",
                 config_key="verify_mode",
                 config_value=self.verify_mode,
             )
 
-        if self.wt_available_protocols is not None:
-            if not isinstance(self.wt_available_protocols, list) or not all(
-                isinstance(protocol, str) for protocol in self.wt_available_protocols
-            ):
-                raise ConfigurationError(
-                    message=f"cfg_wt_available_protocols validate invalid actual={self.wt_available_protocols}",
-                    config_key="wt_available_protocols",
-                    config_value=self.wt_available_protocols,
-                )
+        if self.wt_available_protocols is not None and (
+            not isinstance(self.wt_available_protocols, (list, tuple))
+            or not all(isinstance(protocol, str) for protocol in self.wt_available_protocols)
+        ):
+            raise ConfigurationError(
+                message=f"cfg_wt_available_protocols validate invalid actual={self.wt_available_protocols}",
+                config_key="wt_available_protocols",
+                config_value=self.wt_available_protocols,
+            )
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -570,7 +563,8 @@ class ServerConfig(_BaseConfig):
         if (
             not isinstance(self.bind_port, int)
             or isinstance(self.bind_port, bool)
-            or not (1 <= self.bind_port <= 65535)
+            or self.bind_port <= 0
+            or self.bind_port > 65535
         ):
             raise ConfigurationError(
                 message=f"cfg_bind_port validate invalid actual={self.bind_port}",
@@ -579,7 +573,7 @@ class ServerConfig(_BaseConfig):
             )
 
         if (self.ca_certs is not None and not isinstance(self.ca_certs, str)) or (
-            self.verify_mode in (ssl.CERT_REQUIRED, ssl.CERT_OPTIONAL) and not self.ca_certs
+            self.verify_mode == ssl.CERT_REQUIRED and not self.ca_certs
         ):
             raise ConfigurationError(
                 message=f"cfg_ca_certs validate invalid actual={self.ca_certs}",
@@ -601,7 +595,7 @@ class ServerConfig(_BaseConfig):
                 config_value=self.keyfile,
             )
 
-        if self.verify_mode not in _VERIFY_MODES:
+        if self.verify_mode not in _SERVER_VERIFY_MODES:
             raise ConfigurationError(
                 message=f"cfg_verify_mode validate invalid actual={self.verify_mode}",
                 config_key="verify_mode",

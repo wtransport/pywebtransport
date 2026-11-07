@@ -24,13 +24,13 @@ use crate::protocol::events::{Effect, ProtocolEvent, RequestResult};
 
 pub(super) struct TransportConnection {
     connection: QuicConnection,
-    early_event_ttl: Option<Duration>,
+    early_event_ttl: Duration,
     engine: WebTransportEngine,
-    next_early_event_time: Option<Instant>,
-    next_resource_cleanup_time: Option<Instant>,
+    next_early_event_time: Instant,
+    next_resource_cleanup_time: Instant,
     pending_effects: VecDeque<Effect>,
     pending_receives: FxHashMap<QuicStreamId, u64>,
-    resource_cleanup_interval: Option<Duration>,
+    resource_cleanup_interval: Duration,
     send_buffers: FxHashMap<QuicStreamId, SendBuffer>,
 }
 
@@ -38,17 +38,16 @@ impl TransportConnection {
     pub(super) fn new(
         connection: QuicConnection,
         engine: WebTransportEngine,
-        resource_cleanup_interval: Option<Duration>,
-        early_event_ttl: Option<Duration>,
+        resource_cleanup_interval: Duration,
+        early_event_ttl: Duration,
         now_instant: Instant,
     ) -> Self {
         Self {
             connection,
             early_event_ttl,
             engine,
-            next_early_event_time: early_event_ttl.map(|interval| now_instant + interval),
-            next_resource_cleanup_time: resource_cleanup_interval
-                .map(|interval| now_instant + interval),
+            next_early_event_time: now_instant + early_event_ttl,
+            next_resource_cleanup_time: now_instant + resource_cleanup_interval,
             pending_effects: VecDeque::new(),
             pending_receives: FxHashMap::default(),
             resource_cleanup_interval,
@@ -79,29 +78,20 @@ impl TransportConnection {
     }
 
     pub(super) fn handle_timeout(&mut self, now: f64, now_instant: Instant) {
-        if self
-            .next_resource_cleanup_time
-            .is_some_and(|resource_cleanup_time| now_instant >= resource_cleanup_time)
-        {
+        if now_instant >= self.next_resource_cleanup_time {
             self.dispatch_protocol_event(ProtocolEvent::InternalCleanupResources, now, now_instant);
 
-            self.next_resource_cleanup_time = self
-                .resource_cleanup_interval
-                .map(|interval| now_instant + interval);
+            self.next_resource_cleanup_time = now_instant + self.resource_cleanup_interval;
         }
 
-        if self
-            .next_early_event_time
-            .is_some_and(|ttl_time| now_instant >= ttl_time)
-        {
+        if now_instant >= self.next_early_event_time {
             self.dispatch_protocol_event(
                 ProtocolEvent::InternalCleanupEarlyEvents,
                 now,
                 now_instant,
             );
 
-            self.next_early_event_time =
-                self.early_event_ttl.map(|interval| now_instant + interval);
+            self.next_early_event_time = now_instant + self.early_event_ttl;
         }
 
         self.connection.handle_timeout(now_instant);
@@ -117,21 +107,14 @@ impl TransportConnection {
         self.connection.poll_endpoint_events()
     }
 
-    pub(super) fn poll_timeout(&mut self) -> Option<Instant> {
-        let mut earliest = self.connection.poll_timeout();
+    pub(super) fn poll_timeout(&mut self) -> Instant {
+        let earliest = self
+            .next_resource_cleanup_time
+            .min(self.next_early_event_time);
 
-        if let Some(resource_cleanup_time) = self.next_resource_cleanup_time {
-            earliest = Some(earliest.map_or(resource_cleanup_time, |earliest_timeout| {
-                earliest_timeout.min(resource_cleanup_time)
-            }));
-        }
-
-        if let Some(ttl_time) = self.next_early_event_time {
-            earliest =
-                Some(earliest.map_or(ttl_time, |earliest_timeout| earliest_timeout.min(ttl_time)));
-        }
-
-        earliest
+        self.connection
+            .poll_timeout()
+            .map_or(earliest, |timeout| timeout.min(earliest))
     }
 
     pub(super) fn poll_transmit(
@@ -348,7 +331,7 @@ impl TransportConnection {
                     let stream_id = QuicStreamId::from(stream_id);
                     self.pending_receives.insert(stream_id, max_size);
 
-                    if let Some(event) = self.recv_stream_data(stream_id) {
+                    if let Some(event) = self.receive_stream_data(stream_id) {
                         event_queue.push_back(event);
                     }
                 }
@@ -511,7 +494,7 @@ impl TransportConnection {
                     );
                 }
                 QuicEvent::DatagramReceived => {
-                    self.recv_datagrams(now, now_instant);
+                    self.receive_datagrams(now, now_instant);
                 }
                 QuicEvent::Stream(QuicStreamEvent::Available { dir: direction }) => {
                     self.dispatch_protocol_event(
@@ -543,7 +526,7 @@ impl TransportConnection {
                     }
                 }
                 QuicEvent::Stream(QuicStreamEvent::Readable { id: stream_id }) => {
-                    if let Some(event) = self.recv_stream_data(stream_id) {
+                    if let Some(event) = self.receive_stream_data(stream_id) {
                         self.dispatch_protocol_event(event, now, now_instant);
                     }
                 }
@@ -571,7 +554,7 @@ impl TransportConnection {
         }
     }
 
-    fn recv_datagrams(&mut self, now: f64, now_instant: Instant) {
+    fn receive_datagrams(&mut self, now: f64, now_instant: Instant) {
         let mut datagrams = Vec::new();
 
         while let Some(datagram) = self.connection.datagrams().recv() {
@@ -587,7 +570,7 @@ impl TransportConnection {
         }
     }
 
-    fn recv_stream_data(&mut self, stream_id: QuicStreamId) -> Option<ProtocolEvent> {
+    fn receive_stream_data(&mut self, stream_id: QuicStreamId) -> Option<ProtocolEvent> {
         let max_size = *self.pending_receives.get(&stream_id)?;
         let limit = usize::try_from(max_size).unwrap_or(usize::MAX);
 

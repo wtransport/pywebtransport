@@ -21,12 +21,12 @@ pub(crate) struct EngineParameters {
     pub(crate) initial_max_streams_bidi: u64,
     pub(crate) initial_max_streams_uni: u64,
     pub(crate) max_capsule_size: u64,
-    pub(crate) max_connection_pending_events: u64,
+    pub(crate) max_connection_early_events: u64,
     pub(crate) max_field_section_size: u64,
     pub(crate) max_pending_capsules: u64,
     pub(crate) max_pending_datagrams: u64,
     pub(crate) max_pending_streams: u64,
-    pub(crate) max_session_pending_events: u64,
+    pub(crate) max_session_early_events: u64,
     pub(crate) max_sessions: u64,
     pub(crate) max_write_buffer_size: u64,
     pub(crate) session_receive_window: u64,
@@ -54,11 +54,11 @@ impl WebTransportEngine {
                 initial_max_data: parameters.initial_max_data,
                 initial_max_streams_bidi: parameters.initial_max_streams_bidi,
                 initial_max_streams_uni: parameters.initial_max_streams_uni,
-                max_connection_pending_events: parameters.max_connection_pending_events,
+                max_connection_early_events: parameters.max_connection_early_events,
                 max_pending_capsules: parameters.max_pending_capsules,
                 max_pending_datagrams: parameters.max_pending_datagrams,
                 max_pending_streams: parameters.max_pending_streams,
-                max_session_pending_events: parameters.max_session_pending_events,
+                max_session_early_events: parameters.max_session_early_events,
                 max_sessions: parameters.max_sessions,
                 max_write_buffer_size: parameters.max_write_buffer_size,
                 session_receive_window: parameters.session_receive_window,
@@ -89,7 +89,7 @@ impl WebTransportEngine {
         capsule_value: Bytes,
         end_stream: bool,
     ) -> Result<Vec<Effect>, WebTransportError> {
-        let chunks = H3::encode_capsule(stream_id, capsule_type, capsule_value)?;
+        let chunks = H3::encode_capsule(capsule_type, capsule_value)?;
         let mut effects = Vec::with_capacity(chunks.len());
         let last_index = chunks.len().saturating_sub(1);
 
@@ -178,7 +178,7 @@ impl WebTransportEngine {
                     capsule_type,
                     capsule_value,
                 } => {
-                    new_effects.extend(self.connection.recv_capsule(
+                    new_effects.extend(self.connection.receive_capsule(
                         stream_id,
                         capsule_type,
                         &capsule_value,
@@ -189,24 +189,24 @@ impl WebTransportEngine {
                     }
                 }
                 ProtocolEvent::H3ConnectStreamClosed { stream_id } => {
-                    new_effects.extend(self.connection.recv_connect_close(stream_id, now));
+                    new_effects.extend(self.connection.receive_connect_close(stream_id, now));
                 }
                 ProtocolEvent::H3DatagramReceived { session_id, data } => {
-                    new_effects.extend(self.connection.recv_datagram(session_id, data, now));
+                    new_effects.extend(self.connection.receive_datagram(session_id, data, now));
                 }
                 ProtocolEvent::H3GoawayReceived => {
-                    new_effects.extend(self.connection.recv_goaway());
+                    new_effects.extend(self.connection.receive_goaway());
                 }
                 ProtocolEvent::H3HeadersReceived { stream_id, headers } => {
-                    new_effects.extend(self.connection.recv_headers(stream_id, headers, now));
+                    new_effects.extend(self.connection.receive_headers(stream_id, headers, now));
                     if self.connection.is_session_stream(stream_id) {
                         new_effects.extend(self.h3.resume_request_stream(stream_id));
                     } else {
-                        new_effects.extend(self.h3.cleanup_stream(stream_id));
+                        self.h3.cleanup_stream(stream_id);
                     }
                 }
                 ProtocolEvent::H3SettingsReceived { settings } => {
-                    new_effects.extend(self.connection.recv_settings(&settings, now));
+                    new_effects.extend(self.connection.receive_settings(&settings, now));
                     if self.connection.is_client() && self.connection.is_connected() {
                         replay_pending_user_events = true;
                     }
@@ -312,14 +312,14 @@ impl WebTransportEngine {
                     }
                 }
                 ProtocolEvent::TransportMaxStreamsReceived { is_unidirectional } => {
-                    new_effects.extend(self.connection.recv_max_streams(is_unidirectional));
+                    new_effects.extend(self.connection.receive_max_streams(is_unidirectional));
                 }
                 ProtocolEvent::TransportQuicParametersReceived {
                     peer_max_datagram_frame_size,
                 } => {
                     new_effects.extend(
                         self.connection
-                            .recv_transport_parameters(peer_max_datagram_frame_size),
+                            .receive_transport_parameters(peer_max_datagram_frame_size),
                     );
                 }
                 ProtocolEvent::TransportResetStreamReceived {
@@ -328,17 +328,17 @@ impl WebTransportEngine {
                 } if self.connection.has_stream(stream_id) => {
                     new_effects.extend(
                         self.connection
-                            .recv_stream_reset(stream_id, error_code, now),
+                            .receive_stream_reset(stream_id, error_code, now),
                     );
                 }
                 ProtocolEvent::TransportResetStreamReceived {
                     stream_id,
                     error_code,
                 } if self.connection.is_session_stream(stream_id) => {
-                    new_effects.extend(self.h3.cleanup_stream(stream_id));
+                    self.h3.cleanup_stream(stream_id);
                     new_effects.extend(
                         self.connection
-                            .recv_stream_reset(stream_id, error_code, now),
+                            .receive_stream_reset(stream_id, error_code, now),
                     );
                 }
                 ProtocolEvent::TransportStopSendingReceived {
@@ -349,7 +349,7 @@ impl WebTransportEngine {
                 {
                     new_effects.extend(
                         self.connection
-                            .recv_stop_sending(stream_id, error_code, now),
+                            .receive_stop_sending(stream_id, error_code, now),
                     );
                 }
                 ProtocolEvent::TransportStreamDataAcknowledged { stream_id } => {
@@ -362,7 +362,7 @@ impl WebTransportEngine {
                 } if self.connection.has_stream(stream_id) => {
                     new_effects.extend(
                         self.connection
-                            .recv_stream_data(stream_id, data, end_stream, now),
+                            .receive_stream_data(stream_id, data, end_stream, now),
                     );
                 }
                 ProtocolEvent::TransportDatagramReceived { .. }

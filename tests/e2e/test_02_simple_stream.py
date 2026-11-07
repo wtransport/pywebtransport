@@ -17,7 +17,7 @@ DEBUG_MODE: Final[bool] = "--debug" in sys.argv
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 if DEBUG_MODE:
-    logging.getLogger().setLevel(logging.DEBUG)
+    logging.getLogger().setLevel(level=logging.DEBUG)
     init_tracing()
 
 logger = logging.getLogger(name="test_simple_stream")
@@ -108,18 +108,18 @@ async def test_multiple_messages() -> bool:
                 messages = [b"Message 1", b"Message 2", b"Message 3"]
                 success_count = 0
 
-                for i, message in enumerate(messages):
-                    logger.info("Processing message %d/%d: %r", i + 1, len(messages), message)
+                for index, message in enumerate(messages):
+                    logger.info("Processing message %d/%d: %r", index + 1, len(messages), message)
                     stream = await session.create_bidirectional_stream()
                     try:
                         await stream.write(data=message, end_stream=True)
                         response_data = await stream.read_all()
                         expected = b"ECHO: " + message
                         if response_data == expected:
-                            logger.info("   - Echo for message %d successful", i + 1)
+                            logger.info("   - Echo for message %d successful", index + 1)
                             success_count += 1
                         else:
-                            logger.error("   - FAILURE: Echo for message %d mismatch", i + 1)
+                            logger.error("   - FAILURE: Echo for message %d mismatch", index + 1)
                     finally:
                         await stream.close()
 
@@ -149,10 +149,10 @@ async def main() -> int:
     passed = 0
     total = len(tests)
 
-    for test_name, test_func in tests:
+    for test_name, test_function in tests:
         logger.info("")
         try:
-            if await test_func():
+            if await test_function():
                 logger.info("%s: PASSED", test_name)
                 passed += 1
             else:
@@ -176,7 +176,7 @@ async def main() -> int:
 if __name__ == "__main__":
     exit_code = 1
     try:
-        exit_code = asyncio.run(main())
+        exit_code = asyncio.run(main=main())
     except KeyboardInterrupt:
         logger.warning("\nTest interrupted by user")
         exit_code = 130

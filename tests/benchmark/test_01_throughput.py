@@ -21,7 +21,7 @@ STATIC_VIEW: Final[memoryview] = memoryview(b"x" * PAYLOAD_SIZE)
 logging.basicConfig(level=logging.CRITICAL, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def client_config() -> ClientConfig:
     return ClientConfig(verify_mode=ssl.CERT_NONE)
 
@@ -40,11 +40,11 @@ class TestStreamThroughput:
         )
 
     def test_download_throughput(self, *, benchmark: BenchmarkFixture, client_config: ClientConfig) -> None:
-        cmd = str(PAYLOAD_SIZE).encode()
+        command = str(PAYLOAD_SIZE).encode()
 
         async def download_worker(session: WebTransportSession) -> int:
             stream = await session.create_bidirectional_stream()
-            await stream.write(data=cmd)
+            await stream.write(data=command)
             received = 0
             while True:
                 chunk = await stream.read(max_size=PAYLOAD_SIZE)
@@ -100,10 +100,10 @@ class TestStreamThroughput:
                     return sum(results)
 
         for _ in range(WARMUP_ROUNDS):
-            asyncio.run(run_scenario())
+            asyncio.run(main=run_scenario())
         gc.collect()
 
-        result_bytes = benchmark(lambda: asyncio.run(run_scenario()))
+        result_bytes = benchmark(function_to_benchmark=lambda: asyncio.run(main=run_scenario()))
 
         stats = cast(dict[str, Any], benchmark.stats)
         mean_time = stats["mean"]

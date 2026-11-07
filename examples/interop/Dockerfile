@@ -11,7 +11,7 @@ WORKDIR /app
 
 COPY dist/*.whl /tmp/
 
-RUN pip install --no-cache-dir /tmp/*.whl uvloop && rm /tmp/*.whl
+RUN pip install --no-cache-dir /tmp/*.whl && rm /tmp/*.whl
 
 COPY examples/interop/main.py ./main.py
 

@@ -10,7 +10,7 @@ use super::*;
 use crate::common::constants::{
     ERR_H3_FRAME_ERROR, ERR_LIB_INTERNAL_ERROR, ERR_WT_APPLICATION_ERROR_FIRST,
 };
-use crate::common::types::{ErrorCode, StreamDirection};
+use crate::common::types::ErrorCode;
 
 fn get_reserved_http_code() -> u64 {
     let mut candidate = ERR_WT_APPLICATION_ERROR_FIRST;
@@ -391,20 +391,6 @@ fn test_read_varint_valid_decoding(#[case] input: &[u8], #[case] expected: u64) 
 }
 
 #[rstest]
-#[case(0, true, StreamDirection::Bidirectional)]
-#[case(2, true, StreamDirection::SendOnly)]
-#[case(3, true, StreamDirection::ReceiveOnly)]
-fn test_stream_direction_from_id_resolution(
-    #[case] stream_id: u64,
-    #[case] is_client: bool,
-    #[case] expected: StreamDirection,
-) {
-    let result = stream_direction_from_id(stream_id, is_client);
-
-    assert_eq!(result, expected);
-}
-
-#[rstest]
 #[case(0, 1)]
 #[case(63, 1)]
 #[case(64, 2)]
@@ -448,7 +434,7 @@ fn test_write_varint_too_large() {
 #[case(16383, 2)]
 #[case(1_073_741_823, 4)]
 #[case(4_611_686_018_427_387_903, 8)]
-fn test_write_varint_valid_encoding(#[case] value: u64, #[case] expected_len: usize) {
+fn test_write_varint_valid_encoding(#[case] value: u64, #[case] expected_length: usize) {
     let mut buffer = BytesMut::new();
 
     let result = write_varint(&mut buffer, value);
@@ -456,6 +442,6 @@ fn test_write_varint_valid_encoding(#[case] value: u64, #[case] expected_len: us
     let decoded = read_varint(&mut cursor);
 
     assert_eq!(result, Ok(()));
-    assert_eq!(buffer.len(), expected_len);
+    assert_eq!(buffer.len(), expected_length);
     assert_eq!(decoded, Ok(value));
 }

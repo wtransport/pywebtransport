@@ -12,11 +12,10 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
     let vendor_dir = manifest_dir.join("vendor");
     let lsqpack_dir = vendor_dir.join("ls-qpack");
-    let xxhash_dir = vendor_dir.join("xxhash");
     let wincompat_dir = lsqpack_dir.join("wincompat");
+    let xxhash_dir = vendor_dir.join("xxhash");
 
     let lsqpack_c = lsqpack_dir.join("lsqpack.c");
-    let xxhash_c = xxhash_dir.join("xxhash.c");
     let lsqpack_h = lsqpack_dir.join("lsqpack.h");
     let lsxpack_header_h = lsqpack_dir.join("lsxpack_header.h");
 
@@ -25,7 +24,6 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     let mut build = Build::new();
     build
         .file(&lsqpack_c)
-        .file(&xxhash_c)
         .include(&lsqpack_dir)
         .include(&xxhash_dir)
         .define("XXH_INLINE_ALL", None)
@@ -37,16 +35,11 @@ fn main() -> Result<(), Box<dyn error::Error>> {
 
     build.compile("lsqpack");
 
-    println!("cargo:rerun-if-changed={}", lsqpack_c.display());
-    println!("cargo:rerun-if-changed={}", xxhash_c.display());
-    println!("cargo:rerun-if-changed={}", lsqpack_h.display());
-    println!("cargo:rerun-if-changed={}", lsxpack_header_h.display());
+    println!("cargo:rerun-if-changed={}", vendor_dir.display());
 
     let mut builder = Builder::default()
         .header(path_to_string(&lsqpack_h)?)
-        .header(path_to_string(&lsxpack_header_h)?)
-        .clang_arg(format!("-I{}", lsqpack_dir.display()))
-        .clang_arg(format!("-I{}", xxhash_dir.display()));
+        .header(path_to_string(&lsxpack_header_h)?);
 
     if is_windows {
         builder = builder.clang_arg(format!("-I{}", wincompat_dir.display()));

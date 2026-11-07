@@ -11,6 +11,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(No planned changes for the next release yet.)_
 
+## [0.22.0] - 2026-11-07
+
+This release aligns the implementation with the `draft-ietf-webtrans-http3-17` specification, validates HTTP/3 frames by type and stream state before their payloads are buffered, and makes the runtime relays lossless. It additionally merges request headers by field name and restricts configuration values to those the runtime can consume.
+
+### Changed
+
+- **Draft-17 Alignment**: Adopted the `draft-ietf-webtrans-http3-17` codepoint `0x20b8933b` for `SETTINGS_WT_ENABLED`. Connections with peers advertising only an earlier draft codepoint are closed with `WT_REQUIREMENTS_NOT_MET` (Draft-17, Sec. 9.2).
+- **Configuration Naming**: Renamed `pending_event_ttl`, `max_connection_pending_events`, and `max_session_pending_events` to `early_event_ttl`, `max_connection_early_events`, and `max_session_early_events`, along with their `DEFAULT_*` constants, separating the early event mechanism from the session pending queues.
+- **Configuration Values**: `ClientConfig` stores `headers` as a tuple of field pairs and `wt_available_protocols` as a tuple, accepting tuples for both. `ServerConfig` rejects `ssl.CERT_OPTIONAL`.
+
+### Removed
+
+- **Client Header Defaults**: Removed `WebTransportClient.set_default_headers()` and `ClientConfig.user_agent`. Request headers are supplied through `ClientConfig.headers` and the per-call `headers`, above the library default `User-Agent`.
+
+### Fixed
+
+- **Frame Admission**: Decided whether a frame is permitted on the control or request stream once its type is read, before its payload is buffered. Replaced the shared control frame size limit with per-type bounds, rejecting `CANCEL_PUSH`, `GOAWAY`, and `MAX_PUSH_ID` payloads longer than one varint with `H3_FRAME_ERROR` and `SETTINGS` exceeding the entry bound with `H3_EXCESSIVE_LOAD`, and discarded frames of unknown types as they arrive instead of buffering them against a size limit (RFC 9114, Sec. 7.1 & 9).
+- **WT_STREAM Placement**: Rejected `WT_STREAM` anywhere other than the start of a bidirectional stream with `H3_FRAME_UNEXPECTED` without reading a frame length (Draft-17, Sec. 4.3).
+- **Missing Settings**: Treated any first frame on the control stream other than `SETTINGS`, including `DATA`, as `H3_MISSING_SETTINGS` (RFC 9114, Sec. 6.2.1).
+- **Request Frame Parsing**: Closed the connection with `H3_FRAME_ERROR` when a request stream ends inside a frame, ending the endless loop on a truncated `DATA` frame followed by FIN, and with `H3_FRAME_UNEXPECTED` on `DATA` before `HEADERS`. Frames following a zero-length frame in the same read are now processed (RFC 9114, Sec. 4.1 & 7.1).
+- **QPACK Error Codes**: Reset the stream with `QPACK_DECOMPRESSION_FAILED` instead of closing the connection when a decoded field line exceeds the decoder length limit (RFC 9204, Sec. 7.4), and reported local encode failures as `ErrorCodes.LIB_INTERNAL_ERROR` instead of `QPACK_ENCODER_STREAM_ERROR`.
+- **Pending Stream Events**: Delivered the events of peer-initiated streams buffered before session confirmation in order upon confirmation, instead of replaying only `StreamOpened` and discarding the rest, and continued replaying pending datagrams and streams when a replayed capsule drains the session (Draft-17, Sec. 4.6).
+- **Runtime Relays**: Made the runtime command channel and event queue unbounded. The bounded event queue dropped request outcomes when full, and new requests were rejected based on its occupancy.
+- **Configuration Validation**: Rejected NaN for `close_timeout`, `connect_timeout`, `connection_attempt_delay`, `read_timeout`, and `stream_create_timeout`, and bounded `keep_alive_interval`, `max_idle_timeout`, `early_event_ttl`, and `resource_cleanup_interval` to the QUIC millisecond varint range and `connection_receive_window`, `session_receive_window`, and `stream_receive_window` to `QUIC_VARINT_LIMIT`, so invalid values raise `ConfigurationError` at construction.
+- **Request Header Merging**: Merged the library default, `ClientConfig.headers`, and the per-call headers by case-insensitive field name, each layer replacing all same-named fields of the layer below, instead of sending a field given at more than one layer as multiple field lines.
+- **Final Event Delivery**: Held references to the tasks dispatching the final connection, session, and stream events until they complete, preventing their garbage collection before completion.
+- **Event Emission**: Prevented `EventEmitter.emit_nowait()` from creating an unawaited dispatch coroutine when called without a running event loop.
+
 ## [0.21.1] - 2026-10-26
 
 This release completes the HTTP/3 receive rules for server push and reserved frame types, tightens request and WebTransport field parsing, and exposes the owning connection of a session.
@@ -1148,7 +1176,8 @@ This is a major release focused on enhancing runtime safety and modernizing the 
 - cryptography (>=45.0.4,<46.0.0) for SSL/TLS operations
 - typing-extensions (>=4.14.0,<5.0.0) for Python <3.10 support
 
-[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.21.1...HEAD
+[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/wtransport/pywebtransport/compare/v0.21.1...v0.22.0
 [0.21.1]: https://github.com/wtransport/pywebtransport/compare/v0.21.0...v0.21.1
 [0.21.0]: https://github.com/wtransport/pywebtransport/compare/v0.20.1...v0.21.0
 [0.20.1]: https://github.com/wtransport/pywebtransport/compare/v0.20.0...v0.20.1

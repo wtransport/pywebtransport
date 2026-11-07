@@ -44,7 +44,7 @@ jobs:
       - name: Install system dependencies
         run: |
           apt-get update
-          apt-get install -y curl build-essential clang
+          apt-get install -y build-essential clang curl
 
       - name: Install rust toolchain
         run: |
@@ -79,6 +79,9 @@ jobs:
         with:
           path: |
             .cache/pip
+            .cargo/.crates.toml
+            .cargo/.crates2.json
+            .cargo/bin
             .cargo/registry
           key: ${{ runner.os }}-audit-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('dev-requirements.txt') }}
           restore-keys: |
@@ -87,7 +90,7 @@ jobs:
       - name: Install system dependencies
         run: |
           apt-get update
-          apt-get install -y curl git
+          apt-get install -y build-essential curl git
 
       - name: Install rust toolchain
         run: |
@@ -98,7 +101,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pip-audit
-          curl -fsSL https://github.com/EmbarkStudios/cargo-deny/releases/download/0.19.9/cargo-deny-0.19.9-x86_64-unknown-linux-musl.tar.gz | tar xz --wildcards --strip-components=1 -C /usr/local/bin '*/cargo-deny'
+          cargo install --locked cargo-deny
 
       - name: Run audit
         run: |
@@ -132,7 +135,7 @@ jobs:
       - name: Install system dependencies
         run: |
           apt-get update
-          apt-get install -y curl build-essential clang
+          apt-get install -y build-essential clang curl
 
       - name: Install rust toolchain
         run: |

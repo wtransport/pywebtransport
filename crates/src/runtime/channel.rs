@@ -4,19 +4,17 @@ use std::borrow::Cow;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use crossbeam_queue::ArrayQueue;
+use crossbeam_queue::SegQueue;
 use quinn_proto::ConnectionHandle as QuicConnectionHandle;
-use tokio::sync::mpsc::{self, Receiver, Sender};
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use crate::common::types::{ErrorCode, RequestId};
 use crate::protocol::events::{Effect, ProtocolEvent};
 
-pub(crate) type RuntimeCommandRx = Receiver<RuntimeCommand>;
-pub(crate) type RuntimeCommandTx = Sender<RuntimeCommand>;
-pub(crate) type RuntimeEventRx = Arc<ArrayQueue<RuntimeEvent>>;
-pub(crate) type RuntimeEventTx = Arc<ArrayQueue<RuntimeEvent>>;
-
-const RUNTIME_CHANNEL_CAPACITY: usize = 65536;
+pub(crate) type RuntimeCommandRx = UnboundedReceiver<RuntimeCommand>;
+pub(crate) type RuntimeCommandTx = UnboundedSender<RuntimeCommand>;
+pub(crate) type RuntimeEventRx = Arc<SegQueue<RuntimeEvent>>;
+pub(crate) type RuntimeEventTx = Arc<SegQueue<RuntimeEvent>>;
 
 pub(crate) struct RuntimeChannels {
     pub(crate) command_rx: RuntimeCommandRx,
@@ -27,8 +25,8 @@ pub(crate) struct RuntimeChannels {
 
 impl RuntimeChannels {
     pub(crate) fn new() -> Self {
-        let (command_tx, command_rx) = mpsc::channel(RUNTIME_CHANNEL_CAPACITY);
-        let event_queue = Arc::new(ArrayQueue::new(RUNTIME_CHANNEL_CAPACITY));
+        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let event_queue = Arc::new(SegQueue::new());
 
         Self {
             command_rx,

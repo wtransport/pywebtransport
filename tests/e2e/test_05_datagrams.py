@@ -66,40 +66,40 @@ async def test_multiple_datagrams() -> bool:
     logger.info("Test 05B: Multiple Datagrams")
     logger.info("-" * 50)
 
-    num_datagrams = 10
+    datagram_count = 10
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
             async with await client.connect(url=SERVER_URL) as session:
-                logger.info("Sending %d datagrams and awaiting echoes...", num_datagrams)
+                logger.info("Sending %d datagrams and awaiting echoes...", datagram_count)
 
-                for i in range(num_datagrams):
-                    await session.send_datagram(data=f"Datagram message {i + 1}".encode())
+                for index in range(datagram_count):
+                    await session.send_datagram(data=f"Datagram message {index + 1}".encode())
 
                 received_datagrams: list[bytes] = []
                 try:
                     async with asyncio.timeout(delay=5.0):
-                        while len(received_datagrams) < num_datagrams:
+                        while len(received_datagrams) < datagram_count:
                             received_datagrams.append(await session.read_datagram())
                 except asyncio.TimeoutError:
                     logger.warning("Receiver timed out")
 
-                if len(received_datagrams) != num_datagrams:
+                if len(received_datagrams) != datagram_count:
                     logger.error(
                         "FAILURE: Expected %d datagrams, but received %d",
-                        num_datagrams,
+                        datagram_count,
                         len(received_datagrams),
                     )
                     return False
 
-                for i, data in enumerate(received_datagrams):
-                    expected = f"ECHO: Datagram message {i + 1}".encode()
+                for index, data in enumerate(received_datagrams):
+                    expected = f"ECHO: Datagram message {index + 1}".encode()
                     if data != expected:
-                        logger.error("FAILURE: Datagram %d mismatch. Got: %r", i + 1, data)
+                        logger.error("FAILURE: Datagram %d mismatch. Got: %r", index + 1, data)
                         return False
 
-                logger.info("SUCCESS: Received %d correct datagram echoes", num_datagrams)
+                logger.info("SUCCESS: Received %d correct datagram echoes", datagram_count)
                 return True
 
     except Exception as e:
@@ -118,18 +118,18 @@ async def test_datagram_sizes() -> bool:
         async with WebTransportClient(config=config) as client:
             async with await client.connect(url=SERVER_URL) as session:
                 diagnostics = await session.connection.diagnose()
-                remote_max = diagnostics.peer_max_datagram_frame_size
-                logger.info("Max datagram size from diagnostics: remote=%d", remote_max)
-
-                if remote_max is None:
+                peer_max_datagram_frame_size = diagnostics.peer_max_datagram_frame_size
+                if peer_max_datagram_frame_size is None:
                     logger.error(
                         "FAILURE: Remote max datagram size is None (not negotiated), cannot test oversized datagram"
                     )
                     return False
 
+                logger.info("Max datagram size from diagnostics: remote=%d", peer_max_datagram_frame_size)
+
                 logger.info("Testing oversized datagram...")
                 try:
-                    oversized_data = b"X" * (remote_max + 1)
+                    oversized_data = b"X" * (peer_max_datagram_frame_size + 1)
                     await session.send_datagram(data=oversized_data)
                     logger.error("FAILURE: Sending oversized datagram should have raised an exception")
                     return False
@@ -160,12 +160,12 @@ async def test_datagram_burst() -> bool:
                 logger.info("Starting burst of %d datagrams...", burst_size)
                 start_time = time.time()
 
-                tasks = [session.send_datagram(data=f"Burst {i}".encode()) for i in range(burst_size)]
+                tasks = [session.send_datagram(data=f"Burst {index}".encode()) for index in range(burst_size)]
                 await asyncio.gather(*tasks)
                 duration = time.time() - start_time
                 rate = burst_size / duration if duration > 0 else float("inf")
 
-                logger.info("SUCCESS: Sent %d datagrams in %.3fs (%.1f dgrams/s)", burst_size, duration, rate)
+                logger.info("SUCCESS: Sent %d datagrams in %.3fs (%.1f datagrams/s)", burst_size, duration, rate)
                 return True
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)
@@ -186,10 +186,10 @@ async def main() -> int:
     passed = 0
     total = len(tests)
 
-    for test_name, test_func in tests:
+    for test_name, test_function in tests:
         logger.info("")
         try:
-            if await test_func():
+            if await test_function():
                 logger.info("%s: PASSED", test_name)
                 passed += 1
             else:
@@ -213,7 +213,7 @@ async def main() -> int:
 if __name__ == "__main__":
     exit_code = 1
     try:
-        exit_code = asyncio.run(main())
+        exit_code = asyncio.run(main=main())
     except KeyboardInterrupt:
         logger.warning("\nTest interrupted by user")
         exit_code = 130

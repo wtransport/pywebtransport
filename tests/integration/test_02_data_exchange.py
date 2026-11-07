@@ -2,11 +2,7 @@
 
 import asyncio
 
-import pytest
-
 from pywebtransport import WebTransportSession
-
-pytestmark = pytest.mark.asyncio
 
 
 async def test_bidirectional_stream_echo(sessions: tuple[WebTransportSession, WebTransportSession]) -> None:

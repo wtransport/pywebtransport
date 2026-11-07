@@ -94,7 +94,7 @@ async def test_optimistic_lifecycle_events() -> bool:
             async with await client.connect(url=SERVER_URL) as standard_session:
                 standard_session.events.on(event_type=EventType.SESSION_CLOSED, handler=record_standard)
                 await standard_session.close()
-                await asyncio.wait_for(standard_closed.wait(), timeout=5.0)
+                await asyncio.wait_for(fut=standard_closed.wait(), timeout=5.0)
 
             if state_before_ready != SessionState.CONNECTING:
                 logger.error("FAILURE: Optimistic session should start unconfirmed, got %s", state_before_ready)
@@ -342,7 +342,7 @@ async def test_server_datagram_overflow_drop() -> bool:
             async with await client.connect_optimistic(url=SERVER_URL + "acceptance-delay") as session:
                 logger.info("Sending a burst of %d datagrams before the server accepts...", burst_size)
 
-                tasks = [session.send_datagram(data=f"Overflow {i}".encode()) for i in range(burst_size)]
+                tasks = [session.send_datagram(data=f"Overflow {index}".encode()) for index in range(burst_size)]
                 await asyncio.gather(*tasks)
 
                 try:
@@ -395,10 +395,10 @@ async def main() -> int:
     passed = 0
     total = len(tests)
 
-    for test_name, test_func in tests:
+    for test_name, test_function in tests:
         logger.info("")
         try:
-            if await test_func():
+            if await test_function():
                 logger.info("%s: PASSED", test_name)
                 passed += 1
             else:
@@ -422,7 +422,7 @@ async def main() -> int:
 if __name__ == "__main__":
     exit_code = 1
     try:
-        exit_code = asyncio.run(main())
+        exit_code = asyncio.run(main=main())
     except KeyboardInterrupt:
         logger.warning("\nTest interrupted by user")
         exit_code = 130

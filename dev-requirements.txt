@@ -4,9 +4,7 @@
 #
 #    pip-compile --extra=dev --output-file=dev-requirements.txt pyproject.toml
 #
---index-url https://pypi.org/simple
-
-ast-serialize==0.11.2
+ast-serialize==0.13.1
     # via mypy
 black==26.10.1
     # via pywebtransport (pyproject.toml)
@@ -14,7 +12,7 @@ click==8.4.2
     # via black
 coverage[toml]==7.10.7
     # via pytest-cov
-flake8==7.4.1
+flake8==7.5.0
     # via pywebtransport (pyproject.toml)
 iniconfig==2.1.0
     # via pytest
@@ -22,11 +20,11 @@ isort==9.0.2
     # via pywebtransport (pyproject.toml)
 librt==0.16.0
     # via mypy
-maturin[patchelf]==1.15.0
+maturin[patchelf]==1.16.0
     # via pywebtransport (pyproject.toml)
 mccabe==0.7.0
     # via flake8
-mypy==2.4.0
+mypy==2.4.1
     # via pywebtransport (pyproject.toml)
 mypy-extensions==1.1.0
     # via
@@ -55,11 +53,11 @@ py-cpuinfo2==10.1.1
     # via pytest-benchmark
 pycodestyle==2.15.0
     # via flake8
-pyflakes==4.0.0
+pyflakes==4.1.0
     # via flake8
 pygments==2.20.0
     # via pytest
-pytest==9.1.1
+pytest==9.2.0
     # via
     #   pytest-asyncio
     #   pytest-benchmark
@@ -68,7 +66,7 @@ pytest==9.1.1
     #   pywebtransport (pyproject.toml)
 pytest-asyncio==1.4.1
     # via pywebtransport (pyproject.toml)
-pytest-benchmark==5.3.0
+pytest-benchmark==5.3.1
     # via pywebtransport (pyproject.toml)
 pytest-cov==7.1.0
     # via pywebtransport (pyproject.toml)

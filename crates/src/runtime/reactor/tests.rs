@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use bytes::BytesMut;
-use crossbeam_queue::ArrayQueue;
+use crossbeam_queue::SegQueue;
 use quinn_proto::crypto::rustls::QuicClientConfig as QuicCryptoClientConfig;
 use quinn_proto::{
     ClientConfig as QuicClientConfig, ConnectionHandle as QuicConnectionHandle,
@@ -22,7 +22,7 @@ use rustls::{
     ClientConfig, DigitallySignedStruct, Error as RustlsError, RootCertStore, SignatureScheme,
 };
 use tokio::net::UdpSocket;
-use tokio::sync::mpsc::{self, Sender};
+use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::task::{self, LocalSet};
 use tokio::test as tokio_test;
 use tokio::time::{self, Instant as TokioInstant};
@@ -73,16 +73,14 @@ impl ServerCertVerifier for DummyVerifier {
     }
 }
 
-async fn create_client_reactor(
-    event_capacity: usize,
-) -> (
+async fn create_client_reactor() -> (
     Reactor,
-    Sender<RuntimeCommand>,
-    Arc<ArrayQueue<RuntimeEvent>>,
+    UnboundedSender<RuntimeCommand>,
+    Arc<SegQueue<RuntimeEvent>>,
     Arc<AtomicBool>,
 ) {
-    let (command_tx, command_rx) = mpsc::channel(10);
-    let event_tx = Arc::new(ArrayQueue::new(event_capacity));
+    let (command_tx, command_rx) = mpsc::unbounded_channel();
+    let event_tx = Arc::new(SegQueue::new());
     let waker_called = Arc::new(AtomicBool::new(false));
     let waker_called_clone = Arc::clone(&waker_called);
     let waker: WakerCallback = Arc::new(move || {
@@ -169,16 +167,14 @@ fn create_dummy_socket_address() -> SocketAddr {
     SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 443)
 }
 
-async fn create_idle_client_reactor(
-    event_capacity: usize,
-) -> (
+async fn create_idle_client_reactor() -> (
     Reactor,
-    Sender<RuntimeCommand>,
-    Arc<ArrayQueue<RuntimeEvent>>,
+    UnboundedSender<RuntimeCommand>,
+    Arc<SegQueue<RuntimeEvent>>,
     Arc<AtomicBool>,
 ) {
-    let (command_tx, command_rx) = mpsc::channel(10);
-    let event_tx = Arc::new(ArrayQueue::new(event_capacity));
+    let (command_tx, command_rx) = mpsc::unbounded_channel();
+    let event_tx = Arc::new(SegQueue::new());
     let waker_called = Arc::new(AtomicBool::new(false));
     let waker_called_clone = Arc::clone(&waker_called);
     let waker: WakerCallback = Arc::new(move || {
@@ -213,16 +209,14 @@ async fn create_idle_client_reactor(
     (reactor, command_tx, event_tx, waker_called)
 }
 
-async fn create_test_reactor(
-    event_capacity: usize,
-) -> (
+async fn create_test_reactor() -> (
     Reactor,
-    Sender<RuntimeCommand>,
-    Arc<ArrayQueue<RuntimeEvent>>,
+    UnboundedSender<RuntimeCommand>,
+    Arc<SegQueue<RuntimeEvent>>,
     Arc<AtomicBool>,
 ) {
-    let (command_tx, command_rx) = mpsc::channel(10);
-    let event_tx = Arc::new(ArrayQueue::new(event_capacity));
+    let (command_tx, command_rx) = mpsc::unbounded_channel();
+    let event_tx = Arc::new(SegQueue::new());
     let waker_called = Arc::new(AtomicBool::new(false));
     let waker_called_clone = Arc::clone(&waker_called);
     let waker: WakerCallback = Arc::new(move || {
@@ -249,12 +243,13 @@ fn mock_base_config() -> RustBaseConfig {
         congestion_control_algorithm: "cubic".to_owned(),
         connection_receive_window: 16 * 1024 * 1024,
         connection_send_window: 16 * 1024 * 1024,
+        early_event_ttl: Duration::from_secs_f64(5.0),
         initial_max_data: 4 * 1024 * 1024,
         initial_max_streams_bidi: 10,
         initial_max_streams_uni: 10,
         keep_alive_interval: Some(Duration::from_secs_f64(30.0)),
         max_capsule_size: 65536,
-        max_connection_pending_events: 1000,
+        max_connection_early_events: 1000,
         max_connections: 100,
         max_datagram_size: 1350,
         max_field_section_size: 65536,
@@ -262,13 +257,12 @@ fn mock_base_config() -> RustBaseConfig {
         max_pending_capsules: 20,
         max_pending_datagrams: 100,
         max_pending_streams: 10,
+        max_session_early_events: 100,
         max_sessions: 10,
-        max_session_pending_events: 100,
         max_streams_bidi: 100,
         max_streams_uni: 100,
         max_udp_payload_size: 1472,
         max_write_buffer_size: 1024 * 1024,
-        pending_event_ttl: Duration::from_secs_f64(5.0),
         resource_cleanup_interval: Duration::from_secs_f64(15.0),
         session_receive_window: 4 * 1024 * 1024,
         stream_receive_window: 1024 * 1024,
@@ -300,7 +294,7 @@ async fn wait_until(mut condition: impl FnMut() -> bool) {
 
 #[tokio_test]
 async fn test_flush_transmits_after_connect_sends_data() {
-    let (mut reactor, _, _, _) = create_client_reactor(10).await;
+    let (mut reactor, _, _, _) = create_client_reactor().await;
     let remote_address = create_dummy_socket_address();
     let now = Instant::now();
 
@@ -321,7 +315,7 @@ async fn test_flush_transmits_after_connect_sends_data() {
 
 #[tokio_test]
 async fn test_flush_transmits_empty() {
-    let (mut reactor, _, _, _) = create_test_reactor(10).await;
+    let (mut reactor, _, _, _) = create_test_reactor().await;
 
     reactor.flush_transmits().await;
 
@@ -330,7 +324,7 @@ async fn test_flush_transmits_empty() {
 
 #[tokio_test]
 async fn test_handle_command_create_connection_failure_emits_event() {
-    let (mut reactor, _, event_tx, _) = create_test_reactor(10).await;
+    let (mut reactor, _, event_tx, _) = create_test_reactor().await;
     let command = RuntimeCommand::CreateConnection {
         request_id: RequestId::from(1u64),
         remote_address: create_dummy_socket_address(),
@@ -349,27 +343,8 @@ async fn test_handle_command_create_connection_failure_emits_event() {
 }
 
 #[tokio_test]
-async fn test_handle_command_create_connection_queue_full_drops_event() {
-    let (mut reactor, _, event_tx, _) = create_test_reactor(1).await;
-    let command = RuntimeCommand::CreateConnection {
-        request_id: RequestId::from(1u64),
-        remote_address: create_dummy_socket_address(),
-        server_name: "localhost".to_owned(),
-    };
-    let Ok(()) = event_tx.push(RuntimeEvent::ReactorShutdown) else {
-        assert_eq!("ok", "err");
-        unreachable!()
-    };
-
-    let continue_loop = reactor.handle_command(command).await;
-
-    assert!(continue_loop);
-    assert!(!reactor.events_emitted);
-}
-
-#[tokio_test]
 async fn test_handle_command_protocol_dispatches_event() {
-    let (mut reactor, _, _, _) = create_client_reactor(10).await;
+    let (mut reactor, _, _, _) = create_client_reactor().await;
     let remote_address = create_dummy_socket_address();
     let now = Instant::now();
     let TransportEvent::ConnectionSpawned { handle, .. } =
@@ -394,7 +369,7 @@ async fn test_handle_command_protocol_dispatches_event() {
 
 #[tokio_test]
 async fn test_handle_command_shutdown_emits_final_effects() {
-    let (mut reactor, _, event_tx, _) = create_client_reactor(10).await;
+    let (mut reactor, _, event_tx, _) = create_client_reactor().await;
     let remote_address = create_dummy_socket_address();
     let now = Instant::now();
     let TransportEvent::ConnectionSpawned { handle, .. } =
@@ -432,47 +407,19 @@ async fn test_handle_command_shutdown_emits_final_effects() {
 }
 
 #[tokio_test]
-async fn test_handle_command_shutdown_queue_full_drops_effects() {
-    let (mut reactor, _, event_tx, _) = create_client_reactor(1).await;
-    let TransportEvent::ConnectionSpawned { .. } = reactor.endpoint.connect(
-        1,
-        create_dummy_socket_address(),
-        "localhost",
-        Instant::now(),
-    ) else {
-        assert_eq!("ok", "err");
-        unreachable!()
-    };
-    let Ok(()) = event_tx.push(RuntimeEvent::ReactorShutdown) else {
-        assert_eq!("ok", "err");
-        unreachable!()
-    };
-
-    let continue_loop = reactor
-        .handle_command(RuntimeCommand::ShutdownReactor)
-        .await;
-
-    assert!(!continue_loop);
-    assert!(!reactor.events_emitted);
-    assert!(matches!(
-        event_tx.pop(),
-        Some(RuntimeEvent::ReactorShutdown)
-    ));
-}
-
-#[tokio_test]
 async fn test_handle_command_shutdown_returns_false() {
-    let (mut reactor, _, _, _) = create_test_reactor(10).await;
+    let (mut reactor, _, _, _) = create_test_reactor().await;
     let command = RuntimeCommand::ShutdownReactor;
 
     let continue_loop = reactor.handle_command(command).await;
 
     assert!(!continue_loop);
+    assert!(!reactor.events_emitted);
 }
 
 #[tokio_test]
 async fn test_handle_datagram_processes_safely() {
-    let (mut reactor, _, _, _) = create_test_reactor(10).await;
+    let (mut reactor, _, _, _) = create_test_reactor().await;
 
     reactor
         .handle_datagram(create_dummy_socket_address(), None, BytesMut::new())
@@ -483,7 +430,7 @@ async fn test_handle_datagram_processes_safely() {
 
 #[tokio_test]
 async fn test_handle_timeout_emits_connection_effects() {
-    let (mut reactor, _, event_tx, _) = create_idle_client_reactor(10).await;
+    let (mut reactor, _, event_tx, _) = create_idle_client_reactor().await;
     let TransportEvent::ConnectionSpawned { handle, .. } = reactor.endpoint.connect(
         1,
         create_dummy_socket_address(),
@@ -519,7 +466,7 @@ async fn test_handle_timeout_emits_connection_effects() {
 
 #[tokio_test]
 async fn test_handle_timeout_processes_safely() {
-    let (mut reactor, _, _, _) = create_test_reactor(10).await;
+    let (mut reactor, _, _, _) = create_test_reactor().await;
 
     reactor.handle_timeout();
 
@@ -527,35 +474,8 @@ async fn test_handle_timeout_processes_safely() {
 }
 
 #[tokio_test]
-async fn test_handle_timeout_queue_full_drops_effects() {
-    let (mut reactor, _, event_tx, _) = create_idle_client_reactor(1).await;
-    let TransportEvent::ConnectionSpawned { .. } = reactor.endpoint.connect(
-        1,
-        create_dummy_socket_address(),
-        "localhost",
-        Instant::now(),
-    ) else {
-        assert_eq!("ok", "err");
-        unreachable!()
-    };
-    let Ok(()) = event_tx.push(RuntimeEvent::ReactorShutdown) else {
-        assert_eq!("ok", "err");
-        unreachable!()
-    };
-    reactor.flush_transmits().await;
-
-    run_timers_until_idle(&mut reactor).await;
-
-    assert!(!reactor.events_emitted);
-    assert!(matches!(
-        event_tx.pop(),
-        Some(RuntimeEvent::ReactorShutdown)
-    ));
-}
-
-#[tokio_test]
 async fn test_notify_shutdown_emits_event() {
-    let (reactor, _, event_tx, waker_called) = create_test_reactor(10).await;
+    let (reactor, _, event_tx, waker_called) = create_test_reactor().await;
 
     reactor.notify_shutdown();
 
@@ -568,21 +488,8 @@ async fn test_notify_shutdown_emits_event() {
 }
 
 #[tokio_test]
-async fn test_notify_shutdown_queue_full_drops_event() {
-    let (reactor, _, event_tx, waker_called) = create_test_reactor(1).await;
-    let Ok(()) = event_tx.push(RuntimeEvent::ReactorShutdown) else {
-        assert_eq!("ok", "err");
-        unreachable!()
-    };
-
-    reactor.notify_shutdown();
-
-    assert!(waker_called.load(Ordering::SeqCst));
-}
-
-#[tokio_test]
 async fn test_now_context_returns_valid_timestamps() {
-    let (reactor, _, _, _) = create_test_reactor(10).await;
+    let (reactor, _, _, _) = create_test_reactor().await;
 
     let (now, now_instant) = reactor.now_context();
 
@@ -592,7 +499,7 @@ async fn test_now_context_returns_valid_timestamps() {
 
 #[tokio_test]
 async fn test_process_transport_event_connection_effects_emits_event() {
-    let (mut reactor, _, event_tx, _) = create_test_reactor(10).await;
+    let (mut reactor, _, event_tx, _) = create_test_reactor().await;
     let event = TransportEvent::ConnectionEffects {
         handle: QuicConnectionHandle(0),
         effects: vec![Effect::SendH3Goaway { identifier: 0 }],
@@ -609,25 +516,8 @@ async fn test_process_transport_event_connection_effects_emits_event() {
 }
 
 #[tokio_test]
-async fn test_process_transport_event_connection_effects_queue_full_drops_event() {
-    let (mut reactor, _, event_tx, _) = create_test_reactor(1).await;
-    let event = TransportEvent::ConnectionEffects {
-        handle: QuicConnectionHandle(0),
-        effects: vec![Effect::SendH3Goaway { identifier: 0 }],
-    };
-    let Ok(()) = event_tx.push(RuntimeEvent::ReactorShutdown) else {
-        assert_eq!("ok", "err");
-        unreachable!()
-    };
-
-    reactor.process_transport_event(event).await;
-
-    assert!(!reactor.events_emitted);
-}
-
-#[tokio_test]
 async fn test_process_transport_event_connection_effects_without_effects_skipped() {
-    let (mut reactor, _, event_tx, _) = create_test_reactor(10).await;
+    let (mut reactor, _, event_tx, _) = create_test_reactor().await;
     let event = TransportEvent::ConnectionEffects {
         handle: QuicConnectionHandle(0),
         effects: vec![],
@@ -641,7 +531,7 @@ async fn test_process_transport_event_connection_effects_without_effects_skipped
 
 #[tokio_test]
 async fn test_process_transport_event_connection_spawned_emits_event() {
-    let (mut reactor, _, event_tx, _) = create_test_reactor(10).await;
+    let (mut reactor, _, event_tx, _) = create_test_reactor().await;
     let event = TransportEvent::ConnectionSpawned {
         handle: QuicConnectionHandle(0),
         effects: vec![],
@@ -659,26 +549,8 @@ async fn test_process_transport_event_connection_spawned_emits_event() {
 }
 
 #[tokio_test]
-async fn test_process_transport_event_connection_spawned_queue_full_drops_event() {
-    let (mut reactor, _, event_tx, _) = create_test_reactor(1).await;
-    let event = TransportEvent::ConnectionSpawned {
-        handle: QuicConnectionHandle(0),
-        effects: vec![],
-        remote_address: create_dummy_socket_address(),
-    };
-    let Ok(()) = event_tx.push(RuntimeEvent::ReactorShutdown) else {
-        assert_eq!("ok", "err");
-        unreachable!()
-    };
-
-    reactor.process_transport_event(event).await;
-
-    assert!(!reactor.events_emitted);
-}
-
-#[tokio_test]
 async fn test_process_transport_event_transmit_executes() {
-    let (mut reactor, _, _, _) = create_test_reactor(10).await;
+    let (mut reactor, _, _, _) = create_test_reactor().await;
     let transmit = QuicTransmit {
         destination: create_dummy_socket_address(),
         size: 0,
@@ -694,30 +566,8 @@ async fn test_process_transport_event_transmit_executes() {
 }
 
 #[tokio_test]
-async fn test_reactor_initialization_succeeds() {
-    let (_command_tx, command_rx) = mpsc::channel(10);
-    let event_tx = Arc::new(ArrayQueue::new(10));
-    let waker: WakerCallback = Arc::new(|| {});
-    let Ok(socket) = UdpSocket::bind("127.0.0.1:0").await else {
-        assert_eq!("ok", "err");
-        unreachable!()
-    };
-    let endpoint = create_dummy_endpoint(true);
-
-    let reactor = Reactor::new(
-        command_rx,
-        endpoint,
-        Arc::clone(&event_tx),
-        vec![socket],
-        waker,
-    );
-
-    assert!(!reactor.events_emitted);
-}
-
-#[tokio_test]
 async fn test_reactor_run_loop_emits_final_effects_on_shutdown() {
-    let (reactor, command_tx, event_tx, waker_called) = create_client_reactor(10).await;
+    let (reactor, command_tx, event_tx, waker_called) = create_client_reactor().await;
     let command_create = RuntimeCommand::CreateConnection {
         request_id: RequestId::from(1u64),
         remote_address: create_dummy_socket_address(),
@@ -728,13 +578,13 @@ async fn test_reactor_run_loop_emits_final_effects_on_shutdown() {
     local
         .run_until(async {
             let handle = task::spawn_local(reactor.run());
-            let Ok(()) = command_tx.send(command_create).await else {
+            let Ok(()) = command_tx.send(command_create) else {
                 assert_eq!("ok", "err");
                 unreachable!()
             };
             wait_until(|| !event_tx.is_empty()).await;
             waker_called.store(false, Ordering::SeqCst);
-            let Ok(()) = command_tx.send(RuntimeCommand::ShutdownReactor).await else {
+            let Ok(()) = command_tx.send(RuntimeCommand::ShutdownReactor) else {
                 assert_eq!("ok", "err");
                 unreachable!()
             };
@@ -765,7 +615,7 @@ async fn test_reactor_run_loop_emits_final_effects_on_shutdown() {
 
 #[tokio_test]
 async fn test_reactor_run_loop_full_tick_and_waker() {
-    let (reactor, command_tx, event_tx, waker_called) = create_test_reactor(10).await;
+    let (reactor, command_tx, event_tx, waker_called) = create_test_reactor().await;
     let command_create = RuntimeCommand::CreateConnection {
         request_id: RequestId::from(99u64),
         remote_address: create_dummy_socket_address(),
@@ -777,12 +627,12 @@ async fn test_reactor_run_loop_full_tick_and_waker() {
     local
         .run_until(async {
             let handle = task::spawn_local(reactor.run());
-            let Ok(()) = command_tx.send(command_create).await else {
+            let Ok(()) = command_tx.send(command_create) else {
                 assert_eq!("ok", "err");
                 unreachable!()
             };
             wait_until(|| waker_called.load(Ordering::SeqCst)).await;
-            let Ok(()) = command_tx.send(command_shutdown).await else {
+            let Ok(()) = command_tx.send(command_shutdown) else {
                 assert_eq!("ok", "err");
                 unreachable!()
             };
@@ -803,7 +653,7 @@ async fn test_reactor_run_loop_full_tick_and_waker() {
 
 #[tokio_test]
 async fn test_reactor_run_loop_handles_timeout() {
-    let (reactor, command_tx, event_tx, waker_called) = create_idle_client_reactor(10).await;
+    let (reactor, command_tx, event_tx, waker_called) = create_idle_client_reactor().await;
     let command_create = RuntimeCommand::CreateConnection {
         request_id: RequestId::from(1u64),
         remote_address: create_dummy_socket_address(),
@@ -814,7 +664,7 @@ async fn test_reactor_run_loop_handles_timeout() {
     local
         .run_until(async move {
             let handle = task::spawn_local(reactor.run());
-            let Ok(()) = command_tx.send(command_create).await else {
+            let Ok(()) = command_tx.send(command_create) else {
                 assert_eq!("ok", "err");
                 unreachable!()
             };
@@ -837,7 +687,7 @@ async fn test_reactor_run_loop_handles_timeout() {
                 ))
             ));
 
-            let Ok(()) = command_tx.send(RuntimeCommand::ShutdownReactor).await else {
+            let Ok(()) = command_tx.send(RuntimeCommand::ShutdownReactor) else {
                 assert_eq!("ok", "err");
                 unreachable!()
             };
@@ -851,7 +701,7 @@ async fn test_reactor_run_loop_handles_timeout() {
 
 #[tokio_test]
 async fn test_reactor_run_loop_processes_multiple_datagrams() {
-    let (reactor, command_tx, event_tx, _) = create_test_reactor(10).await;
+    let (reactor, command_tx, event_tx, _) = create_test_reactor().await;
     let local = LocalSet::new();
     let Some(bound_socket) = reactor.sockets.first() else {
         assert_eq!("some", "none");
@@ -879,7 +729,7 @@ async fn test_reactor_run_loop_processes_multiple_datagrams() {
         .run_until(async move {
             let handle = task::spawn_local(reactor.run());
             task::yield_now().await;
-            let Ok(()) = command_tx.send(RuntimeCommand::ShutdownReactor).await else {
+            let Ok(()) = command_tx.send(RuntimeCommand::ShutdownReactor) else {
                 assert_eq!("ok", "err");
                 unreachable!()
             };
@@ -899,14 +749,14 @@ async fn test_reactor_run_loop_processes_multiple_datagrams() {
 
 #[tokio_test]
 async fn test_reactor_run_loop_terminates_on_shutdown() {
-    let (reactor, command_tx, event_tx, _) = create_test_reactor(10).await;
+    let (reactor, command_tx, event_tx, _) = create_test_reactor().await;
     let local = LocalSet::new();
     let command_shutdown = RuntimeCommand::ShutdownReactor;
 
     local
         .run_until(async move {
             let handle = task::spawn_local(reactor.run());
-            let Ok(()) = command_tx.send(command_shutdown).await else {
+            let Ok(()) = command_tx.send(command_shutdown) else {
                 assert_eq!("ok", "err");
                 unreachable!()
             };
@@ -926,7 +776,7 @@ async fn test_reactor_run_loop_terminates_on_shutdown() {
 
 #[tokio_test]
 async fn test_reactor_udp_receive_loop_forwards_datagrams() {
-    let (mut reactor, _, _, _) = create_test_reactor(10).await;
+    let (mut reactor, _, _, _) = create_test_reactor().await;
     let payload = b"hello_world";
     let Some(bound_socket) = reactor.sockets.first() else {
         assert_eq!("some", "none");
@@ -962,7 +812,7 @@ async fn test_reactor_udp_receive_loop_forwards_datagrams() {
 
 #[tokio_test]
 async fn test_reactor_udp_receive_task_stops_after_reactor_dropped() {
-    let (reactor, _, _, _) = create_test_reactor(10).await;
+    let (reactor, _, _, _) = create_test_reactor().await;
     let Some(bound_socket) = reactor.sockets.first() else {
         assert_eq!("some", "none");
         unreachable!()
@@ -988,7 +838,7 @@ async fn test_reactor_udp_receive_task_stops_after_reactor_dropped() {
 
 #[tokio_test]
 async fn test_reactor_udp_slab_reallocation_is_triggered() {
-    let (mut reactor, _, _, _) = create_test_reactor(100).await;
+    let (mut reactor, _, _, _) = create_test_reactor().await;
     let payload = vec![0u8; 1200];
     let mut count = 0;
     let Some(bound_socket) = reactor.sockets.first() else {
@@ -1024,7 +874,7 @@ async fn test_reactor_udp_slab_reallocation_is_triggered() {
 
 #[tokio_test]
 async fn test_send_transmit_beyond_workspace_skipped() {
-    let (reactor, _, _, _) = create_test_reactor(10).await;
+    let (reactor, _, _, _) = create_test_reactor().await;
     let transmit = QuicTransmit {
         destination: create_dummy_socket_address(),
         size: 10,
@@ -1041,7 +891,7 @@ async fn test_send_transmit_beyond_workspace_skipped() {
 
 #[tokio_test]
 async fn test_send_transmit_executes_safely() {
-    let (reactor, _, _, _) = create_test_reactor(10).await;
+    let (reactor, _, _, _) = create_test_reactor().await;
     let transmit = QuicTransmit {
         destination: create_dummy_socket_address(),
         size: 0,
@@ -1057,7 +907,7 @@ async fn test_send_transmit_executes_safely() {
 
 #[tokio_test]
 async fn test_send_transmit_falls_back_to_first_socket() {
-    let (mut reactor, _, _, _) = create_client_reactor(10).await;
+    let (mut reactor, _, _, _) = create_client_reactor().await;
     let now = Instant::now();
     let TransportEvent::ConnectionSpawned { .. } =
         reactor
@@ -1080,7 +930,7 @@ async fn test_send_transmit_falls_back_to_first_socket() {
 
 #[tokio_test]
 async fn test_send_transmit_segments_data_safely() {
-    let (mut reactor, _, _, _) = create_client_reactor(10).await;
+    let (mut reactor, _, _, _) = create_client_reactor().await;
     let remote_address = create_dummy_socket_address();
     let now = Instant::now();
 
@@ -1105,8 +955,8 @@ async fn test_send_transmit_segments_data_safely() {
 
 #[tokio_test]
 async fn test_send_transmit_without_sockets_skipped() {
-    let (_command_tx, command_rx) = mpsc::channel(10);
-    let event_tx = Arc::new(ArrayQueue::new(10));
+    let (_command_tx, command_rx) = mpsc::unbounded_channel();
+    let event_tx = Arc::new(SegQueue::new());
     let waker: WakerCallback = Arc::new(|| {});
     let mut reactor = Reactor::new(
         command_rx,

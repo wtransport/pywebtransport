@@ -3,12 +3,12 @@
 import asyncio
 import socket
 from collections.abc import Iterator
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any, cast
 
 import pytest
+from pytest_mock import MockerFixture
 
-from pywebtransport import ConnectionError
+from pywebtransport import ClientConfig, ConnectionError, WebTransportConnection
 from pywebtransport._controller.abi import (
     COMMAND_FAILED,
     CONNECTION_EFFECTS,
@@ -23,60 +23,68 @@ from pywebtransport._controller.abi import (
 from pywebtransport._controller.controller import EndpointController
 from pywebtransport._controller.events import EmitConnectionEvent, ProtocolEvent
 from pywebtransport._controller.pending import PendingRequestManager
+from pywebtransport._pywebtransport import Endpoint, Waker
 from pywebtransport.types import EventType, StreamDirection
 
 
 class TestEndpointController:
 
     @pytest.fixture
-    def controller(self, mock_connection_factory: MagicMock, mock_endpoint: MagicMock) -> Iterator[EndpointController]:
-        controller = EndpointController(connection_factory=mock_connection_factory, config=MagicMock(), is_client=True)
+    def controller(
+        self, mock_config: Any, mock_connection_factory: Any, mock_endpoint: Any, mocker: MockerFixture
+    ) -> Iterator[EndpointController]:
+        read_socket, write_socket = socket.socketpair()
+        read_socket.setblocking(False)
+        write_socket.setblocking(False)
+        controller = EndpointController(connection_factory=mock_connection_factory, config=mock_config, is_client=True)
         controller._endpoint = mock_endpoint
-        controller._read_socket, controller._write_socket = socket.socketpair()
-        controller._read_socket.setblocking(False)
-        controller._write_socket.setblocking(False)
-        controller._waker_task = MagicMock()
+        controller._read_socket = read_socket
+        controller._write_socket = write_socket
+        controller._waker_task = mocker.create_autospec(spec=asyncio.Task, instance=True)
         controller._waker_task.done.return_value = True
 
         yield controller
 
-        controller._read_socket.close()
-        controller._write_socket.close()
+        read_socket.close()
+        write_socket.close()
 
     @pytest.fixture
-    def mock_connection(self) -> MagicMock:
-        connection = MagicMock()
+    def mock_config(self, mocker: MockerFixture) -> Any:
+        return mocker.create_autospec(spec=ClientConfig, instance=True)
+
+    @pytest.fixture
+    def mock_connection(self, mocker: MockerFixture) -> Any:
+        connection = mocker.create_autospec(spec=WebTransportConnection, instance=True)
         connection.handle = 1
 
         return connection
 
     @pytest.fixture
-    def mock_connection_factory(self) -> MagicMock:
-        return MagicMock()
+    def mock_connection_factory(self, mocker: MockerFixture) -> Any:
+        return mocker.Mock()
 
     @pytest.fixture
-    def mock_endpoint(self) -> MagicMock:
-        return MagicMock()
+    def mock_endpoint(self, mocker: MockerFixture) -> Any:
+        return mocker.create_autospec(spec=Endpoint, instance=True)
 
     @pytest.fixture
-    def mock_waker(self) -> MagicMock:
-        return MagicMock()
+    def mock_waker(self, mocker: MockerFixture) -> Any:
+        return mocker.create_autospec(spec=Waker, instance=True)
 
-    @pytest.mark.asyncio
     async def test_close_cancelled_while_releasing(
-        self, controller: EndpointController, mock_endpoint: MagicMock, monkeypatch: pytest.MonkeyPatch
+        self, controller: EndpointController, mock_endpoint: Any, mocker: MockerFixture
     ) -> None:
         resume_event = asyncio.Event()
 
         async def mock_wait() -> None:
             await resume_event.wait()
 
-        monkeypatch.setattr(controller._runtime_shutdown_event, "wait", mock_wait)
-        close_task = asyncio.create_task(controller.close())
-        await asyncio.sleep(0.01)
+        mocker.patch.object(target=controller._runtime_shutdown_event, attribute="wait", new=mock_wait)
+        close_task = asyncio.create_task(coro=controller.close())
+        await asyncio.sleep(delay=0.01)
 
         close_task.cancel()
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(delay=0.01)
         resume_event.set()
 
         with pytest.raises(expected_exception=asyncio.CancelledError):
@@ -85,7 +93,6 @@ class TestEndpointController:
         assert controller._is_closed is True
         mock_endpoint.close.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_close_idempotent(self, controller: EndpointController) -> None:
         controller._runtime_shutdown_event.set()
         await controller.close()
@@ -94,28 +101,25 @@ class TestEndpointController:
 
         assert controller._is_closed is True
 
-    @pytest.mark.asyncio
-    async def test_close_not_started(self) -> None:
-        controller = EndpointController(connection_factory=MagicMock(), config=MagicMock(), is_client=True)
+    async def test_close_not_started(self, mock_config: Any, mock_connection_factory: Any) -> None:
+        controller = EndpointController(connection_factory=mock_connection_factory, config=mock_config, is_client=True)
 
         await controller.close()
 
         assert controller._is_closed is True
 
-    @pytest.mark.asyncio
-    async def test_close_oserror(self, controller: EndpointController, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_close_oserror(self, controller: EndpointController, mocker: MockerFixture) -> None:
         controller._runtime_shutdown_event.set()
-        mock_read_socket = MagicMock()
+        mock_read_socket = mocker.create_autospec(spec=socket.socket, instance=True)
         mock_read_socket.close.side_effect = OSError("mock close error")
-        monkeypatch.setattr(controller, "_read_socket", mock_read_socket)
+        controller._read_socket = mock_read_socket
 
         await controller.close()
 
         assert controller._is_closed is True
 
-    @pytest.mark.asyncio
     async def test_close_success(
-        self, controller: EndpointController, mock_endpoint: MagicMock, mock_connection: MagicMock
+        self, controller: EndpointController, mock_endpoint: Any, mock_connection: Any
     ) -> None:
         controller._connections[mock_connection.handle] = mock_connection
         controller._remote_addresses[1] = ("127.0.0.1", 443)
@@ -123,7 +127,7 @@ class TestEndpointController:
         async def pending() -> None:
             await asyncio.Event().wait()
 
-        waker_task = asyncio.create_task(pending())
+        waker_task = asyncio.create_task(coro=pending())
         controller._waker_task = waker_task
         controller._runtime_shutdown_event.set()
 
@@ -136,22 +140,20 @@ class TestEndpointController:
         assert not controller._remote_addresses
         assert waker_task.cancelled()
 
-    @pytest.mark.asyncio
     async def test_close_timeout(
-        self, controller: EndpointController, mock_endpoint: MagicMock, monkeypatch: pytest.MonkeyPatch
+        self, controller: EndpointController, mock_endpoint: Any, mocker: MockerFixture
     ) -> None:
         async def mock_wait() -> None:
             raise asyncio.TimeoutError()
 
-        monkeypatch.setattr(controller._runtime_shutdown_event, "wait", mock_wait)
+        mocker.patch.object(target=controller._runtime_shutdown_event, attribute="wait", new=mock_wait)
 
         await controller.close()
 
         assert controller._is_closed is True
         mock_endpoint.close.assert_called_once()
 
-    @pytest.mark.asyncio
-    async def test_connect_failure(self, controller: EndpointController, mock_endpoint: MagicMock) -> None:
+    async def test_connect_failure(self, controller: EndpointController, mock_endpoint: Any) -> None:
         mock_endpoint.connect.side_effect = ValueError("mock connection error")
 
         with pytest.raises(expected_exception=ConnectionError, match="wt_connection open failed"):
@@ -159,10 +161,7 @@ class TestEndpointController:
 
         assert not controller._pending_manager._requests
 
-    @pytest.mark.asyncio
-    async def test_connect_failure_connection_error(
-        self, controller: EndpointController, mock_endpoint: MagicMock
-    ) -> None:
+    async def test_connect_failure_connection_error(self, controller: EndpointController, mock_endpoint: Any) -> None:
         exception = ConnectionError(message="native connection error")
         mock_endpoint.connect.side_effect = exception
 
@@ -172,8 +171,7 @@ class TestEndpointController:
         assert exception_info.value is exception
         assert not controller._pending_manager._requests
 
-    @pytest.mark.asyncio
-    async def test_connect_resolve_failure(self, controller: EndpointController, mock_endpoint: MagicMock) -> None:
+    async def test_connect_resolve_failure(self, controller: EndpointController, mock_endpoint: Any) -> None:
         def mock_connect(*args: Any, **kwargs: Any) -> None:
             controller._pending_manager.complete_request(request_id=kwargs["request_id"], result=42)
 
@@ -186,9 +184,8 @@ class TestEndpointController:
 
         assert not controller._pending_manager._requests
 
-    @pytest.mark.asyncio
     async def test_connect_success(
-        self, controller: EndpointController, mock_endpoint: MagicMock, mock_connection: MagicMock
+        self, controller: EndpointController, mock_endpoint: Any, mock_connection: Any
     ) -> None:
         mock_connection.handle = 42
         controller._connections[mock_connection.handle] = mock_connection
@@ -203,7 +200,23 @@ class TestEndpointController:
         assert result is mock_connection
         mock_endpoint.connect.assert_called_once()
 
-    def test_get_local_addresses(self, controller: EndpointController, mock_endpoint: MagicMock) -> None:
+    async def test_create_task(self, controller: EndpointController) -> None:
+        resume_event = asyncio.Event()
+
+        async def pending() -> None:
+            await resume_event.wait()
+
+        controller.create_task(coro=pending())
+
+        (task,) = controller._background_tasks
+        assert not task.done()
+
+        resume_event.set()
+        await task
+
+        assert not controller._background_tasks
+
+    def test_get_local_addresses(self, controller: EndpointController, mock_endpoint: Any) -> None:
         mock_endpoint.get_local_addresses.return_value = [("127.0.0.1", 443)]
 
         result = controller.get_local_addresses()
@@ -216,8 +229,8 @@ class TestEndpointController:
 
         assert result is None
 
-    def test_init_state(self) -> None:
-        controller = EndpointController(connection_factory=MagicMock(), config=MagicMock(), is_client=True)
+    def test_init_state(self, mock_config: Any, mock_connection_factory: Any) -> None:
+        controller = EndpointController(connection_factory=mock_connection_factory, config=mock_config, is_client=True)
 
         assert controller._is_closed is False
         assert isinstance(controller._pending_manager, PendingRequestManager)
@@ -227,7 +240,7 @@ class TestEndpointController:
         assert controller._waker_task is None
 
     def test_process_effects_emit_connection_event_closed(
-        self, controller: EndpointController, mock_connection: MagicMock
+        self, controller: EndpointController, mock_connection: Any
     ) -> None:
         controller._connections[mock_connection.handle] = mock_connection
         controller._remote_addresses[1] = ("127.0.0.1", 443)
@@ -242,7 +255,7 @@ class TestEndpointController:
         assert controller.get_remote_address(handle=1) is None
 
     def test_process_effects_emit_connection_event_full(
-        self, controller: EndpointController, mock_connection: MagicMock
+        self, controller: EndpointController, mock_connection: Any
     ) -> None:
         controller._connections[mock_connection.handle] = mock_connection
         effects = [(EMIT_CONNECTION_EVENT, (1, EventType.CONNECTION_CLOSED, 100, "timeout"))]
@@ -255,7 +268,7 @@ class TestEndpointController:
         )
 
     def test_process_effects_emit_connection_event_minimal(
-        self, controller: EndpointController, mock_connection: MagicMock
+        self, controller: EndpointController, mock_connection: Any
     ) -> None:
         controller._connections[mock_connection.handle] = mock_connection
         effects = [(EMIT_CONNECTION_EVENT, (1, EventType.CONNECTION_ESTABLISHED, None, None))]
@@ -267,7 +280,7 @@ class TestEndpointController:
         )
 
     def test_process_effects_emit_connection_event_unregistered_connection(
-        self, controller: EndpointController, mock_connection: MagicMock
+        self, controller: EndpointController, mock_connection: Any
     ) -> None:
         mock_connection.handle = 2
         controller._connections[mock_connection.handle] = mock_connection
@@ -278,7 +291,7 @@ class TestEndpointController:
         mock_connection._handle_event.assert_not_called()
 
     def test_process_effects_emit_session_event_full(
-        self, controller: EndpointController, mock_connection: MagicMock
+        self, controller: EndpointController, mock_connection: Any
     ) -> None:
         controller._connections[mock_connection.handle] = mock_connection
         effects = [
@@ -325,7 +338,7 @@ class TestEndpointController:
         )
 
     def test_process_effects_emit_session_event_minimal(
-        self, controller: EndpointController, mock_connection: MagicMock
+        self, controller: EndpointController, mock_connection: Any
     ) -> None:
         controller._connections[mock_connection.handle] = mock_connection
         effects = [
@@ -357,7 +370,7 @@ class TestEndpointController:
         )
 
     def test_process_effects_emit_session_event_unregistered_connection(
-        self, controller: EndpointController, mock_connection: MagicMock
+        self, controller: EndpointController, mock_connection: Any
     ) -> None:
         mock_connection.handle = 2
         controller._connections[mock_connection.handle] = mock_connection
@@ -387,9 +400,7 @@ class TestEndpointController:
 
         mock_connection._handle_event.assert_not_called()
 
-    def test_process_effects_emit_stream_event_full(
-        self, controller: EndpointController, mock_connection: MagicMock
-    ) -> None:
+    def test_process_effects_emit_stream_event_full(self, controller: EndpointController, mock_connection: Any) -> None:
         controller._connections[mock_connection.handle] = mock_connection
         effects = [
             (EMIT_STREAM_EVENT, (20, EventType.STREAM_RESET_RECEIVED, 10, StreamDirection.BIDIRECTIONAL, True, 1))
@@ -409,7 +420,7 @@ class TestEndpointController:
         )
 
     def test_process_effects_emit_stream_event_minimal(
-        self, controller: EndpointController, mock_connection: MagicMock
+        self, controller: EndpointController, mock_connection: Any
     ) -> None:
         controller._connections[mock_connection.handle] = mock_connection
         effects = [(EMIT_STREAM_EVENT, (20, EventType.STREAM_CLOSED, None, None, None, None))]
@@ -421,7 +432,7 @@ class TestEndpointController:
         )
 
     def test_process_effects_emit_stream_event_unregistered_connection(
-        self, controller: EndpointController, mock_connection: MagicMock
+        self, controller: EndpointController, mock_connection: Any
     ) -> None:
         mock_connection.handle = 2
         controller._connections[mock_connection.handle] = mock_connection
@@ -431,9 +442,8 @@ class TestEndpointController:
 
         mock_connection._handle_event.assert_not_called()
 
-    def test_process_effects_exception(self, controller: EndpointController, monkeypatch: pytest.MonkeyPatch) -> None:
-        mock_warning = MagicMock()
-        monkeypatch.setattr("pywebtransport._controller.controller._logger.warning", mock_warning)
+    def test_process_effects_exception(self, controller: EndpointController, mocker: MockerFixture) -> None:
+        mock_warning = mocker.patch(target="pywebtransport._controller.controller._logger.warning")
         effects = [(NOTIFY_REQUEST_DONE, "not_a_tuple"), (NOTIFY_REQUEST_FAILED, "not_a_tuple")]
 
         controller._process_effects(handle=1, effects=effects)
@@ -441,7 +451,7 @@ class TestEndpointController:
         assert mock_warning.call_count == 2
 
     def test_process_effects_multiple_effects_in_batch(
-        self, controller: EndpointController, mock_connection: MagicMock
+        self, controller: EndpointController, mock_connection: Any
     ) -> None:
         controller._connections[mock_connection.handle] = mock_connection
         effects = [
@@ -453,7 +463,6 @@ class TestEndpointController:
 
         assert mock_connection._handle_event.call_count == 2
 
-    @pytest.mark.asyncio
     async def test_process_effects_notify_request_done(self, controller: EndpointController) -> None:
         request_id, future = controller._pending_manager.create_request()
         effects = [(NOTIFY_REQUEST_DONE, (request_id, "success_result"))]
@@ -463,7 +472,6 @@ class TestEndpointController:
         assert future.done()
         assert future.result() == "success_result"
 
-    @pytest.mark.asyncio
     async def test_process_effects_notify_request_failed(self, controller: EndpointController) -> None:
         request_id, future = controller._pending_manager.create_request()
         exception = ValueError("fail")
@@ -474,11 +482,8 @@ class TestEndpointController:
         assert future.done()
         assert future.exception() == exception
 
-    def test_process_effects_unknown_opcode(
-        self, controller: EndpointController, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        mock_warning = MagicMock()
-        monkeypatch.setattr("pywebtransport._controller.controller._logger.warning", mock_warning)
+    def test_process_effects_unknown_opcode(self, controller: EndpointController, mocker: MockerFixture) -> None:
+        mock_warning = mocker.patch(target="pywebtransport._controller.controller._logger.warning")
         effects = [(999, None)]
 
         controller._process_effects(handle=1, effects=effects)
@@ -486,25 +491,24 @@ class TestEndpointController:
         mock_warning.assert_called_once()
 
     def test_process_effects_unmatched_effect_continues_batch(
-        self, controller: EndpointController, monkeypatch: pytest.MonkeyPatch, mock_connection: MagicMock
+        self, controller: EndpointController, mocker: MockerFixture, mock_connection: Any
     ) -> None:
         controller._connections[mock_connection.handle] = mock_connection
-        mock_convert = MagicMock(
+        mocker.patch(
+            target="pywebtransport._controller.controller.conversion.convert_effect",
             side_effect=[
                 object(),
                 EmitConnectionEvent(
                     connection_handle=1, event_type=EventType.CONNECTION_CLOSED, error_code=None, reason=None
                 ),
-            ]
+            ],
         )
-        monkeypatch.setattr("pywebtransport._controller.controller.conversion.convert_effect", mock_convert)
         effects = [(999, None), (EMIT_CONNECTION_EVENT, (1, EventType.CONNECTION_CLOSED, None, None))]
 
         controller._process_effects(handle=1, effects=effects)
 
         mock_connection._handle_event.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_process_runtime_event_command_failed(self, controller: EndpointController) -> None:
         request_id, future = controller._pending_manager.create_request()
         exception = ConnectionError(message="handshake failed", error_code=100)
@@ -515,7 +519,7 @@ class TestEndpointController:
         assert future.exception() is exception
 
     def test_process_runtime_event_connection_effects(
-        self, controller: EndpointController, mock_connection: MagicMock
+        self, controller: EndpointController, mock_connection: Any
     ) -> None:
         controller._connections[mock_connection.handle] = mock_connection
         payload = (1, [(EMIT_CONNECTION_EVENT, (1, EventType.CONNECTION_ESTABLISHED, None, None))])
@@ -527,7 +531,7 @@ class TestEndpointController:
         )
 
     def test_process_runtime_event_connection_spawned(
-        self, controller: EndpointController, mock_connection: MagicMock, mock_connection_factory: MagicMock
+        self, controller: EndpointController, mock_connection: Any, mock_connection_factory: Any
     ) -> None:
         mock_connection_factory.return_value = mock_connection
         payload: tuple[Any, ...] = (
@@ -541,36 +545,34 @@ class TestEndpointController:
         assert controller.get_remote_address(handle=1) == ("127.0.0.1", 443)
         mock_connection_factory.assert_called_once_with(controller, 1)
         assert controller._connections[1] is mock_connection
-        mock_connection._handle_event.assert_called_once_with(
+        cast(Any, mock_connection)._handle_event.assert_called_once_with(
             event_type=EventType.CONNECTION_ESTABLISHED, data={"connection_handle": 1}
         )
 
-    def test_process_runtime_event_reactor_shutdown(self, controller: EndpointController) -> None:
-        mock_event = MagicMock()
+    def test_process_runtime_event_reactor_shutdown(
+        self, controller: EndpointController, mocker: MockerFixture
+    ) -> None:
+        mock_event = mocker.create_autospec(spec=asyncio.Event, instance=True)
         controller._runtime_shutdown_event = mock_event
 
         controller._process_runtime_event(event_tuple=(REACTOR_SHUTDOWN, None))
 
         mock_event.set.assert_called_once()
 
-    def test_process_runtime_event_unknown_opcode(
-        self, controller: EndpointController, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        mock_warning = MagicMock()
-        monkeypatch.setattr("pywebtransport._controller.controller._logger.warning", mock_warning)
+    def test_process_runtime_event_unknown_opcode(self, controller: EndpointController, mocker: MockerFixture) -> None:
+        mock_warning = mocker.patch(target="pywebtransport._controller.controller._logger.warning")
 
         controller._process_runtime_event(event_tuple=(999, None))
 
         mock_warning.assert_called_once()
 
     def test_process_runtime_event_unmatched_runtime_event(
-        self, controller: EndpointController, monkeypatch: pytest.MonkeyPatch
+        self, controller: EndpointController, mocker: MockerFixture
     ) -> None:
-        monkeypatch.setattr(
-            "pywebtransport._controller.controller.conversion.convert_runtime_event", MagicMock(return_value=object())
+        mocker.patch(
+            target="pywebtransport._controller.controller.conversion.convert_runtime_event", return_value=object()
         )
-        mock_warning = MagicMock()
-        monkeypatch.setattr("pywebtransport._controller.controller._logger.warning", mock_warning)
+        mock_warning = mocker.patch(target="pywebtransport._controller.controller._logger.warning")
 
         controller._process_runtime_event(event_tuple=(999, None))
 
@@ -578,49 +580,48 @@ class TestEndpointController:
         assert not controller._remote_addresses
         assert not controller._runtime_shutdown_event.is_set()
 
-    def test_require_endpoint_not_started(self) -> None:
-        controller = EndpointController(connection_factory=MagicMock(), config=MagicMock(), is_client=True)
+    def test_require_endpoint_not_started(self, mock_config: Any, mock_connection_factory: Any) -> None:
+        controller = EndpointController(connection_factory=mock_connection_factory, config=mock_config, is_client=True)
 
         with pytest.raises(expected_exception=RuntimeError, match="rt validate failed"):
             controller._require_endpoint()
 
-    def test_require_endpoint_started(self, controller: EndpointController, mock_endpoint: MagicMock) -> None:
+    def test_require_endpoint_started(self, controller: EndpointController, mock_endpoint: Any) -> None:
         result = controller._require_endpoint()
 
         assert result is mock_endpoint
 
-    @pytest.mark.asyncio
     async def test_run_waker_loop_cancelled(
-        self, mock_endpoint: MagicMock, mock_waker: MagicMock, monkeypatch: pytest.MonkeyPatch
+        self, mock_endpoint: Any, mock_waker: Any, mocker: MockerFixture, mock_config: Any, mock_connection_factory: Any
     ) -> None:
         loop = asyncio.get_running_loop()
-        monkeypatch.setattr(loop, "sock_recv", AsyncMock(side_effect=asyncio.CancelledError()))
-        controller = EndpointController(connection_factory=MagicMock(), config=MagicMock(), is_client=True)
-        mock_read_socket = MagicMock()
+        mocker.patch.object(
+            target=loop, attribute="sock_recv", side_effect=asyncio.CancelledError(), new_callable=mocker.AsyncMock
+        )
+        controller = EndpointController(connection_factory=mock_connection_factory, config=mock_config, is_client=True)
+        mock_read_socket = mocker.create_autospec(spec=socket.socket, instance=True)
 
         await controller._run_waker_loop(endpoint=mock_endpoint, waker=mock_waker, read_socket=mock_read_socket)
 
         mock_endpoint.poll_runtime_events.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_run_waker_loop_drain_eof(
-        self, mock_endpoint: MagicMock, mock_waker: MagicMock, monkeypatch: pytest.MonkeyPatch
+        self, mock_endpoint: Any, mock_waker: Any, mocker: MockerFixture, mock_config: Any, mock_connection_factory: Any
     ) -> None:
         loop = asyncio.get_running_loop()
-        monkeypatch.setattr(loop, "sock_recv", AsyncMock(side_effect=[b"x", b""]))
-        mock_read_socket = MagicMock()
+        mocker.patch.object(target=loop, attribute="sock_recv", side_effect=[b"x", b""], new_callable=mocker.AsyncMock)
+        mock_read_socket = mocker.create_autospec(spec=socket.socket, instance=True)
         mock_read_socket.recv.side_effect = [b"y", b""]
-        controller = EndpointController(connection_factory=MagicMock(), config=MagicMock(), is_client=True)
+        controller = EndpointController(connection_factory=mock_connection_factory, config=mock_config, is_client=True)
 
         await controller._run_waker_loop(endpoint=mock_endpoint, waker=mock_waker, read_socket=mock_read_socket)
 
         assert mock_read_socket.recv.call_count == 2
 
-    @pytest.mark.asyncio
     async def test_run_waker_loop_drains_events_after_close(
-        self, mock_endpoint: MagicMock, mock_waker: MagicMock, monkeypatch: pytest.MonkeyPatch
+        self, mock_endpoint: Any, mock_waker: Any, mocker: MockerFixture, mock_config: Any, mock_connection_factory: Any
     ) -> None:
-        controller = EndpointController(connection_factory=MagicMock(), config=MagicMock(), is_client=True)
+        controller = EndpointController(connection_factory=mock_connection_factory, config=mock_config, is_client=True)
         received = iter([b"x", b""])
 
         async def mock_sock_recv(*args: Any, **kwargs: Any) -> bytes:
@@ -628,8 +629,10 @@ class TestEndpointController:
             return next(received)
 
         loop = asyncio.get_running_loop()
-        monkeypatch.setattr(loop, "sock_recv", AsyncMock(side_effect=mock_sock_recv))
-        mock_read_socket = MagicMock()
+        mocker.patch.object(
+            target=loop, attribute="sock_recv", side_effect=mock_sock_recv, new_callable=mocker.AsyncMock
+        )
+        mock_read_socket = mocker.create_autospec(spec=socket.socket, instance=True)
         mock_read_socket.recv.side_effect = BlockingIOError()
         mock_endpoint.poll_runtime_events.return_value = [(REACTOR_SHUTDOWN, None)]
 
@@ -638,100 +641,97 @@ class TestEndpointController:
         mock_endpoint.poll_runtime_events.assert_called_once()
         assert controller._runtime_shutdown_event.is_set()
 
-    @pytest.mark.asyncio
     async def test_run_waker_loop_oserror(
-        self, mock_endpoint: MagicMock, mock_waker: MagicMock, monkeypatch: pytest.MonkeyPatch
+        self, mock_endpoint: Any, mock_waker: Any, mocker: MockerFixture, mock_config: Any, mock_connection_factory: Any
     ) -> None:
         loop = asyncio.get_running_loop()
-        monkeypatch.setattr(loop, "sock_recv", AsyncMock(side_effect=OSError("mock error")))
-        mock_debug = MagicMock()
-        monkeypatch.setattr("pywebtransport._controller.controller._logger.debug", mock_debug)
-        controller = EndpointController(connection_factory=MagicMock(), config=MagicMock(), is_client=True)
-        mock_read_socket = MagicMock()
+        mocker.patch.object(
+            target=loop, attribute="sock_recv", side_effect=OSError("mock error"), new_callable=mocker.AsyncMock
+        )
+        mock_debug = mocker.patch(target="pywebtransport._controller.controller._logger.debug")
+        controller = EndpointController(connection_factory=mock_connection_factory, config=mock_config, is_client=True)
+        mock_read_socket = mocker.create_autospec(spec=socket.socket, instance=True)
 
         await controller._run_waker_loop(endpoint=mock_endpoint, waker=mock_waker, read_socket=mock_read_socket)
 
         mock_debug.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_run_waker_loop_oserror_when_closed(
-        self, mock_endpoint: MagicMock, mock_waker: MagicMock, monkeypatch: pytest.MonkeyPatch
+        self, mock_endpoint: Any, mock_waker: Any, mocker: MockerFixture, mock_config: Any, mock_connection_factory: Any
     ) -> None:
-        controller = EndpointController(connection_factory=MagicMock(), config=MagicMock(), is_client=True)
+        controller = EndpointController(connection_factory=mock_connection_factory, config=mock_config, is_client=True)
 
         async def mock_sock_recv(*args: Any, **kwargs: Any) -> bytes:
             controller._is_closed = True
             raise OSError("mock error")
 
         loop = asyncio.get_running_loop()
-        monkeypatch.setattr(loop, "sock_recv", AsyncMock(side_effect=mock_sock_recv))
-        mock_read_socket = MagicMock()
-        mock_debug = MagicMock()
-        monkeypatch.setattr("pywebtransport._controller.controller._logger.debug", mock_debug)
+        mocker.patch.object(
+            target=loop, attribute="sock_recv", side_effect=mock_sock_recv, new_callable=mocker.AsyncMock
+        )
+        mock_read_socket = mocker.create_autospec(spec=socket.socket, instance=True)
+        mock_debug = mocker.patch(target="pywebtransport._controller.controller._logger.debug")
 
         await controller._run_waker_loop(endpoint=mock_endpoint, waker=mock_waker, read_socket=mock_read_socket)
 
         mock_debug.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_run_waker_loop_poll_exception(
-        self, mock_endpoint: MagicMock, mock_waker: MagicMock, monkeypatch: pytest.MonkeyPatch
+        self, mock_endpoint: Any, mock_waker: Any, mocker: MockerFixture, mock_config: Any, mock_connection_factory: Any
     ) -> None:
         loop = asyncio.get_running_loop()
-        monkeypatch.setattr(loop, "sock_recv", AsyncMock(side_effect=[b"x", b""]))
-        mock_read_socket = MagicMock()
+        mocker.patch.object(target=loop, attribute="sock_recv", side_effect=[b"x", b""], new_callable=mocker.AsyncMock)
+        mock_read_socket = mocker.create_autospec(spec=socket.socket, instance=True)
         mock_read_socket.recv.side_effect = BlockingIOError()
         mock_endpoint.poll_runtime_events.side_effect = RuntimeError("poll error")
-        controller = EndpointController(connection_factory=MagicMock(), config=MagicMock(), is_client=True)
+        controller = EndpointController(connection_factory=mock_connection_factory, config=mock_config, is_client=True)
 
         await controller._run_waker_loop(endpoint=mock_endpoint, waker=mock_waker, read_socket=mock_read_socket)
 
         mock_endpoint.poll_runtime_events.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_run_waker_loop_processes_multiple_events(
-        self, mock_endpoint: MagicMock, mock_waker: MagicMock, monkeypatch: pytest.MonkeyPatch
+        self, mock_endpoint: Any, mock_waker: Any, mocker: MockerFixture, mock_config: Any, mock_connection_factory: Any
     ) -> None:
         loop = asyncio.get_running_loop()
-        monkeypatch.setattr(loop, "sock_recv", AsyncMock(side_effect=[b"x", b""]))
-        mock_read_socket = MagicMock()
+        mocker.patch.object(target=loop, attribute="sock_recv", side_effect=[b"x", b""], new_callable=mocker.AsyncMock)
+        mock_read_socket = mocker.create_autospec(spec=socket.socket, instance=True)
         mock_read_socket.recv.side_effect = BlockingIOError()
         mock_endpoint.poll_runtime_events.return_value = [
             (CONNECTION_SPAWNED, (1, ("127.0.0.1", 443), [])),
             (CONNECTION_SPAWNED, (2, ("127.0.0.1", 444), [])),
         ]
-        controller = EndpointController(connection_factory=MagicMock(), config=MagicMock(), is_client=True)
+        controller = EndpointController(connection_factory=mock_connection_factory, config=mock_config, is_client=True)
 
         await controller._run_waker_loop(endpoint=mock_endpoint, waker=mock_waker, read_socket=mock_read_socket)
 
         assert controller.get_remote_address(handle=1) == ("127.0.0.1", 443)
         assert controller.get_remote_address(handle=2) == ("127.0.0.1", 444)
 
-    @pytest.mark.asyncio
     async def test_run_waker_loop_success(
-        self, mock_endpoint: MagicMock, mock_waker: MagicMock, monkeypatch: pytest.MonkeyPatch
+        self, mock_endpoint: Any, mock_waker: Any, mocker: MockerFixture, mock_config: Any, mock_connection_factory: Any
     ) -> None:
         loop = asyncio.get_running_loop()
-        monkeypatch.setattr(loop, "sock_recv", AsyncMock(side_effect=[b"x", b""]))
-        mock_read_socket = MagicMock()
+        mocker.patch.object(target=loop, attribute="sock_recv", side_effect=[b"x", b""], new_callable=mocker.AsyncMock)
+        mock_read_socket = mocker.create_autospec(spec=socket.socket, instance=True)
         mock_read_socket.recv.side_effect = BlockingIOError()
         mock_endpoint.poll_runtime_events.return_value = [(CONNECTION_SPAWNED, (1, ("127.0.0.1", 443), []))]
-        controller = EndpointController(connection_factory=MagicMock(), config=MagicMock(), is_client=True)
+        controller = EndpointController(connection_factory=mock_connection_factory, config=mock_config, is_client=True)
 
         await controller._run_waker_loop(endpoint=mock_endpoint, waker=mock_waker, read_socket=mock_read_socket)
 
         mock_waker.clear.assert_called_once()
         mock_endpoint.poll_runtime_events.assert_called_once()
 
-    def test_send_protocol_event_exception(
-        self, controller: EndpointController, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        event = MagicMock(spec=ProtocolEvent)
-        mock_convert = MagicMock(side_effect=ValueError("mock convert error"))
-        monkeypatch.setattr("pywebtransport._controller.controller.conversion.convert_protocol_event", mock_convert)
+    def test_send_protocol_event_exception(self, controller: EndpointController, mocker: MockerFixture) -> None:
+        event = mocker.create_autospec(spec=ProtocolEvent, instance=True)
+        mock_convert = mocker.patch(
+            target="pywebtransport._controller.controller.conversion.convert_protocol_event",
+            side_effect=ValueError("mock convert error"),
+        )
 
         with pytest.raises(
-            expected_exception=ConnectionError, match="rt_event send failed actual=MagicMock"
+            expected_exception=ConnectionError, match="rt_event send failed actual=NonCallableMagicMock"
         ) as exception_info:
             controller.send_protocol_event(handle=1, request_id=7, event=event)
 
@@ -739,43 +739,42 @@ class TestEndpointController:
         mock_convert.assert_called_once_with(event=event)
 
     def test_send_protocol_event_success(
-        self, controller: EndpointController, mock_endpoint: MagicMock, monkeypatch: pytest.MonkeyPatch
+        self, controller: EndpointController, mock_endpoint: Any, mocker: MockerFixture
     ) -> None:
-        event = MagicMock(spec=ProtocolEvent)
-        mock_convert = MagicMock(return_value=(99, ()))
-        monkeypatch.setattr("pywebtransport._controller.controller.conversion.convert_protocol_event", mock_convert)
+        event = mocker.create_autospec(spec=ProtocolEvent, instance=True)
+        mocker.patch(
+            target="pywebtransport._controller.controller.conversion.convert_protocol_event", return_value=(99, ())
+        )
 
         controller.send_protocol_event(handle=1, request_id=7, event=event)
 
         mock_endpoint.handle_protocol_event.assert_called_once_with(handle=1, request_id=7, event=(99, ()))
 
-    @pytest.mark.asyncio
-    async def test_start_already_closed(self) -> None:
-        controller = EndpointController(connection_factory=MagicMock(), config=MagicMock(), is_client=True)
+    async def test_start_already_closed(self, mock_config: Any, mock_connection_factory: Any) -> None:
+        controller = EndpointController(connection_factory=mock_connection_factory, config=mock_config, is_client=True)
         controller._is_closed = True
 
         with pytest.raises(expected_exception=RuntimeError, match="rt validate failed"):
             await controller.start()
 
-    @pytest.mark.asyncio
     async def test_start_cancelled_while_acquiring(
-        self, monkeypatch: pytest.MonkeyPatch, mock_endpoint: MagicMock, mock_waker: MagicMock
+        self, mocker: MockerFixture, mock_endpoint: Any, mock_waker: Any, mock_config: Any, mock_connection_factory: Any
     ) -> None:
-        monkeypatch.setattr("pywebtransport._controller.controller.Waker", MagicMock(return_value=mock_waker))
+        mocker.patch(target="pywebtransport._controller.controller.Waker", return_value=mock_waker)
         resume_event = asyncio.Event()
 
-        async def mock_run_in_executor(executor: Any, func: Any) -> MagicMock:
+        async def mock_run_in_executor(executor: Any, func: Any) -> Any:
             await resume_event.wait()
             return mock_endpoint
 
         loop = asyncio.get_running_loop()
-        monkeypatch.setattr(loop, "run_in_executor", mock_run_in_executor)
-        controller = EndpointController(connection_factory=MagicMock(), config=MagicMock(), is_client=True)
-        start_task = asyncio.create_task(controller.start())
-        await asyncio.sleep(0.01)
+        mocker.patch.object(target=loop, attribute="run_in_executor", new=mock_run_in_executor)
+        controller = EndpointController(connection_factory=mock_connection_factory, config=mock_config, is_client=True)
+        start_task = asyncio.create_task(coro=controller.start())
+        await asyncio.sleep(delay=0.01)
 
         start_task.cancel()
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(delay=0.01)
         resume_event.set()
 
         with pytest.raises(expected_exception=asyncio.CancelledError):
@@ -789,18 +788,16 @@ class TestEndpointController:
         controller._read_socket.close()
         controller._write_socket.close()
 
-    @pytest.mark.asyncio
-    async def test_start_idempotent(self, controller: EndpointController, mock_endpoint: MagicMock) -> None:
+    async def test_start_idempotent(self, controller: EndpointController, mock_endpoint: Any) -> None:
         await controller.start()
 
         assert controller._endpoint is mock_endpoint
 
-    @pytest.mark.asyncio
     async def test_start_rollback_closes_endpoint_on_later_failure(
-        self, monkeypatch: pytest.MonkeyPatch, mock_endpoint: MagicMock, mock_waker: MagicMock
+        self, mocker: MockerFixture, mock_endpoint: Any, mock_waker: Any, mock_config: Any, mock_connection_factory: Any
     ) -> None:
-        monkeypatch.setattr("pywebtransport._controller.controller.Endpoint", MagicMock(return_value=mock_endpoint))
-        monkeypatch.setattr("pywebtransport._controller.controller.Waker", MagicMock(return_value=mock_waker))
+        mocker.patch(target="pywebtransport._controller.controller.Endpoint", return_value=mock_endpoint)
+        mocker.patch(target="pywebtransport._controller.controller.Waker", return_value=mock_waker)
         loop = asyncio.get_running_loop()
         real_create_task = loop.create_task
         call_count = 0
@@ -811,10 +808,10 @@ class TestEndpointController:
             if call_count == 2:
                 coro.close()
                 raise RuntimeError("mock task error")
-            return real_create_task(coro, **kwargs)
+            return real_create_task(coro=coro, **kwargs)
 
-        monkeypatch.setattr(loop, "create_task", mock_create_task)
-        controller = EndpointController(connection_factory=MagicMock(), config=MagicMock(), is_client=True)
+        mocker.patch.object(target=loop, attribute="create_task", new=mock_create_task)
+        controller = EndpointController(connection_factory=mock_connection_factory, config=mock_config, is_client=True)
 
         with pytest.raises(expected_exception=RuntimeError, match="mock task error"):
             await controller.start()
@@ -822,15 +819,14 @@ class TestEndpointController:
         mock_endpoint.close.assert_called_once()
         assert controller._endpoint is None
 
-    @pytest.mark.asyncio
     async def test_start_rollback_on_endpoint_failure(
-        self, monkeypatch: pytest.MonkeyPatch, mock_waker: MagicMock
+        self, mocker: MockerFixture, mock_waker: Any, mock_config: Any, mock_connection_factory: Any
     ) -> None:
-        monkeypatch.setattr("pywebtransport._controller.controller.Waker", MagicMock(return_value=mock_waker))
-        monkeypatch.setattr(
-            "pywebtransport._controller.controller.Endpoint", MagicMock(side_effect=ValueError("mock endpoint error"))
+        mocker.patch(target="pywebtransport._controller.controller.Waker", return_value=mock_waker)
+        mocker.patch(
+            target="pywebtransport._controller.controller.Endpoint", side_effect=ValueError("mock endpoint error")
         )
-        controller = EndpointController(connection_factory=MagicMock(), config=MagicMock(), is_client=True)
+        controller = EndpointController(connection_factory=mock_connection_factory, config=mock_config, is_client=True)
 
         with pytest.raises(expected_exception=ValueError, match="mock endpoint error"):
             await controller.start()
@@ -839,13 +835,12 @@ class TestEndpointController:
         assert controller._read_socket is None
         assert controller._write_socket is None
 
-    @pytest.mark.asyncio
     async def test_start_success(
-        self, monkeypatch: pytest.MonkeyPatch, mock_endpoint: MagicMock, mock_waker: MagicMock
+        self, mocker: MockerFixture, mock_endpoint: Any, mock_waker: Any, mock_config: Any, mock_connection_factory: Any
     ) -> None:
-        monkeypatch.setattr("pywebtransport._controller.controller.Endpoint", MagicMock(return_value=mock_endpoint))
-        monkeypatch.setattr("pywebtransport._controller.controller.Waker", MagicMock(return_value=mock_waker))
-        controller = EndpointController(connection_factory=MagicMock(), config=MagicMock(), is_client=True)
+        mocker.patch(target="pywebtransport._controller.controller.Endpoint", return_value=mock_endpoint)
+        mocker.patch(target="pywebtransport._controller.controller.Waker", return_value=mock_waker)
+        controller = EndpointController(connection_factory=mock_connection_factory, config=mock_config, is_client=True)
 
         await controller.start()
 

@@ -106,7 +106,6 @@ impl ConnectedPair {
             let deadline = self.now + Duration::from_millis(100);
             let Some(timeout) = [self.client.poll_timeout(), self.server.poll_timeout()]
                 .into_iter()
-                .flatten()
                 .filter(|&timeout| timeout <= deadline)
                 .min()
             else {
@@ -206,7 +205,7 @@ fn create_connected_pair(server_transport_config: QuicTransportConfig) -> Connec
         assert_eq!("ok", "err");
         unreachable!()
     };
-    let mut client = TransportConnection::new(quic, create_test_engine(true), None, None, now);
+    let mut client = create_transport_connection(quic, true, now);
 
     let mut workspace = Vec::new();
     let Some(transmit) = client.poll_transmit(&mut workspace, now) else {
@@ -230,7 +229,7 @@ fn create_connected_pair(server_transport_config: QuicTransportConfig) -> Connec
         assert_eq!("ok", "err");
         unreachable!()
     };
-    let server = TransportConnection::new(quic, create_test_engine(false), None, None, now);
+    let server = create_transport_connection(quic, false, now);
 
     let mut pair = ConnectedPair {
         client,
@@ -310,10 +309,9 @@ fn create_server_config(transport_config: QuicTransportConfig) -> QuicServerConf
 
 fn create_test_connection() -> TransportConnection {
     let quic = create_dummy_quic_connection();
-    let engine = create_test_engine(true);
     let now = Instant::now();
 
-    TransportConnection::new(quic, engine, None, None, now)
+    create_transport_connection(quic, true, now)
 }
 
 fn create_test_engine(is_client: bool) -> WebTransportEngine {
@@ -323,18 +321,32 @@ fn create_test_engine(is_client: bool) -> WebTransportEngine {
         initial_max_streams_bidi: 10,
         initial_max_streams_uni: 10,
         max_capsule_size: 65536,
-        max_connection_pending_events: 1000,
+        max_connection_early_events: 1000,
         max_field_section_size: 65536,
         max_pending_capsules: 20,
         max_pending_datagrams: 100,
         max_pending_streams: 10,
-        max_session_pending_events: 100,
+        max_session_early_events: 100,
         max_sessions: 10,
         max_write_buffer_size: 1024 * 1024,
         session_receive_window: 4 * 1024 * 1024,
     };
 
     WebTransportEngine::new(42, None, is_client, parameters)
+}
+
+fn create_transport_connection(
+    quic: QuicConnection,
+    is_client: bool,
+    now: Instant,
+) -> TransportConnection {
+    TransportConnection::new(
+        quic,
+        create_test_engine(is_client),
+        Duration::from_secs(15),
+        Duration::from_secs(5),
+        now,
+    )
 }
 
 fn deliver(
@@ -538,20 +550,16 @@ fn test_handle_timeout_past_early_event_time_updates_next_ttl() {
     let mut connection = create_test_connection();
     let now = Instant::now();
     let interval = Duration::from_secs(2);
-    connection.early_event_ttl = Some(interval);
+    connection.early_event_ttl = interval;
     let Some(past_time) = now.checked_sub(Duration::from_secs(1)) else {
         assert_eq!("valid", "underflow");
         unreachable!()
     };
-    connection.next_early_event_time = Some(past_time);
+    connection.next_early_event_time = past_time;
 
     connection.handle_timeout(0.0, now);
 
-    assert!(
-        connection
-            .next_early_event_time
-            .is_some_and(|scheduled_time| scheduled_time > now)
-    );
+    assert_eq!(connection.next_early_event_time, now + interval);
 }
 
 #[test]
@@ -559,34 +567,25 @@ fn test_handle_timeout_past_resource_cleanup_time_updates_next_resource_cleanup_
     let mut connection = create_test_connection();
     let now = Instant::now();
     let interval = Duration::from_secs(5);
-    connection.resource_cleanup_interval = Some(interval);
+    connection.resource_cleanup_interval = interval;
     let Some(past_time) = now.checked_sub(Duration::from_secs(1)) else {
         assert_eq!("valid", "underflow");
         unreachable!()
     };
-    connection.next_resource_cleanup_time = Some(past_time);
+    connection.next_resource_cleanup_time = past_time;
 
     connection.handle_timeout(0.0, now);
 
-    assert!(
-        connection
-            .next_resource_cleanup_time
-            .is_some_and(|scheduled_time| scheduled_time > now)
-    );
+    assert_eq!(connection.next_resource_cleanup_time, now + interval);
 }
 
-#[rstest]
-#[case(None, None)]
-#[case(None, Some(Duration::from_secs(10)))]
-#[case(Some(Duration::from_secs(5)), None)]
-#[case(Some(Duration::from_secs(5)), Some(Duration::from_secs(10)))]
-fn test_new_initialization_sets_correct_timer_states(
-    #[case] resource_cleanup_interval: Option<Duration>,
-    #[case] early_event_ttl: Option<Duration>,
-) {
+#[test]
+fn test_new_initialization_sets_correct_timer_states() {
     let quic = create_dummy_quic_connection();
     let engine = create_test_engine(true);
     let now = Instant::now();
+    let resource_cleanup_interval = Duration::from_secs(5);
+    let early_event_ttl = Duration::from_secs(10);
 
     let connection = TransportConnection::new(
         quic,
@@ -598,12 +597,9 @@ fn test_new_initialization_sets_correct_timer_states(
 
     assert_eq!(
         connection.next_resource_cleanup_time,
-        resource_cleanup_interval.map(|interval| now + interval)
+        now + resource_cleanup_interval
     );
-    assert_eq!(
-        connection.next_early_event_time,
-        early_event_ttl.map(|interval| now + interval)
-    );
+    assert_eq!(connection.next_early_event_time, now + early_event_ttl);
 }
 
 #[test]
@@ -623,27 +619,26 @@ fn test_poll_endpoint_events_initially_returns_none() {
 }
 
 #[test]
-fn test_poll_timeout_connection_timer_precedes_resource_cleanup() {
+fn test_poll_timeout_connection_timer_precedes_timers() {
     let mut pair = create_connected_pair(QuicTransportConfig::default());
     let Some(connection_timeout) = pair.client.connection.poll_timeout() else {
         assert_eq!("some", "none");
         unreachable!()
     };
-    pair.client.next_resource_cleanup_time = Some(connection_timeout + Duration::from_hours(1));
+    pair.client.next_early_event_time = connection_timeout + Duration::from_hours(1);
+    pair.client.next_resource_cleanup_time = connection_timeout + Duration::from_hours(1);
 
     let result = pair.client.poll_timeout();
 
-    assert_eq!(result, Some(connection_timeout));
+    assert_eq!(result, connection_timeout);
 }
 
 #[rstest]
-#[case(None, Some(Duration::from_secs(10)), 10)]
-#[case(Some(Duration::from_secs(10)), Some(Duration::from_secs(5)), 5)]
-#[case(Some(Duration::from_secs(5)), None, 5)]
-#[case(Some(Duration::from_secs(5)), Some(Duration::from_secs(10)), 5)]
+#[case(Duration::from_secs(10), Duration::from_secs(5), 5)]
+#[case(Duration::from_secs(5), Duration::from_secs(10), 5)]
 fn test_poll_timeout_multiple_timers_returns_earliest_deadline(
-    #[case] resource_cleanup_interval: Option<Duration>,
-    #[case] early_event_ttl: Option<Duration>,
+    #[case] resource_cleanup_interval: Duration,
+    #[case] early_event_ttl: Duration,
     #[case] expected_offset: u64,
 ) {
     let quic = create_dummy_quic_connection();
@@ -659,9 +654,7 @@ fn test_poll_timeout_multiple_timers_returns_earliest_deadline(
 
     let result = connection.poll_timeout();
 
-    assert!(result.is_some_and(|scheduled_time| {
-        scheduled_time == now + Duration::from_secs(expected_offset)
-    }));
+    assert_eq!(result, now + Duration::from_secs(expected_offset));
 }
 
 #[test]
@@ -1390,7 +1383,7 @@ fn test_process_quic_events_connection_refused_reports_transport_close() {
         assert_eq!("ok", "err");
         unreachable!()
     };
-    let mut client = TransportConnection::new(quic, create_test_engine(true), None, None, now);
+    let mut client = create_transport_connection(quic, true, now);
     let mut workspace = Vec::new();
     let Some(transmit) = client.poll_transmit(&mut workspace, now) else {
         assert_eq!("some", "none");

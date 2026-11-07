@@ -49,7 +49,7 @@ class BasicEndpointsTest:
         ]
 
         for test in tests:
-            await self._run_test(test_func=test)
+            await self._run_test(test_function=test)
 
         self._print_results()
 
@@ -88,7 +88,7 @@ class BasicEndpointsTest:
             data = await stream.read_all()
 
             try:
-                diagnostics = SessionDiagnostics(**json.loads(data.decode(encoding="utf-8")))
+                diagnostics = SessionDiagnostics(**json.loads(s=data.decode(encoding="utf-8")))
             except Exception as e:
                 raise TestFailure(f"Failed to parse session diagnostics: {e}") from e
 
@@ -106,11 +106,13 @@ class BasicEndpointsTest:
             async with await client.connect(url=url) as session:
                 yield session
 
-    async def _execute_test_with_retry(self, *, name: str, test_func: Callable[[], Coroutine[Any, Any, None]]) -> None:
+    async def _execute_test_with_retry(
+        self, *, name: str, test_function: Callable[[], Coroutine[Any, Any, None]]
+    ) -> None:
         """Execute a test case with retries."""
         for attempt in range(1, self.TEST_MAX_RETRIES + 1):
             try:
-                await test_func()
+                await test_function()
                 self._results.append((name, True, ""))
                 return
             except TestFailure as e:
@@ -138,12 +140,12 @@ class BasicEndpointsTest:
         if passed != total:
             sys.exit(1)
 
-    async def _run_test(self, *, test_func: Callable[[], Coroutine[Any, Any, None]]) -> None:
+    async def _run_test(self, *, test_function: Callable[[], Coroutine[Any, Any, None]]) -> None:
         """Execute a single test case with logging and error handling."""
-        name = test_func.__name__
+        name = test_function.__name__
         logger.info("RUNNING: %s", name)
         start_time = time.time()
-        await self._execute_test_with_retry(name=name, test_func=test_func)
+        await self._execute_test_with_retry(name=name, test_function=test_function)
         duration = time.time() - start_time
         if self._results[-1][1]:
             logger.info("SUCCESS: %s (%.3fs)", name, duration)
@@ -157,6 +159,6 @@ async def main() -> None:
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        asyncio.run(main=main())
     except KeyboardInterrupt:
         pass

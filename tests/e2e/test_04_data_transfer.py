@@ -118,9 +118,9 @@ async def test_chunked_transfer() -> bool:
                 logger.info("Sending %d bytes in %d-byte chunks...", total_size, chunk_size)
 
                 bytes_sent = 0
-                for i in range(0, total_size, chunk_size):
-                    chunk = test_data[i : i + chunk_size]
-                    is_last_chunk = (i + chunk_size) >= total_size
+                for offset in range(0, total_size, chunk_size):
+                    chunk = test_data[offset : offset + chunk_size]
+                    is_last_chunk = (offset + chunk_size) >= total_size
                     await stream.write(data=chunk, end_stream=is_last_chunk)
                     bytes_sent += len(chunk)
                 logger.info("All %d bytes sent", bytes_sent)
@@ -226,10 +226,10 @@ async def main() -> int:
     passed = 0
     total = len(tests)
 
-    for test_name, test_func in tests:
+    for test_name, test_function in tests:
         logger.info("")
         try:
-            if await test_func():
+            if await test_function():
                 logger.info("%s: PASSED", test_name)
                 passed += 1
             else:
@@ -253,7 +253,7 @@ async def main() -> int:
 if __name__ == "__main__":
     exit_code = 1
     try:
-        exit_code = asyncio.run(main())
+        exit_code = asyncio.run(main=main())
     except KeyboardInterrupt:
         logger.warning("\nTest interrupted by user")
         exit_code = 130

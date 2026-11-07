@@ -211,12 +211,13 @@ fn mock_base_config() -> RustBaseConfig {
         congestion_control_algorithm: "cubic".to_owned(),
         connection_receive_window: 16 * 1024 * 1024,
         connection_send_window: 16 * 1024 * 1024,
+        early_event_ttl: Duration::from_secs_f64(5.0),
         initial_max_data: 4 * 1024 * 1024,
         initial_max_streams_bidi: 10,
         initial_max_streams_uni: 10,
         keep_alive_interval: Some(Duration::from_secs_f64(30.0)),
         max_capsule_size: 65536,
-        max_connection_pending_events: 1000,
+        max_connection_early_events: 1000,
         max_connections: 100,
         max_datagram_size: 1350,
         max_field_section_size: 65536,
@@ -224,13 +225,12 @@ fn mock_base_config() -> RustBaseConfig {
         max_pending_capsules: 20,
         max_pending_datagrams: 100,
         max_pending_streams: 10,
-        max_session_pending_events: 100,
+        max_session_early_events: 100,
         max_sessions: 10,
         max_streams_bidi: 100,
         max_streams_uni: 100,
         max_udp_payload_size: 1472,
         max_write_buffer_size: 1024 * 1024,
-        pending_event_ttl: Duration::from_secs_f64(5.0),
         resource_cleanup_interval: Duration::from_secs_f64(15.0),
         session_receive_window: 4 * 1024 * 1024,
         stream_receive_window: 1024 * 1024,
@@ -316,19 +316,6 @@ fn test_connect_with_invalid_server_name_returns_error() {
             ..
         }
     ));
-}
-
-#[test]
-fn test_connect_with_zero_timers_sets_none_boundaries() {
-    let mut endpoint = create_test_client_endpoint();
-    endpoint.base_config.resource_cleanup_interval = Duration::ZERO;
-    endpoint.base_config.pending_event_ttl = Duration::ZERO;
-    let remote_address = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 443);
-    let now = Instant::now();
-
-    let event = endpoint.connect(1, remote_address, "localhost", now);
-
-    assert!(matches!(event, TransportEvent::ConnectionSpawned { .. }));
 }
 
 #[test]

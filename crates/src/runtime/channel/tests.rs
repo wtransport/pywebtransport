@@ -18,7 +18,7 @@ fn test_runtime_channels_creation_and_messaging() {
     let command = RuntimeCommand::ShutdownReactor;
     let event = RuntimeEvent::ReactorShutdown;
 
-    let Ok(()) = channels.command_tx.try_send(command) else {
+    let Ok(()) = channels.command_tx.send(command) else {
         assert_eq!("ok", "err");
         unreachable!()
     };
@@ -26,10 +26,7 @@ fn test_runtime_channels_creation_and_messaging() {
         assert_eq!("ok", "err");
         unreachable!()
     };
-    let Ok(()) = channels.event_tx.push(event) else {
-        assert_eq!("ok", "err");
-        unreachable!()
-    };
+    channels.event_tx.push(event);
     let Some(received_event) = channels.event_rx.pop() else {
         assert_eq!("some", "none");
         unreachable!()

@@ -63,14 +63,16 @@ class EventEmitter:
 
     def emit_nowait(self, *, event_type: EventType, data: Any | None = None) -> None:
         """Schedule an event dispatch without awaiting."""
-        event = Event(type=event_type, data=data)
-
         try:
-            task = asyncio.create_task(coro=self._process_event(event=event))
-            self._background_tasks.add(task)
-            task.add_done_callback(self._background_tasks.discard)
+            loop = asyncio.get_running_loop()
         except RuntimeError:
             _logger.warning("rt_event send failed event=%s", event_type)
+            return
+
+        event = Event(type=event_type, data=data)
+        task = loop.create_task(coro=self._process_event(event=event))
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     def off(self, *, event_type: EventType, handler: EventHandler | None = None) -> None:
         """Unregister handlers for an event."""

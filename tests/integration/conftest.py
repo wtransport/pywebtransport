@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Final, cast
 
 import pytest
-from pytest_asyncio import fixture as asyncio_fixture
 
 from pywebtransport import ClientConfig, ServerConfig, WebTransportClient, WebTransportServer, WebTransportSession
 from pywebtransport.utils import generate_self_signed_cert
@@ -17,9 +16,9 @@ CERT_HOSTNAME: Final[str] = "localhost"
 
 
 def find_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return cast(int, s.getsockname()[1])
+    with socket.socket(family=socket.AF_INET, type=socket.SOCK_STREAM) as probe_socket:
+        probe_socket.bind(("127.0.0.1", 0))
+        return cast(int, probe_socket.getsockname()[1])
 
 
 @pytest.fixture(scope="session")
@@ -30,8 +29,21 @@ def certificates_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 @pytest.fixture
+async def client(client_config: ClientConfig) -> AsyncGenerator[WebTransportClient, None]:
+    async with WebTransportClient(config=client_config) as client:
+        yield client
+
+
+@pytest.fixture
 def client_config(request: pytest.FixtureRequest) -> ClientConfig:
     return ClientConfig(verify_mode=ssl.CERT_NONE, **getattr(request, "param", {}))
+
+
+@pytest.fixture
+async def server(server_config: ServerConfig) -> AsyncGenerator[WebTransportServer, None]:
+    async with WebTransportServer(config=server_config) as server:
+        await server.listen(host="127.0.0.1", port=find_free_port())
+        yield server
 
 
 @pytest.fixture
@@ -43,20 +55,7 @@ def server_config(request: pytest.FixtureRequest, certificates_dir: Path) -> Ser
     )
 
 
-@asyncio_fixture
-async def client(client_config: ClientConfig) -> AsyncGenerator[WebTransportClient, None]:
-    async with WebTransportClient(config=client_config) as client:
-        yield client
-
-
-@asyncio_fixture
-async def server(server_config: ServerConfig) -> AsyncGenerator[WebTransportServer, None]:
-    async with WebTransportServer(config=server_config) as server:
-        await server.listen(host="127.0.0.1", port=find_free_port())
-        yield server
-
-
-@asyncio_fixture
+@pytest.fixture
 async def sessions(
     client: WebTransportClient, server: WebTransportServer, url: str
 ) -> AsyncGenerator[tuple[WebTransportSession, WebTransportSession], None]:

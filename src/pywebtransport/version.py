@@ -6,4 +6,4 @@ import importlib.metadata
 
 __all__: list[str] = ["__version__"]
 
-__version__: str = importlib.metadata.version("pywebtransport")
+__version__: str = importlib.metadata.version(distribution_name="pywebtransport")

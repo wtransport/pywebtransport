@@ -102,7 +102,7 @@ pub(super) struct Session {
     pending_capsules: VecDeque<(u64, Bytes)>,
     pending_datagram_requests: VecDeque<RequestId>,
     pending_datagrams: VecDeque<Bytes>,
-    pending_streams: VecDeque<StreamId>,
+    pending_streams: VecDeque<(StreamId, Vec<Effect>)>,
     ready_at: Option<f64>,
     receive_window: u64,
     state: SessionState,
@@ -769,9 +769,9 @@ impl Session {
         }
 
         if label.len() > usize::from(u8::MAX) || context.len() > usize::from(u8::MAX) {
-            let len = cmp::max(label.len(), context.len());
+            let length = cmp::max(label.len(), context.len());
             debug!(
-                "wt_session validate invalid actual={len} request_id={request_id} session_id={}",
+                "wt_session validate invalid actual={length} request_id={request_id} session_id={}",
                 self.id
             );
             return vec![Effect::NotifyRequestFailed {
@@ -782,14 +782,14 @@ impl Session {
             }];
         }
 
-        let label_len = u8::try_from(label.len()).unwrap_or(u8::MAX);
-        let context_len = u8::try_from(context.len()).unwrap_or(u8::MAX);
+        let label_length = u8::try_from(label.len()).unwrap_or(u8::MAX);
+        let context_length = u8::try_from(context.len()).unwrap_or(u8::MAX);
 
         let mut exporter_context = BytesMut::with_capacity(8 + 1 + label.len() + 1 + context.len());
         exporter_context.put_u64(self.id);
-        exporter_context.put_u8(label_len);
+        exporter_context.put_u8(label_length);
         exporter_context.put_slice(label.as_bytes());
-        exporter_context.put_u8(context_len);
+        exporter_context.put_u8(context_length);
         exporter_context.put_slice(context);
 
         vec![Effect::ExportTlsKeyingMaterial {
@@ -846,7 +846,11 @@ impl Session {
     }
 
     pub(super) fn handle_stream_opened(&mut self, stream_id: StreamId, now: f64) -> Vec<Effect> {
-        let direction = utils::stream_direction_from_id(stream_id, self.is_client);
+        let direction = if utils::is_unidirectional_stream(stream_id) {
+            StreamDirection::ReceiveOnly
+        } else {
+            StreamDirection::Bidirectional
+        };
 
         if !matches!(
             self.state,
@@ -870,64 +874,54 @@ impl Session {
             return effects;
         }
 
-        match direction {
-            StreamDirection::Bidirectional => {
-                if self.flow_control_negotiated
-                    && self.peer_streams_bidi_opened >= self.local_max_streams_bidi
-                {
-                    debug!(
-                        "wt_session validate exceeded actual={} limit={} session_id={}",
-                        self.peer_streams_bidi_opened, self.local_max_streams_bidi, self.id
-                    );
-                    let mut effects = vec![
-                        Effect::ResetQuicStream {
-                            stream_id,
-                            error_code: ERR_WT_SESSION_GONE,
-                        },
-                        Effect::StopQuicStream {
-                            stream_id,
-                            error_code: ERR_WT_SESSION_GONE,
-                        },
-                    ];
-                    effects.extend(self.abort(
-                        ERR_WT_FLOW_CONTROL_ERROR,
-                        "wt_session validate exceeded".into(),
-                        now,
-                    ));
-
-                    return effects;
-                }
-                self.peer_streams_bidi_opened += 1;
-            }
-            StreamDirection::ReceiveOnly => {
-                if self.flow_control_negotiated
-                    && self.peer_streams_uni_opened >= self.local_max_streams_uni
-                {
-                    debug!(
-                        "wt_session validate exceeded actual={} limit={} session_id={}",
-                        self.peer_streams_uni_opened, self.local_max_streams_uni, self.id
-                    );
-                    let mut effects = vec![Effect::StopQuicStream {
+        if direction == StreamDirection::Bidirectional {
+            if self.flow_control_negotiated
+                && self.peer_streams_bidi_opened >= self.local_max_streams_bidi
+            {
+                debug!(
+                    "wt_session validate exceeded actual={} limit={} session_id={}",
+                    self.peer_streams_bidi_opened, self.local_max_streams_bidi, self.id
+                );
+                let mut effects = vec![
+                    Effect::ResetQuicStream {
                         stream_id,
                         error_code: ERR_WT_SESSION_GONE,
-                    }];
-                    effects.extend(self.abort(
-                        ERR_WT_FLOW_CONTROL_ERROR,
-                        "wt_session validate exceeded".into(),
-                        now,
-                    ));
+                    },
+                    Effect::StopQuicStream {
+                        stream_id,
+                        error_code: ERR_WT_SESSION_GONE,
+                    },
+                ];
+                effects.extend(self.abort(
+                    ERR_WT_FLOW_CONTROL_ERROR,
+                    "wt_session validate exceeded".into(),
+                    now,
+                ));
 
-                    return effects;
-                }
-                self.peer_streams_uni_opened += 1;
+                return effects;
             }
-            StreamDirection::SendOnly => {
+            self.peer_streams_bidi_opened += 1;
+        } else {
+            if self.flow_control_negotiated
+                && self.peer_streams_uni_opened >= self.local_max_streams_uni
+            {
                 debug!(
-                    "wt_stream validate invalid actual={direction:?} session_id={} stream_id={stream_id}",
-                    self.id
+                    "wt_session validate exceeded actual={} limit={} session_id={}",
+                    self.peer_streams_uni_opened, self.local_max_streams_uni, self.id
                 );
-                return Vec::new();
+                let mut effects = vec![Effect::StopQuicStream {
+                    stream_id,
+                    error_code: ERR_WT_SESSION_GONE,
+                }];
+                effects.extend(self.abort(
+                    ERR_WT_FLOW_CONTROL_ERROR,
+                    "wt_session validate exceeded".into(),
+                    now,
+                ));
+
+                return effects;
             }
+            self.peer_streams_uni_opened += 1;
         }
 
         if self.state == SessionState::Connecting {
@@ -964,7 +958,7 @@ impl Session {
                 return effects;
             }
 
-            self.pending_streams.push_back(stream_id);
+            self.pending_streams.push_back((stream_id, Vec::new()));
         }
 
         let stream = Stream::new(
@@ -980,18 +974,17 @@ impl Session {
 
         self.streams.insert(stream_id, stream);
 
-        if self.state == SessionState::Connecting {
-            return Vec::new();
-        }
-
-        vec![Effect::EmitStreamEvent {
+        self.defer_pending_stream_events(
             stream_id,
-            event_type: EventType::StreamOpened,
-            session_id: Some(self.id),
-            direction: Some(direction),
-            is_peer_initiated: Some(true),
-            error_code: None,
-        }]
+            vec![Effect::EmitStreamEvent {
+                stream_id,
+                event_type: EventType::StreamOpened,
+                session_id: Some(self.id),
+                direction: Some(direction),
+                is_peer_initiated: Some(true),
+                error_code: None,
+            }],
+        )
     }
 
     pub(super) fn has_stream(&self, stream_id: StreamId) -> bool {
@@ -1061,7 +1054,7 @@ impl Session {
         effects
     }
 
-    pub(super) fn recv_capsule(
+    pub(super) fn receive_capsule(
         &mut self,
         capsule_type: u64,
         capsule_value: &[u8],
@@ -1468,7 +1461,7 @@ impl Session {
         effects
     }
 
-    pub(super) fn recv_connect_close(
+    pub(super) fn receive_connect_close(
         &mut self,
         error_code: ErrorCode,
         reason: Cow<'static, str>,
@@ -1528,7 +1521,7 @@ impl Session {
         effects
     }
 
-    pub(super) fn recv_datagram(&mut self, data: Bytes) -> Vec<Effect> {
+    pub(super) fn receive_datagram(&mut self, data: Bytes) -> Vec<Effect> {
         if !matches!(
             self.state,
             SessionState::Connected | SessionState::Connecting | SessionState::Draining
@@ -1563,7 +1556,7 @@ impl Session {
         Vec::new()
     }
 
-    pub(super) fn recv_stop_sending(
+    pub(super) fn receive_stop_sending(
         &mut self,
         stream_id: StreamId,
         error_code: ErrorCode,
@@ -1571,15 +1564,15 @@ impl Session {
         let Some(stream) = self.streams.get_mut(&stream_id) else {
             return Vec::new();
         };
-        let stream_effects = stream.recv_stop_sending(error_code);
+        let stream_effects = stream.receive_stop_sending(error_code);
 
-        let mut effects = self.suppress_pending_stream_events(stream_id, stream_effects);
+        let mut effects = self.defer_pending_stream_events(stream_id, stream_effects);
         effects.extend(self.handle_closed(stream_id));
 
         effects
     }
 
-    pub(super) fn recv_stream_data(
+    pub(super) fn receive_stream_data(
         &mut self,
         stream_id: StreamId,
         data: Bytes,
@@ -1590,8 +1583,8 @@ impl Session {
             return Vec::new();
         };
 
-        let data_len = data.len() as u64;
-        self.data_received += data_len;
+        let data_length = data.len() as u64;
+        self.data_received += data_length;
 
         if self.flow_control_negotiated && self.data_received > self.local_max_data {
             debug!(
@@ -1605,9 +1598,9 @@ impl Session {
             );
         }
 
-        let mut effects = stream.recv_data(data, end_stream);
+        let mut effects = stream.receive_data(data, end_stream);
 
-        self.data_consumed += data_len;
+        self.data_consumed += data_length;
         if let Some(credit_effect) = self.replenish_data_credit(false) {
             effects.push(credit_effect);
         }
@@ -1617,7 +1610,7 @@ impl Session {
         effects
     }
 
-    pub(super) fn recv_stream_reset(
+    pub(super) fn receive_stream_reset(
         &mut self,
         stream_id: StreamId,
         error_code: ErrorCode,
@@ -1625,9 +1618,9 @@ impl Session {
         let Some(stream) = self.streams.get_mut(&stream_id) else {
             return Vec::new();
         };
-        let stream_effects = stream.recv_reset(error_code);
+        let stream_effects = stream.receive_reset(error_code);
 
-        let mut effects = self.suppress_pending_stream_events(stream_id, stream_effects);
+        let mut effects = self.defer_pending_stream_events(stream_id, stream_effects);
         effects.extend(self.handle_closed(stream_id));
 
         effects
@@ -1915,8 +1908,7 @@ impl Session {
 
         for stream_id in stream_ids {
             if let Some(stream) = self.streams.get_mut(&stream_id) {
-                let stream_effects = stream.abort(ERR_WT_SESSION_GONE);
-                effects.extend(self.suppress_pending_stream_events(stream_id, stream_effects));
+                effects.extend(stream.abort(ERR_WT_SESSION_GONE));
             }
             effects.extend(self.handle_closed(stream_id));
         }
@@ -1939,6 +1931,32 @@ impl Session {
                 error_code: None,
                 reason: "wt_session abort".into(),
             });
+        }
+
+        effects
+    }
+
+    fn defer_pending_stream_events(
+        &mut self,
+        stream_id: StreamId,
+        stream_effects: Vec<Effect>,
+    ) -> Vec<Effect> {
+        let Some((_, deferred_effects)) = self
+            .pending_streams
+            .iter_mut()
+            .find(|(pending_stream_id, _)| *pending_stream_id == stream_id)
+        else {
+            return stream_effects;
+        };
+
+        let mut effects = Vec::new();
+
+        for effect in stream_effects {
+            if matches!(effect, Effect::EmitStreamEvent { .. }) {
+                deferred_effects.push(effect);
+            } else {
+                effects.push(effect);
+            }
         }
 
         effects
@@ -2059,12 +2077,7 @@ impl Session {
             return effects;
         }
 
-        let count = self.blocked_streams_queue.len();
-
-        for _ in 0..count {
-            let Some(stream_id) = self.blocked_streams_queue.pop_front() else {
-                break;
-            };
+        while let Some(stream_id) = self.blocked_streams_queue.pop_front() {
             self.blocked_streams.remove(&stream_id);
 
             let session_credit = if self.flow_control_negotiated {
@@ -2084,15 +2097,9 @@ impl Session {
             };
 
             let (stream_effects, sent) = stream.flush_writes(session_credit);
-            let is_blocked = stream.is_blocked();
 
             effects.extend(stream_effects);
             self.data_sent += sent;
-
-            if is_blocked {
-                self.blocked_streams_queue.push_back(stream_id);
-                self.blocked_streams.insert(stream_id);
-            }
         }
 
         if let Some(effect) = self.emit_data_blocked() {
@@ -2110,7 +2117,7 @@ impl Session {
         self.streams.remove(&stream_id);
         self.blocked_streams.remove(&stream_id);
 
-        let mut effects = self.suppress_pending_stream_events(
+        let mut effects = self.defer_pending_stream_events(
             stream_id,
             vec![Effect::EmitStreamEvent {
                 stream_id,
@@ -2142,9 +2149,9 @@ impl Session {
         let mut effects = Vec::new();
 
         while let Some((capsule_type, capsule_value)) = self.pending_capsules.pop_front() {
-            effects.extend(self.recv_capsule(capsule_type, &capsule_value, now));
+            effects.extend(self.receive_capsule(capsule_type, &capsule_value, now));
 
-            if self.state != SessionState::Connected {
+            if !matches!(self.state, SessionState::Connected | SessionState::Draining) {
                 return effects;
             }
         }
@@ -2152,24 +2159,13 @@ impl Session {
         while !self.pending_datagram_requests.is_empty()
             && let Some(data) = self.pending_datagrams.pop_front()
         {
-            effects.extend(self.recv_datagram(data));
+            effects.extend(self.receive_datagram(data));
         }
 
-        while let Some(stream_id) = self.pending_streams.pop_front() {
-            if !self.streams.contains_key(&stream_id) {
-                continue;
+        while let Some((stream_id, deferred_effects)) = self.pending_streams.pop_front() {
+            if self.streams.contains_key(&stream_id) {
+                effects.extend(deferred_effects);
             }
-
-            let direction = utils::stream_direction_from_id(stream_id, self.is_client);
-
-            effects.push(Effect::EmitStreamEvent {
-                stream_id,
-                event_type: EventType::StreamOpened,
-                session_id: Some(self.id),
-                direction: Some(direction),
-                is_peer_initiated: Some(true),
-                error_code: None,
-            });
         }
 
         effects
@@ -2273,21 +2269,6 @@ impl Session {
             capsule_value: buffer.freeze(),
             end_stream: false,
         })
-    }
-
-    fn suppress_pending_stream_events(
-        &self,
-        stream_id: StreamId,
-        stream_effects: Vec<Effect>,
-    ) -> Vec<Effect> {
-        if !self.pending_streams.contains(&stream_id) {
-            return stream_effects;
-        }
-
-        stream_effects
-            .into_iter()
-            .filter(|effect| !matches!(effect, Effect::EmitStreamEvent { .. }))
-            .collect()
     }
 }
 

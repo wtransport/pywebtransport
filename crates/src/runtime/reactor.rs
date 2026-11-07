@@ -64,8 +64,8 @@ impl Reactor {
                         buffer.reserve(UDP_SLAB_CAPACITY);
                     }
 
-                    if let Ok((len, remote_address)) = socket.recv_buf_from(&mut buffer).await {
-                        let data = buffer.split_to(len);
+                    if let Ok((length, remote_address)) = socket.recv_buf_from(&mut buffer).await {
+                        let data = buffer.split_to(length);
                         let local_address = socket.local_addr().ok();
 
                         if datagram_tx
@@ -185,21 +185,12 @@ impl Reactor {
                 self.process_transport_event(transport_event).await;
             }
             RuntimeCommand::ShutdownReactor => {
-                let (now, now_instant) = self.now_context();
                 let results = self.endpoint.shutdown(now, now_instant);
 
                 for (handle, effects) in results {
-                    if !effects.is_empty() {
-                        if self
-                            .event_tx
-                            .push(RuntimeEvent::ConnectionEffects { handle, effects })
-                            .is_ok()
-                        {
-                            self.events_emitted = true;
-                        } else {
-                            debug!("rt_event send failed");
-                        }
-                    }
+                    self.event_tx
+                        .push(RuntimeEvent::ConnectionEffects { handle, effects });
+                    self.events_emitted = true;
                 }
 
                 return false;
@@ -230,24 +221,14 @@ impl Reactor {
         let results = self.endpoint.handle_timeout(now, now_instant);
 
         for (handle, effects) in results {
-            if !effects.is_empty() {
-                if self
-                    .event_tx
-                    .push(RuntimeEvent::ConnectionEffects { handle, effects })
-                    .is_ok()
-                {
-                    self.events_emitted = true;
-                } else {
-                    debug!("rt_event send failed");
-                }
-            }
+            self.event_tx
+                .push(RuntimeEvent::ConnectionEffects { handle, effects });
+            self.events_emitted = true;
         }
     }
 
     fn notify_shutdown(&self) {
-        if self.event_tx.push(RuntimeEvent::ReactorShutdown).is_err() {
-            debug!("rt_event send failed");
-        }
+        self.event_tx.push(RuntimeEvent::ReactorShutdown);
 
         (self.waker)();
     }
@@ -266,31 +247,18 @@ impl Reactor {
                 error_code,
                 reason,
             } => {
-                if self
-                    .event_tx
-                    .push(RuntimeEvent::CommandFailed {
-                        request_id,
-                        error_code,
-                        reason,
-                    })
-                    .is_ok()
-                {
-                    self.events_emitted = true;
-                } else {
-                    debug!("rt_event send failed");
-                }
+                self.event_tx.push(RuntimeEvent::CommandFailed {
+                    request_id,
+                    error_code,
+                    reason,
+                });
+                self.events_emitted = true;
             }
             TransportEvent::ConnectionEffects { handle, effects } => {
                 if !effects.is_empty() {
-                    if self
-                        .event_tx
-                        .push(RuntimeEvent::ConnectionEffects { handle, effects })
-                        .is_ok()
-                    {
-                        self.events_emitted = true;
-                    } else {
-                        debug!("rt_event send failed");
-                    }
+                    self.event_tx
+                        .push(RuntimeEvent::ConnectionEffects { handle, effects });
+                    self.events_emitted = true;
                 }
             }
             TransportEvent::ConnectionSpawned {
@@ -298,19 +266,12 @@ impl Reactor {
                 remote_address,
                 effects,
             } => {
-                if self
-                    .event_tx
-                    .push(RuntimeEvent::ConnectionSpawned {
-                        handle,
-                        remote_address,
-                        effects,
-                    })
-                    .is_ok()
-                {
-                    self.events_emitted = true;
-                } else {
-                    debug!("rt_event send failed");
-                }
+                self.event_tx.push(RuntimeEvent::ConnectionSpawned {
+                    handle,
+                    remote_address,
+                    effects,
+                });
+                self.events_emitted = true;
             }
             TransportEvent::Consumed => {}
             TransportEvent::Transmit(transmit) => {
@@ -341,8 +302,8 @@ impl Reactor {
             if let Some(socket) = target_socket {
                 let mut offset = 0;
                 while offset < size {
-                    let chunk_len = cmp::min(segment_size, size - offset);
-                    let Some(chunk) = data.get(offset..offset + chunk_len) else {
+                    let chunk_length = cmp::min(segment_size, size - offset);
+                    let Some(chunk) = data.get(offset..offset + chunk_length) else {
                         break;
                     };
 
@@ -350,7 +311,7 @@ impl Reactor {
                         debug!("sys_socket send failed err={e:?}");
                     }
 
-                    offset += chunk_len;
+                    offset += chunk_length;
                 }
             }
         }

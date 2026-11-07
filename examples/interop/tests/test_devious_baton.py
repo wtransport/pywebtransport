@@ -68,7 +68,7 @@ def parse_varint(*, data: bytes) -> tuple[int, int]:
     if len(data) < size:
         raise ValueError("Truncated varint")
 
-    return int.from_bytes(bytes([data[0] & 0x3F]) + data[1:size]), size
+    return int.from_bytes(bytes=bytes([data[0] & 0x3F]) + data[1:size]), size
 
 
 class DeviousBatonTest:
@@ -104,7 +104,7 @@ class DeviousBatonTest:
         ]
 
         for test in tests:
-            await self._run_test(test_func=test)
+            await self._run_test(test_function=test)
 
         self._print_results()
 
@@ -185,8 +185,8 @@ class DeviousBatonTest:
         url = self._build_url(count=1, baton=10)
 
         async with self._connect(url=url) as session:
-            server_bidi_opened = asyncio.Event()
-            server_uni_opened = asyncio.Event()
+            server_bidirectional_opened = asyncio.Event()
+            server_unidirectional_opened = asyncio.Event()
 
             async def reply_bidirectional_stream(*, stream: WebTransportBidirectionalStream) -> None:
                 try:
@@ -199,12 +199,12 @@ class DeviousBatonTest:
             async def reply_bidirectional_streams() -> None:
                 async with asyncio.TaskGroup() as task_group:
                     async for stream in session.incoming_bidirectional_streams():
-                        server_bidi_opened.set()
+                        server_bidirectional_opened.set()
                         task_group.create_task(coro=reply_bidirectional_stream(stream=stream))
 
             async def observe_unidirectional_streams() -> None:
                 async for _ in session.incoming_unidirectional_streams():
-                    server_uni_opened.set()
+                    server_unidirectional_opened.set()
 
             bidirectional_task = asyncio.create_task(coro=reply_bidirectional_streams())
             unidirectional_task = asyncio.create_task(coro=observe_unidirectional_streams())
@@ -214,10 +214,10 @@ class DeviousBatonTest:
 
             try:
                 async with asyncio.timeout(delay=5.0):
-                    await server_bidi_opened.wait()
-                    await server_uni_opened.wait()
+                    await server_bidirectional_opened.wait()
+                    await server_unidirectional_opened.wait()
             except asyncio.TimeoutError:
-                if not server_bidi_opened.is_set():
+                if not server_bidirectional_opened.is_set():
                     raise TestFailure(
                         "Server did not open a bidirectional stream in response to a unidirectional stream"
                     ) from None
@@ -409,11 +409,13 @@ class DeviousBatonTest:
             async with await client.connect(url=url) as session:
                 yield session
 
-    async def _execute_test_with_retry(self, *, name: str, test_func: Callable[[], Coroutine[Any, Any, None]]) -> None:
+    async def _execute_test_with_retry(
+        self, *, name: str, test_function: Callable[[], Coroutine[Any, Any, None]]
+    ) -> None:
         """Execute a test case with retries."""
         for attempt in range(1, self.TEST_MAX_RETRIES + 1):
             try:
-                await test_func()
+                await test_function()
                 self._results.append((name, True, ""))
                 return
             except TestFailure as e:
@@ -452,12 +454,12 @@ class DeviousBatonTest:
         if passed != total:
             sys.exit(1)
 
-    async def _run_test(self, *, test_func: Callable[[], Coroutine[Any, Any, None]]) -> None:
+    async def _run_test(self, *, test_function: Callable[[], Coroutine[Any, Any, None]]) -> None:
         """Execute a single test case with logging and error handling."""
-        name = test_func.__name__
+        name = test_function.__name__
         logger.info("RUNNING: %s", name)
         start_time = time.time()
-        await self._execute_test_with_retry(name=name, test_func=test_func)
+        await self._execute_test_with_retry(name=name, test_function=test_function)
         duration = time.time() - start_time
         if self._results[-1][1]:
             logger.info("SUCCESS: %s (%.3fs)", name, duration)
@@ -471,6 +473,6 @@ async def main() -> None:
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        asyncio.run(main=main())
     except KeyboardInterrupt:
         pass

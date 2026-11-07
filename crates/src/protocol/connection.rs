@@ -57,11 +57,11 @@ pub(super) struct Connection {
     initial_max_streams_uni: u64,
     is_client: bool,
     local_goaway_sent: bool,
-    max_connection_pending_events: u64,
+    max_connection_early_events: u64,
     max_pending_capsules: u64,
     max_pending_datagrams: u64,
     max_pending_streams: u64,
-    max_session_pending_events: u64,
+    max_session_early_events: u64,
     max_sessions: u64,
     max_write_buffer_size: u64,
     peer_goaway_received: bool,
@@ -102,11 +102,11 @@ impl Connection {
             initial_max_streams_uni: parameters.initial_max_streams_uni,
             is_client,
             local_goaway_sent: false,
-            max_connection_pending_events: parameters.max_connection_pending_events,
+            max_connection_early_events: parameters.max_connection_early_events,
             max_pending_capsules: parameters.max_pending_capsules,
             max_pending_datagrams: parameters.max_pending_datagrams,
             max_pending_streams: parameters.max_pending_streams,
-            max_session_pending_events: parameters.max_session_pending_events,
+            max_session_early_events: parameters.max_session_early_events,
             max_sessions: parameters.max_sessions,
             max_write_buffer_size: parameters.max_write_buffer_size,
             peer_goaway_received: false,
@@ -756,7 +756,7 @@ impl Connection {
 
         for session_id in session_ids {
             if let Some(session) = self.sessions.get_mut(&session_id) {
-                effects.extend(session.recv_connect_close(error_code, reason.clone(), now));
+                effects.extend(session.receive_connect_close(error_code, reason.clone(), now));
             }
         }
 
@@ -939,7 +939,7 @@ impl Connection {
         }]
     }
 
-    pub(super) fn recv_capsule(
+    pub(super) fn receive_capsule(
         &mut self,
         session_id: SessionId,
         capsule_type: u64,
@@ -947,26 +947,26 @@ impl Connection {
         now: f64,
     ) -> Vec<Effect> {
         if let Some(session) = self.sessions.get_mut(&session_id) {
-            return session.recv_capsule(capsule_type, capsule_value, now);
+            return session.receive_capsule(capsule_type, capsule_value, now);
         }
         Vec::new()
     }
 
-    pub(super) fn recv_connect_close(&mut self, session_id: SessionId, now: f64) -> Vec<Effect> {
+    pub(super) fn receive_connect_close(&mut self, session_id: SessionId, now: f64) -> Vec<Effect> {
         if let Some(session) = self.sessions.get_mut(&session_id) {
-            return session.recv_connect_close(ERR_APP_NO_ERROR, "".into(), now);
+            return session.receive_connect_close(ERR_APP_NO_ERROR, "".into(), now);
         }
         Vec::new()
     }
 
-    pub(super) fn recv_datagram(
+    pub(super) fn receive_datagram(
         &mut self,
         session_id: SessionId,
         data: Bytes,
         now: f64,
     ) -> Vec<Effect> {
         if let Some(session) = self.sessions.get_mut(&session_id) {
-            return session.recv_datagram(data);
+            return session.receive_datagram(data);
         }
 
         let event = ProtocolEvent::H3DatagramReceived { session_id, data };
@@ -976,7 +976,7 @@ impl Connection {
         Vec::new()
     }
 
-    pub(super) fn recv_goaway(&mut self) -> Vec<Effect> {
+    pub(super) fn receive_goaway(&mut self) -> Vec<Effect> {
         let mut effects = Vec::new();
 
         self.peer_goaway_received = true;
@@ -1007,7 +1007,7 @@ impl Connection {
         effects
     }
 
-    pub(super) fn recv_headers(
+    pub(super) fn receive_headers(
         &mut self,
         stream_id: StreamId,
         headers: Headers,
@@ -1168,14 +1168,6 @@ impl Connection {
                 effects.extend(self.replay_early_events(stream_id, now));
             }
         } else {
-            if self.sessions.contains_key(&stream_id) {
-                debug!(
-                    "wt_session validate failed connection_handle={} expected=false stream_id={stream_id}",
-                    self.handle
-                );
-                return effects;
-            }
-
             if self.state != ConnectionState::Connected {
                 debug!(
                     "wt_connection validate failed actual={:?} connection_handle={} expected=connected stream_id={stream_id}",
@@ -1311,7 +1303,7 @@ impl Connection {
         effects
     }
 
-    pub(super) fn recv_max_streams(&mut self, is_unidirectional: bool) -> Vec<Effect> {
+    pub(super) fn receive_max_streams(&mut self, is_unidirectional: bool) -> Vec<Effect> {
         let mut effects = Vec::new();
 
         if !is_unidirectional {
@@ -1339,7 +1331,7 @@ impl Connection {
         effects
     }
 
-    pub(super) fn recv_settings(&mut self, settings: &H3Settings, now: f64) -> Vec<Effect> {
+    pub(super) fn receive_settings(&mut self, settings: &H3Settings, now: f64) -> Vec<Effect> {
         self.peer_settings_received = true;
 
         if let Some(peer_initial_max_data) = settings.wt_initial_max_data {
@@ -1359,7 +1351,7 @@ impl Connection {
         Vec::new()
     }
 
-    pub(super) fn recv_stop_sending(
+    pub(super) fn receive_stop_sending(
         &mut self,
         stream_id: StreamId,
         error_code: ErrorCode,
@@ -1368,7 +1360,7 @@ impl Connection {
         if let Some(&session_id) = self.stream_map.get(&stream_id)
             && let Some(session) = self.sessions.get_mut(&session_id)
         {
-            let effects = session.recv_stop_sending(stream_id, error_code);
+            let effects = session.receive_stop_sending(stream_id, error_code);
             if !session.has_stream(stream_id) {
                 self.stream_map.remove(&stream_id);
             }
@@ -1380,7 +1372,7 @@ impl Connection {
         Vec::new()
     }
 
-    pub(super) fn recv_stream_data(
+    pub(super) fn receive_stream_data(
         &mut self,
         stream_id: StreamId,
         data: Bytes,
@@ -1390,7 +1382,7 @@ impl Connection {
         if let Some(&session_id) = self.stream_map.get(&stream_id)
             && let Some(session) = self.sessions.get_mut(&session_id)
         {
-            let effects = session.recv_stream_data(stream_id, data, fin, now);
+            let effects = session.receive_stream_data(stream_id, data, fin, now);
             if !session.has_stream(stream_id) {
                 self.stream_map.remove(&stream_id);
             }
@@ -1399,7 +1391,7 @@ impl Connection {
         Vec::new()
     }
 
-    pub(super) fn recv_stream_reset(
+    pub(super) fn receive_stream_reset(
         &mut self,
         stream_id: StreamId,
         error_code: ErrorCode,
@@ -1408,7 +1400,7 @@ impl Connection {
         if let Some(&session_id) = self.stream_map.get(&stream_id)
             && let Some(session) = self.sessions.get_mut(&session_id)
         {
-            let effects = session.recv_stream_reset(stream_id, error_code);
+            let effects = session.receive_stream_reset(stream_id, error_code);
             if !session.has_stream(stream_id) {
                 self.stream_map.remove(&stream_id);
             }
@@ -1420,7 +1412,7 @@ impl Connection {
         Vec::new()
     }
 
-    pub(super) fn recv_transport_parameters(
+    pub(super) fn receive_transport_parameters(
         &mut self,
         peer_max_datagram_frame_size: u64,
     ) -> Vec<Effect> {
@@ -1568,9 +1560,9 @@ impl Connection {
         event: ProtocolEvent,
         now: f64,
     ) -> bool {
-        if (self.early_event_count as u64) >= self.max_connection_pending_events {
+        if (self.early_event_count as u64) >= self.max_connection_early_events {
             debug!(
-                "wt_connection validate exceeded actual={} connection_handle={} expected=max_connection_pending_events",
+                "wt_connection validate exceeded actual={} connection_handle={} expected=max_connection_early_events",
                 self.early_event_count, self.handle
             );
             return false;
@@ -1578,9 +1570,9 @@ impl Connection {
 
         let session_buffer = self.early_event_buffer.entry(session_id).or_default();
 
-        if (session_buffer.len() as u64) >= self.max_session_pending_events {
+        if (session_buffer.len() as u64) >= self.max_session_early_events {
             debug!(
-                "wt_session validate exceeded actual={} connection_handle={} expected=max_session_pending_events session_id={session_id}",
+                "wt_session validate exceeded actual={} connection_handle={} expected=max_session_early_events session_id={session_id}",
                 session_buffer.len(),
                 self.handle
             );
@@ -1662,7 +1654,7 @@ impl Connection {
         for (_, event) in events {
             match event {
                 ProtocolEvent::H3DatagramReceived { session_id, data } if is_session_present => {
-                    effects.extend(self.recv_datagram(session_id, data, now));
+                    effects.extend(self.receive_datagram(session_id, data, now));
                 }
                 ProtocolEvent::H3WebTransportStreamOpened {
                     session_id,
@@ -1706,11 +1698,11 @@ pub(super) struct ConnectionParameters {
     pub(super) initial_max_data: u64,
     pub(super) initial_max_streams_bidi: u64,
     pub(super) initial_max_streams_uni: u64,
-    pub(super) max_connection_pending_events: u64,
+    pub(super) max_connection_early_events: u64,
     pub(super) max_pending_capsules: u64,
     pub(super) max_pending_datagrams: u64,
     pub(super) max_pending_streams: u64,
-    pub(super) max_session_pending_events: u64,
+    pub(super) max_session_early_events: u64,
     pub(super) max_sessions: u64,
     pub(super) max_write_buffer_size: u64,
     pub(super) session_receive_window: u64,

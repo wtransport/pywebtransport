@@ -31,7 +31,7 @@ class WebTransportError(Exception):
         self.error_code = error_code if error_code is not None else ErrorCodes.APP_GENERIC_ERROR
 
     @classmethod
-    def from_cause(cls, message: str, *, cause: Exception, error_code: ErrorCode | None = None, **kwargs: Any) -> Self:
+    def from_cause(cls, *, message: str, cause: Exception, error_code: ErrorCode | None = None, **kwargs: Any) -> Self:
         """Instantiate a domain exception inheriting the cause's error code."""
         inherited_error_code = getattr(cause, "error_code", None)
         final_error_code = error_code if error_code is not None else inherited_error_code
@@ -39,14 +39,14 @@ class WebTransportError(Exception):
 
     def __repr__(self) -> str:
         """Return the debug representation."""
-        repr_parts = [f"message={self.message!r}", f"error_code={hex(self.error_code)}"]
+        representation_parts = [f"message={self.message!r}", f"error_code={hex(self.error_code)}"]
         excluded_keys = {"message", "error_code", "args"}
 
         for key, value in self.__dict__.items():
             if key not in excluded_keys and not key.startswith("_"):
-                repr_parts.append(f"{key}={value!r}")
+                representation_parts.append(f"{key}={value!r}")
 
-        return f"{self.__class__.__name__}({', '.join(repr_parts)})"
+        return f"{self.__class__.__name__}({', '.join(representation_parts)})"
 
     def __str__(self) -> str:
         """Return the display string."""

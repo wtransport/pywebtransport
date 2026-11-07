@@ -4,10 +4,9 @@ import asyncio
 import ssl
 import subprocess
 import sys
-from collections.abc import AsyncGenerator
+from collections.abc import Generator
 
 import pytest
-from pytest_asyncio import fixture as asyncio_fixture
 
 from pywebtransport import ClientConfig, ClientError, ConnectionError, TimeoutError, WebTransportClient
 
@@ -72,8 +71,8 @@ async def _is_server_ready() -> bool:
     return False
 
 
-@asyncio_fixture(scope="module", autouse=True)
-async def e2e_server() -> AsyncGenerator[None, None]:
+@pytest.fixture(scope="module", autouse=True)
+def e2e_server() -> Generator[None, None, None]:
     server_command = [
         sys.executable,
         "-m",
@@ -85,14 +84,14 @@ async def e2e_server() -> AsyncGenerator[None, None]:
         "tests.e2e.test_00_e2e_server",
     ]
 
-    server_proc = subprocess.Popen(args=server_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    server_process = subprocess.Popen(args=server_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
-    is_ready = await _is_server_ready()
+    is_ready = asyncio.run(main=_is_server_ready())
 
-    if not is_ready or server_proc.poll() is not None:
-        stdout, stderr = server_proc.communicate()
+    if not is_ready or server_process.poll() is not None:
+        stdout, stderr = server_process.communicate()
         pytest.fail(
-            reason=f"E2E server failed to start or become ready. Exit code: {server_proc.returncode}\n"
+            reason=f"E2E server failed to start or become ready. Exit code: {server_process.returncode}\n"
             f"STDOUT:\n{stdout}\n"
             f"STDERR:\n{stderr}",
             pytrace=False,
@@ -100,16 +99,16 @@ async def e2e_server() -> AsyncGenerator[None, None]:
 
     yield
 
-    server_proc.terminate()
+    server_process.terminate()
     try:
-        server_proc.communicate(timeout=5.0)
+        server_process.communicate(timeout=5.0)
     except subprocess.TimeoutExpired:
-        server_proc.kill()
-        server_proc.communicate()
+        server_process.kill()
+        server_process.communicate()
 
 
-@pytest.mark.asyncio
 class TestE2eSuite:
+
     async def test_01_basic_connection(self) -> None:
         assert await run_01_basic_connection() is True, "Basic connection failed"
 

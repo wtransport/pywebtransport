@@ -7,8 +7,6 @@ import pytest
 from pywebtransport import ClientError, WebTransportClient, WebTransportServer, WebTransportSession
 from pywebtransport.types import EventType
 
-pytestmark = pytest.mark.asyncio
-
 
 async def test_client_initiated_close(sessions: tuple[WebTransportSession, WebTransportSession]) -> None:
     client_session, server_session = sessions

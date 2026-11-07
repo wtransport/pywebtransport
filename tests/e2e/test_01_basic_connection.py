@@ -19,7 +19,7 @@ DEBUG_MODE: Final[bool] = "--debug" in sys.argv
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 if DEBUG_MODE:
-    logging.getLogger().setLevel(logging.DEBUG)
+    logging.getLogger().setLevel(level=logging.DEBUG)
     init_tracing()
 
 logger = logging.getLogger(name="test_basic_connection")
@@ -30,17 +30,17 @@ async def test_server_reachability() -> bool:
     logger.info("Pre-check: Testing server reachability...")
 
     try:
-        sock = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
-        sock.settimeout(2.0)
+        probe_socket = socket.socket(family=socket.AF_INET, type=socket.SOCK_DGRAM)
+        probe_socket.settimeout(2.0)
         try:
-            sock.sendto(b"ping", (SERVER_HOST, SERVER_PORT))
+            probe_socket.sendto(b"ping", (SERVER_HOST, SERVER_PORT))
             logger.info("Server port %d (UDP) is reachable", SERVER_PORT)
             return True
         except socket.error as e:
             logger.warning("UDP probe failed: %s", e)
             return True
         finally:
-            sock.close()
+            probe_socket.close()
     except Exception as e:
         logger.error("Reachability pre-check failed unexpectedly: %s", e)
         return False
@@ -53,7 +53,7 @@ async def test_basic_connection() -> bool:
 
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
     logger.info("Target server: %s", SERVER_URL)
-    logger.info("Config: timeout=%fs, verify_ssl=False", config.connect_timeout)
+    logger.info("Config: timeout=%fs, verify_mode=CERT_NONE", config.connect_timeout)
 
     try:
         async with WebTransportClient(config=config) as client:
@@ -113,7 +113,7 @@ async def main() -> int:
 if __name__ == "__main__":
     exit_code = 1
     try:
-        exit_code = asyncio.run(main())
+        exit_code = asyncio.run(main=main())
     except KeyboardInterrupt:
         logger.warning("\nTest interrupted by user")
         exit_code = 130

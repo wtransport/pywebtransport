@@ -78,7 +78,7 @@ def create_baton_message(*, baton: int) -> bytes:
     """Create a Baton message, padded when the baton is a multiple of 5."""
     padding = b""
     if baton % 5 == 0:
-        padding = random.randbytes(random.randint(1, 256))
+        padding = random.randbytes(n=random.randint(a=1, b=256))
     return encode_varint(value=len(padding)) + padding + bytes([baton])
 
 
@@ -140,7 +140,7 @@ def encode_json_value(value: Any) -> Any:
     """Convert a value json cannot serialize into a serializable one."""
     match value:
         case bytes() | bytearray() | memoryview():
-            return base64.b64encode(value).decode("ascii")
+            return base64.b64encode(s=value).decode(encoding="ascii")
         case deque() | set() | frozenset():
             return list(value)
         case uuid.UUID():
@@ -149,7 +149,7 @@ def encode_json_value(value: Any) -> Any:
             return value.value
         case datetime():
             return value.isoformat()
-        case _ if is_dataclass(value) and not isinstance(value, type):
+        case _ if is_dataclass(obj=value) and not isinstance(value, type):
             return asdict(obj=value)
         case _:
             raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
@@ -175,7 +175,7 @@ def is_valid_baton_datagram(*, data: bytes) -> bool:
     if len(data) < length_size:
         return False
 
-    padding_length = int.from_bytes(bytes([data[0] & 0x3F]) + data[1:length_size])
+    padding_length = int.from_bytes(bytes=bytes([data[0] & 0x3F]) + data[1:length_size])
     return len(data) == length_size + padding_length + 1
 
 
@@ -328,9 +328,9 @@ async def process_unidirectional_baton_messages(*, session: WebTransportSession,
 async def read_varint(*, stream: WebTransportBidirectionalStream | WebTransportReceiveStream) -> tuple[int, bytes]:
     """Read a QUIC variable-length integer, returning its value and encoded bytes."""
     first = await stream.readexactly(size=1)
-    length = 1 << (first[0] >> 6)
-    encoded = first + await stream.readexactly(size=length - 1)
-    return int.from_bytes(bytes([first[0] & 0x3F]) + encoded[1:]), encoded
+    size = 1 << (first[0] >> 6)
+    encoded = first + await stream.readexactly(size=size - 1)
+    return int.from_bytes(bytes=bytes([first[0] & 0x3F]) + encoded[1:]), encoded
 
 
 async def respond_diagnostics(*, stream: WebTransportBidirectionalStream) -> None:
@@ -372,7 +372,7 @@ async def serve_session(*, session: WebTransportSession) -> None:
                     try:
                         version = int(query.get("version", ["0"])[0])
                         count = int(query.get("count", ["1"])[0])
-                        baton = int(query["baton"][0]) if "baton" in query else random.randint(1, 255)
+                        baton = int(query["baton"][0]) if "baton" in query else random.randint(a=1, b=255)
                     except ValueError:
                         await session.reject(status_code=http.HTTPStatus.BAD_REQUEST)
                         return
@@ -412,6 +412,6 @@ async def main() -> None:
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        asyncio.run(main=main())
     except KeyboardInterrupt:
         pass

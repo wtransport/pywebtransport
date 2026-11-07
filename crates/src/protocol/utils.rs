@@ -11,7 +11,7 @@ use crate::common::constants::{
     ERR_WT_APPLICATION_ERROR_LAST, QUIC_STREAM_DIRECTION_MASK, QUIC_STREAM_INITIATOR_MASK,
     WT_AVAILABLE_PROTOCOLS, WT_PROTOCOL,
 };
-use crate::common::types::{ErrorCode, Headers, SessionId, StreamDirection, StreamId};
+use crate::common::types::{ErrorCode, Headers, SessionId, StreamId};
 
 const H3_ERROR_RESERVED_MODULO: u64 = 0x1F;
 const H3_ERROR_RESERVED_OFFSET: u64 = 0x21;
@@ -157,23 +157,23 @@ pub(super) fn parse_wt_protocol_list(header: &[u8]) -> Option<Vec<String>> {
     let mut cursor = Cursor::new(header);
     let mut protocols = Vec::new();
 
-    let spaces_len = cursor
+    let spaces_length = cursor
         .chunk()
         .iter()
         .take_while(|&&byte| byte == b' ')
         .count();
-    cursor.advance(spaces_len);
+    cursor.advance(spaces_length);
 
     while cursor.has_remaining() {
         protocols.push(parse_string(&mut cursor)?);
         discard_parameters(&mut cursor)?;
 
-        let whitespace_len = cursor
+        let whitespace_length = cursor
             .chunk()
             .iter()
             .take_while(|&&byte| matches!(byte, b' ' | b'\t'))
             .count();
-        cursor.advance(whitespace_len);
+        cursor.advance(whitespace_length);
         if !cursor.has_remaining() {
             break;
         }
@@ -181,12 +181,12 @@ pub(super) fn parse_wt_protocol_list(header: &[u8]) -> Option<Vec<String>> {
             return None;
         }
 
-        let whitespace_len = cursor
+        let whitespace_length = cursor
             .chunk()
             .iter()
             .take_while(|&&byte| matches!(byte, b' ' | b'\t'))
             .count();
-        cursor.advance(whitespace_len);
+        cursor.advance(whitespace_length);
         if !cursor.has_remaining() {
             return None;
         }
@@ -198,20 +198,20 @@ pub(super) fn parse_wt_protocol_list(header: &[u8]) -> Option<Vec<String>> {
 pub(super) fn parse_wt_protocol_string(header: &[u8]) -> Option<String> {
     let mut cursor = Cursor::new(header);
 
-    let spaces_len = cursor
+    let spaces_length = cursor
         .chunk()
         .iter()
         .take_while(|&&byte| byte == b' ')
         .count();
-    cursor.advance(spaces_len);
+    cursor.advance(spaces_length);
     let protocol = parse_string(&mut cursor)?;
     discard_parameters(&mut cursor)?;
-    let spaces_len = cursor
+    let spaces_length = cursor
         .chunk()
         .iter()
         .take_while(|&&byte| byte == b' ')
         .count();
-    cursor.advance(spaces_len);
+    cursor.advance(spaces_length);
 
     (!cursor.has_remaining()).then_some(protocol)
 }
@@ -224,13 +224,13 @@ pub(super) fn read_varint(buffer: &mut Cursor<&[u8]>) -> Result<u64, ErrorCode> 
     let chunk = buffer.chunk();
     let first = *chunk.first().ok_or(ERR_H3_FRAME_ERROR)?;
     let prefix = first >> 6;
-    let len = 1 << prefix;
+    let length = 1 << prefix;
 
-    if buffer.remaining() < len {
+    if buffer.remaining() < length {
         return Err(ERR_H3_FRAME_ERROR);
     }
 
-    let value = match len {
+    let value = match length {
         1 => u64::from(buffer.get_u8() & 0x3f),
         2 => u64::from(buffer.get_u16() & 0x3fff),
         4 => u64::from(buffer.get_u32() & 0x3fff_ffff),
@@ -239,17 +239,6 @@ pub(super) fn read_varint(buffer: &mut Cursor<&[u8]>) -> Result<u64, ErrorCode> 
     };
 
     Ok(value)
-}
-
-pub(super) fn stream_direction_from_id(stream_id: StreamId, is_client: bool) -> StreamDirection {
-    match (
-        is_unidirectional_stream(stream_id),
-        is_peer_initiated_stream(stream_id, is_client),
-    ) {
-        (false, _) => StreamDirection::Bidirectional,
-        (true, false) => StreamDirection::SendOnly,
-        (true, true) => StreamDirection::ReceiveOnly,
-    }
 }
 
 pub(super) fn varint_size(value: u64) -> usize {
@@ -296,40 +285,40 @@ fn discard_number(cursor: &mut Cursor<&[u8]>) -> Option<bool> {
         cursor.advance(1);
     }
 
-    let integer_len = cursor
+    let integer_length = cursor
         .chunk()
         .iter()
         .take_while(|&&byte| byte.is_ascii_digit())
         .count();
-    if integer_len == 0 {
+    if integer_length == 0 {
         return None;
     }
-    cursor.advance(integer_len);
+    cursor.advance(integer_length);
 
     if cursor.chunk().first() != Some(&b'.') {
-        return (integer_len <= 15).then_some(false);
+        return (integer_length <= 15).then_some(false);
     }
     cursor.advance(1);
 
-    let fraction_len = cursor
+    let fraction_length = cursor
         .chunk()
         .iter()
         .take_while(|&&byte| byte.is_ascii_digit())
         .count();
-    cursor.advance(fraction_len);
+    cursor.advance(fraction_length);
 
-    (integer_len <= 12 && (1..=3).contains(&fraction_len)).then_some(true)
+    (integer_length <= 12 && (1..=3).contains(&fraction_length)).then_some(true)
 }
 
 fn discard_parameters(cursor: &mut Cursor<&[u8]>) -> Option<()> {
     while cursor.chunk().first() == Some(&b';') {
         cursor.advance(1);
-        let spaces_len = cursor
+        let spaces_length = cursor
             .chunk()
             .iter()
             .take_while(|&&byte| byte == b' ')
             .count();
-        cursor.advance(spaces_len);
+        cursor.advance(spaces_length);
 
         if !cursor
             .chunk()
@@ -338,14 +327,14 @@ fn discard_parameters(cursor: &mut Cursor<&[u8]>) -> Option<()> {
         {
             return None;
         }
-        let key_len = cursor
+        let key_length = cursor
             .chunk()
             .iter()
             .take_while(
                 |&&byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-' | b'.' | b'*'),
             )
             .count();
-        cursor.advance(key_len);
+        cursor.advance(key_length);
 
         if cursor.chunk().first() != Some(&b'=') {
             continue;
@@ -360,38 +349,38 @@ fn discard_parameters(cursor: &mut Cursor<&[u8]>) -> Option<()> {
                 parse_string(cursor)?;
             }
             b'*' | b'A'..=b'Z' | b'a'..=b'z' => {
-                let token_len = cursor
+                let token_length = cursor
                     .chunk()
                     .iter()
                     .take_while(|&&byte| {
                         byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~:/".contains(&byte)
                     })
                     .count();
-                cursor.advance(token_len);
+                cursor.advance(token_length);
             }
             b':' => {
                 cursor.advance(1);
 
-                let content_len = cursor.chunk().iter().position(|&byte| byte == b':')?;
-                let content = cursor.chunk().get(..content_len).unwrap_or_default();
-                let data_len = content
+                let content_length = cursor.chunk().iter().position(|&byte| byte == b':')?;
+                let content = cursor.chunk().get(..content_length).unwrap_or_default();
+                let data_length = content
                     .iter()
                     .rposition(|&byte| byte != b'=')
                     .map_or(0, |index| index + 1);
-                let padding_len = content_len - data_len;
+                let padding_length = content_length - data_length;
 
                 let is_valid = content
-                    .get(..data_len)
+                    .get(..data_length)
                     .unwrap_or_default()
                     .iter()
                     .all(|&byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/'))
-                    && padding_len <= 2
-                    && data_len % 4 != 1
-                    && (padding_len == 0 || content_len % 4 == 0);
+                    && padding_length <= 2
+                    && data_length % 4 != 1
+                    && (padding_length == 0 || content_length % 4 == 0);
                 if !is_valid {
                     return None;
                 }
-                cursor.advance(content_len + 1);
+                cursor.advance(content_length + 1);
             }
             b'?' => {
                 cursor.advance(1);

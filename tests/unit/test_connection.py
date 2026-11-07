@@ -4,7 +4,6 @@ import asyncio
 import dataclasses
 import weakref
 from typing import Any, cast
-from unittest.mock import MagicMock
 
 import pytest
 from pytest_mock import MockerFixture
@@ -18,6 +17,7 @@ from pywebtransport import (
     TimeoutError,
     WebTransportConnection,
     WebTransportSession,
+    WebTransportStream,
 )
 from pywebtransport._controller.controller import EndpointController
 from pywebtransport._controller.events import (
@@ -29,6 +29,7 @@ from pywebtransport._controller.events import (
     UserDiagnoseConnection,
 )
 from pywebtransport.connection import ConnectionDiagnostics
+from pywebtransport.events import EventEmitter
 from pywebtransport.types import ConnectionState, EventType, StreamDirection
 
 
@@ -78,51 +79,45 @@ class TestConnectionDiagnostics:
 class TestWebTransportConnection:
 
     @pytest.fixture
-    def connection(
-        self, mock_config: MagicMock, mock_controller: MagicMock, mocker: MockerFixture
-    ) -> WebTransportConnection:
+    def connection(self, mock_config: Any, mock_controller: Any, mocker: MockerFixture) -> WebTransportConnection:
         connection = WebTransportConnection(config=mock_config, controller=mock_controller, handle=42, is_client=True)
-        connection.events = mocker.Mock()
+        connection.events = mocker.create_autospec(spec=EventEmitter, instance=True)
 
         return connection
 
     @pytest.fixture
-    def mock_config(self, mocker: MockerFixture) -> MagicMock:
-        config = mocker.Mock(spec=ClientConfig)
+    def mock_config(self, mocker: MockerFixture) -> Any:
+        config = mocker.create_autospec(spec=ClientConfig, instance=True)
         config.close_timeout = 5.0
 
-        return cast(MagicMock, config)
+        return config
 
     @pytest.fixture
-    def mock_controller(self, mocker: MockerFixture) -> MagicMock:
-        controller = mocker.Mock(spec=EndpointController)
-        controller.execute_request = mocker.AsyncMock()
+    def mock_controller(self, mocker: MockerFixture) -> Any:
+        controller = mocker.create_autospec(spec=EndpointController, instance=True)
         controller.get_remote_address.return_value = ("127.0.0.1", 443)
 
-        return cast(MagicMock, controller)
+        return controller
 
     @pytest.fixture
-    def mock_session_class(self, mocker: MockerFixture) -> MagicMock:
+    def mock_session_class(self, mocker: MockerFixture) -> Any:
         return mocker.patch(target="pywebtransport.connection.WebTransportSession")
 
-    @pytest.mark.asyncio
-    async def test_close_already_closed(self, connection: WebTransportConnection, mock_controller: MagicMock) -> None:
+    async def test_close_already_closed(self, connection: WebTransportConnection, mock_controller: Any) -> None:
         connection._handle_closed()
 
         await connection.close()
 
         mock_controller.execute_request.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_close_cancelled(self, connection: WebTransportConnection, mock_controller: MagicMock) -> None:
+    async def test_close_cancelled(self, connection: WebTransportConnection, mock_controller: Any) -> None:
         mock_controller.execute_request.side_effect = asyncio.CancelledError
 
         with pytest.raises(expected_exception=asyncio.CancelledError):
             await connection.close()
 
-    @pytest.mark.asyncio
     async def test_close_connection_error_channel_closed(
-        self, connection: WebTransportConnection, mock_controller: MagicMock, mocker: MockerFixture
+        self, connection: WebTransportConnection, mock_controller: Any, mocker: MockerFixture
     ) -> None:
         mock_controller.execute_request.side_effect = ConnectionError(message="channel closed")
         spy_logger = mocker.patch(target="pywebtransport.connection._logger")
@@ -131,9 +126,8 @@ class TestWebTransportConnection:
 
         spy_logger.warning.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_close_connection_error_warning(
-        self, connection: WebTransportConnection, mock_controller: MagicMock, mocker: MockerFixture
+        self, connection: WebTransportConnection, mock_controller: Any, mocker: MockerFixture
     ) -> None:
         mock_controller.execute_request.side_effect = ConnectionError(message="something failed")
         spy_logger = mocker.patch(target="pywebtransport.connection._logger")
@@ -142,9 +136,8 @@ class TestWebTransportConnection:
 
         spy_logger.warning.assert_called_with("wt_connection close failed connection_handle=%d err=%s", 42, mocker.ANY)
 
-    @pytest.mark.asyncio
     async def test_close_generic_error(
-        self, connection: WebTransportConnection, mock_controller: MagicMock, mocker: MockerFixture
+        self, connection: WebTransportConnection, mock_controller: Any, mocker: MockerFixture
     ) -> None:
         mock_controller.execute_request.side_effect = ValueError("unexpected")
         spy_logger = mocker.patch(target="pywebtransport.connection._logger")
@@ -153,9 +146,8 @@ class TestWebTransportConnection:
 
         spy_logger.warning.assert_called_with("wt_connection close failed connection_handle=%d err=%s", 42, mocker.ANY)
 
-    @pytest.mark.asyncio
     async def test_close_gracefully_already_closed(
-        self, connection: WebTransportConnection, mock_controller: MagicMock, mocker: MockerFixture
+        self, connection: WebTransportConnection, mock_controller: Any, mocker: MockerFixture
     ) -> None:
         mock_close = mocker.patch.object(
             target=WebTransportConnection, attribute="close", new_callable=mocker.AsyncMock
@@ -167,9 +159,8 @@ class TestWebTransportConnection:
         mock_controller.execute_request.assert_not_called()
         mock_close.assert_not_awaited()
 
-    @pytest.mark.asyncio
     async def test_close_gracefully_cancelled(
-        self, connection: WebTransportConnection, mock_controller: MagicMock, mocker: MockerFixture
+        self, connection: WebTransportConnection, mock_controller: Any, mocker: MockerFixture
     ) -> None:
         mock_controller.execute_request.side_effect = asyncio.CancelledError
         mock_close = mocker.patch.object(
@@ -181,9 +172,8 @@ class TestWebTransportConnection:
 
         mock_close.assert_awaited_once()
 
-    @pytest.mark.asyncio
     async def test_close_gracefully_connection_error_channel_closed(
-        self, connection: WebTransportConnection, mock_controller: MagicMock, mocker: MockerFixture
+        self, connection: WebTransportConnection, mock_controller: Any, mocker: MockerFixture
     ) -> None:
         mock_controller.execute_request.side_effect = ConnectionError(message="channel closed")
         spy_logger = mocker.patch(target="pywebtransport.connection._logger")
@@ -192,9 +182,8 @@ class TestWebTransportConnection:
 
         spy_logger.warning.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_close_gracefully_connection_error_warning(
-        self, connection: WebTransportConnection, mock_controller: MagicMock, mocker: MockerFixture
+        self, connection: WebTransportConnection, mock_controller: Any, mocker: MockerFixture
     ) -> None:
         mock_controller.execute_request.side_effect = ConnectionError(message="fail")
         spy_logger = mocker.patch(target="pywebtransport.connection._logger")
@@ -203,9 +192,8 @@ class TestWebTransportConnection:
 
         spy_logger.warning.assert_any_call("wt_connection drain failed connection_handle=%d err=%s", 42, mocker.ANY)
 
-    @pytest.mark.asyncio
     async def test_close_gracefully_generic_error(
-        self, connection: WebTransportConnection, mock_controller: MagicMock, mocker: MockerFixture
+        self, connection: WebTransportConnection, mock_controller: Any, mocker: MockerFixture
     ) -> None:
         mock_controller.execute_request.side_effect = ValueError("error")
         spy_logger = mocker.patch(target="pywebtransport.connection._logger")
@@ -214,9 +202,8 @@ class TestWebTransportConnection:
 
         spy_logger.warning.assert_any_call("wt_connection drain failed connection_handle=%d err=%s", 42, mocker.ANY)
 
-    @pytest.mark.asyncio
     async def test_close_gracefully_success(
-        self, connection: WebTransportConnection, mock_controller: MagicMock, mocker: MockerFixture
+        self, connection: WebTransportConnection, mock_controller: Any, mocker: MockerFixture
     ) -> None:
         async def fake_execute(dispatcher: Any, resolver: Any) -> None:
             dispatcher(1)
@@ -236,12 +223,11 @@ class TestWebTransportConnection:
 
         mock_close.assert_awaited_once()
 
-    @pytest.mark.asyncio
     async def test_close_gracefully_timeout(
         self,
         connection: WebTransportConnection,
-        mock_config: MagicMock,
-        mock_controller: MagicMock,
+        mock_config: Any,
+        mock_controller: Any,
         mocker: MockerFixture,
     ) -> None:
         async def fake_execute(dispatcher: Any, resolver: Any) -> None:
@@ -259,23 +245,20 @@ class TestWebTransportConnection:
         spy_logger.warning.assert_called_once_with("wt_connection drain failed connection_handle=%d", 42)
         mock_close.assert_awaited_once()
 
-    @pytest.mark.asyncio
     async def test_close_gracefully_waits_for_open_sessions(
-        self, connection: WebTransportConnection, mock_controller: MagicMock, mocker: MockerFixture
+        self, connection: WebTransportConnection, mock_controller: Any, mocker: MockerFixture
     ) -> None:
         async def fake_execute(dispatcher: Any, resolver: Any) -> None:
             dispatcher(1)
 
         mock_controller.execute_request.side_effect = fake_execute
         mocker.patch.object(target=WebTransportConnection, attribute="close", new_callable=mocker.AsyncMock)
-        open_session = mocker.Mock(spec=WebTransportSession)
+        open_session = mocker.create_autospec(spec=WebTransportSession, instance=True)
         open_session.is_closed = False
-        open_session.events = mocker.Mock()
-        open_session.events.wait_for = mocker.AsyncMock()
-        closed_session = mocker.Mock(spec=WebTransportSession)
+        open_session.events = mocker.create_autospec(spec=EventEmitter, instance=True)
+        closed_session = mocker.create_autospec(spec=WebTransportSession, instance=True)
         closed_session.is_closed = True
-        closed_session.events = mocker.Mock()
-        closed_session.events.wait_for = mocker.AsyncMock()
+        closed_session.events = mocker.create_autospec(spec=EventEmitter, instance=True)
         connection._session_handles[1] = open_session
         connection._session_handles[2] = closed_session
 
@@ -284,8 +267,7 @@ class TestWebTransportConnection:
         open_session.events.wait_for.assert_awaited_once_with(event_type=EventType.SESSION_CLOSED)
         closed_session.events.wait_for.assert_not_awaited()
 
-    @pytest.mark.asyncio
-    async def test_close_success(self, connection: WebTransportConnection, mock_controller: MagicMock) -> None:
+    async def test_close_success(self, connection: WebTransportConnection, mock_controller: Any) -> None:
         async def fake_execute(dispatcher: Any, resolver: Any) -> None:
             dispatcher(123)
 
@@ -304,12 +286,11 @@ class TestWebTransportConnection:
         assert event.error_code == ErrorCodes.H3_NO_ERROR
         assert event.reason is None
 
-    @pytest.mark.asyncio
     async def test_close_timeout(
         self,
         connection: WebTransportConnection,
-        mock_config: MagicMock,
-        mock_controller: MagicMock,
+        mock_config: Any,
+        mock_controller: Any,
         mocker: MockerFixture,
     ) -> None:
         async def fake_execute(dispatcher: Any, resolver: Any) -> None:
@@ -323,7 +304,6 @@ class TestWebTransportConnection:
 
         spy_logger.warning.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_context_manager(self, connection: WebTransportConnection, mocker: MockerFixture) -> None:
         spy_close = mocker.patch.object(target=WebTransportConnection, attribute="close", new_callable=mocker.AsyncMock)
 
@@ -332,7 +312,6 @@ class TestWebTransportConnection:
 
         spy_close.assert_awaited_once_with(error_code=ErrorCodes.H3_NO_ERROR)
 
-    @pytest.mark.asyncio
     async def test_context_manager_cancelled(self, connection: WebTransportConnection, mocker: MockerFixture) -> None:
         spy_close = mocker.patch.object(target=WebTransportConnection, attribute="close", new_callable=mocker.AsyncMock)
 
@@ -342,7 +321,6 @@ class TestWebTransportConnection:
 
         spy_close.assert_awaited_once_with(error_code=ErrorCodes.H3_NO_ERROR)
 
-    @pytest.mark.asyncio
     async def test_context_manager_exception_with_error_code(
         self, connection: WebTransportConnection, mocker: MockerFixture
     ) -> None:
@@ -354,7 +332,6 @@ class TestWebTransportConnection:
 
         spy_close.assert_awaited_once_with(error_code=123)
 
-    @pytest.mark.asyncio
     async def test_context_manager_generic_error(
         self, connection: WebTransportConnection, mocker: MockerFixture
     ) -> None:
@@ -366,17 +343,13 @@ class TestWebTransportConnection:
 
         spy_close.assert_awaited_once_with(error_code=ErrorCodes.H3_INTERNAL_ERROR)
 
-    @pytest.mark.asyncio
-    async def test_create_session_cancelled(
-        self, connection: WebTransportConnection, mock_controller: MagicMock
-    ) -> None:
+    async def test_create_session_cancelled(self, connection: WebTransportConnection, mock_controller: Any) -> None:
         mock_controller.execute_request.side_effect = asyncio.CancelledError
 
         with pytest.raises(expected_exception=asyncio.CancelledError):
             await connection.create_session(authority="localhost:443", path="/")
 
-    @pytest.mark.asyncio
-    async def test_create_session_closed(self, connection: WebTransportConnection, mock_controller: MagicMock) -> None:
+    async def test_create_session_closed(self, connection: WebTransportConnection, mock_controller: Any) -> None:
         connection._handle_closed()
 
         with pytest.raises(
@@ -386,27 +359,22 @@ class TestWebTransportConnection:
 
         mock_controller.execute_request.assert_not_called()
 
-    @pytest.mark.asyncio
     async def test_create_session_connection_error(
-        self, connection: WebTransportConnection, mock_controller: MagicMock
+        self, connection: WebTransportConnection, mock_controller: Any
     ) -> None:
         mock_controller.execute_request.side_effect = ConnectionError(message="fail")
 
         with pytest.raises(expected_exception=ConnectionError):
             await connection.create_session(authority="localhost:443", path="/")
 
-    @pytest.mark.asyncio
-    async def test_create_session_generic_error(
-        self, connection: WebTransportConnection, mock_controller: MagicMock
-    ) -> None:
+    async def test_create_session_generic_error(self, connection: WebTransportConnection, mock_controller: Any) -> None:
         mock_controller.execute_request.side_effect = ValueError("fail")
 
         with pytest.raises(expected_exception=SessionError, match="wt_session create failed connection_handle=42"):
             await connection.create_session(authority="localhost:443", path="/")
 
-    @pytest.mark.asyncio
     async def test_create_session_handle_missing(
-        self, connection: WebTransportConnection, mock_controller: MagicMock
+        self, connection: WebTransportConnection, mock_controller: Any
     ) -> None:
         async def fake_execute(dispatcher: Any, resolver: Any) -> Any:
             dispatcher(100)
@@ -419,16 +387,15 @@ class TestWebTransportConnection:
 
         assert "wt_session resolve failed session_id=1" in str(exception_info.value.__cause__)
 
-    @pytest.mark.asyncio
     async def test_create_session_optimistic_success(
-        self, connection: WebTransportConnection, mock_controller: MagicMock, mocker: MockerFixture
+        self, connection: WebTransportConnection, mock_controller: Any, mocker: MockerFixture
     ) -> None:
         async def fake_execute(dispatcher: Any, resolver: Any) -> Any:
             dispatcher(100)
             return resolver(1)
 
         mock_controller.execute_request.side_effect = fake_execute
-        session_mock = mocker.Mock(spec=WebTransportSession)
+        session_mock = mocker.create_autospec(spec=WebTransportSession, instance=True)
         connection._session_handles[1] = session_mock
 
         session = await connection.create_session_optimistic(
@@ -449,7 +416,6 @@ class TestWebTransportConnection:
         assert event.headers == {"a": "b"}
         assert event.wt_available_protocols == ["h3"]
 
-    @pytest.mark.asyncio
     async def test_create_session_server_error(self, connection: WebTransportConnection) -> None:
         connection._is_client = False
 
@@ -458,16 +424,15 @@ class TestWebTransportConnection:
         ):
             await connection.create_session(authority="localhost:443", path="/")
 
-    @pytest.mark.asyncio
     async def test_create_session_success(
-        self, connection: WebTransportConnection, mock_controller: MagicMock, mocker: MockerFixture
+        self, connection: WebTransportConnection, mock_controller: Any, mocker: MockerFixture
     ) -> None:
         async def fake_execute(dispatcher: Any, resolver: Any) -> Any:
             dispatcher(100)
             return resolver(1)
 
         mock_controller.execute_request.side_effect = fake_execute
-        session_mock = mocker.Mock(spec=WebTransportSession)
+        session_mock = mocker.create_autospec(spec=WebTransportSession, instance=True)
         connection._session_handles[1] = session_mock
 
         session = await connection.create_session(authority="localhost:443", path="/")
@@ -485,22 +450,19 @@ class TestWebTransportConnection:
         assert event.headers == {}
         assert event.wt_available_protocols is None
 
-    @pytest.mark.asyncio
-    async def test_create_session_timeout(self, connection: WebTransportConnection, mock_controller: MagicMock) -> None:
+    async def test_create_session_timeout(self, connection: WebTransportConnection, mock_controller: Any) -> None:
         mock_controller.execute_request.side_effect = asyncio.TimeoutError
 
         with pytest.raises(expected_exception=TimeoutError, match="wt_session create failed connection_handle=42"):
             await connection.create_session(authority="localhost:443", path="/")
 
-    @pytest.mark.asyncio
-    async def test_diagnose_cancelled(self, connection: WebTransportConnection, mock_controller: MagicMock) -> None:
+    async def test_diagnose_cancelled(self, connection: WebTransportConnection, mock_controller: Any) -> None:
         mock_controller.execute_request.side_effect = asyncio.CancelledError
 
         with pytest.raises(expected_exception=asyncio.CancelledError):
             await connection.diagnose()
 
-    @pytest.mark.asyncio
-    async def test_diagnose_closed(self, connection: WebTransportConnection, mock_controller: MagicMock) -> None:
+    async def test_diagnose_closed(self, connection: WebTransportConnection, mock_controller: Any) -> None:
         connection._handle_closed()
 
         with pytest.raises(
@@ -510,24 +472,19 @@ class TestWebTransportConnection:
 
         mock_controller.execute_request.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_diagnose_connection_error(
-        self, connection: WebTransportConnection, mock_controller: MagicMock
-    ) -> None:
+    async def test_diagnose_connection_error(self, connection: WebTransportConnection, mock_controller: Any) -> None:
         mock_controller.execute_request.side_effect = ConnectionError(message="fail")
 
         with pytest.raises(expected_exception=ConnectionError):
             await connection.diagnose()
 
-    @pytest.mark.asyncio
-    async def test_diagnose_generic_error(self, connection: WebTransportConnection, mock_controller: MagicMock) -> None:
+    async def test_diagnose_generic_error(self, connection: WebTransportConnection, mock_controller: Any) -> None:
         mock_controller.execute_request.side_effect = ValueError("fail")
 
         with pytest.raises(expected_exception=ConnectionError, match="wt_connection resolve failed"):
             await connection.diagnose()
 
-    @pytest.mark.asyncio
-    async def test_diagnose_success(self, connection: WebTransportConnection, mock_controller: MagicMock) -> None:
+    async def test_diagnose_success(self, connection: WebTransportConnection, mock_controller: Any) -> None:
         diagnostic_data_raw: dict[str, Any] = {
             "close_code": None,
             "close_reason": None,
@@ -564,16 +521,15 @@ class TestWebTransportConnection:
         assert isinstance(event, UserDiagnoseConnection)
         assert event.request_id == 1
 
-    @pytest.mark.asyncio
     async def test_execute_request_success(
-        self, connection: WebTransportConnection, mock_controller: MagicMock, mocker: MockerFixture
+        self, connection: WebTransportConnection, mock_controller: Any, mocker: MockerFixture
     ) -> None:
         async def fake_execute(dispatcher: Any, resolver: Any) -> str:
             dispatcher(99)
             return "done"
 
         mock_controller.execute_request.side_effect = fake_execute
-        event_mock = mocker.Mock(spec=ProtocolEvent)
+        event_mock = mocker.create_autospec(spec=ProtocolEvent, instance=True)
 
         resolver = mocker.Mock()
 
@@ -585,8 +541,8 @@ class TestWebTransportConnection:
         mock_controller.send_protocol_event.assert_called_once_with(handle=42, request_id=99, event=event_mock)
 
     def test_handle_closed(self, connection: WebTransportConnection, mocker: MockerFixture) -> None:
-        session_handle = mocker.Mock(spec=WebTransportSession)
-        stream_handle = mocker.Mock()
+        session_handle = mocker.create_autospec(spec=WebTransportSession, instance=True)
+        stream_handle = mocker.create_autospec(spec=WebTransportStream, instance=True)
         connection._session_handles[1] = session_handle
         connection._stream_handles[10] = stream_handle
 
@@ -599,20 +555,16 @@ class TestWebTransportConnection:
         assert not connection._stream_handles
         assert connection._incoming_sessions.get_nowait() is None
 
-    @pytest.mark.asyncio
     async def test_handle_event_connection_closed_cleans_handles(
-        self, connection: WebTransportConnection, mocker: MockerFixture
+        self, connection: WebTransportConnection, mock_controller: Any, mocker: MockerFixture
     ) -> None:
-        session_handle = mocker.Mock(spec=WebTransportSession)
-        stream_handle = mocker.Mock()
+        session_handle = mocker.create_autospec(spec=WebTransportSession, instance=True)
+        stream_handle = mocker.create_autospec(spec=WebTransportStream, instance=True)
         connection._session_handles[1] = session_handle
         connection._stream_handles[1] = stream_handle
-        cast(Any, connection.events).emit = mocker.AsyncMock()
-        cast(Any, connection.events).close = mocker.AsyncMock()
         data: dict[str, Any] = {"connection_handle": 42}
 
         connection._handle_event(event_type=EventType.CONNECTION_CLOSED, data=data)
-        await asyncio.sleep(0)
 
         assert connection.is_closed is True
         assert connection._incoming_sessions.get_nowait() is None
@@ -620,21 +572,24 @@ class TestWebTransportConnection:
         assert len(connection._stream_handles) == 0
         session_handle._handle_closed.assert_called_once_with(error_code=None)
         stream_handle._handle_closed.assert_called_once_with()
-        cast(MagicMock, connection.events.emit).assert_awaited_once_with(
-            event_type=EventType.CONNECTION_CLOSED, data=data
-        )
-        cast(MagicMock, connection.events.close).assert_awaited_once()
-        cast(MagicMock, connection.events.emit_nowait).assert_not_called()
+        mock_controller.create_task.assert_called_once()
+        cast(Any, connection.events.emit).assert_not_awaited()
+
+        await mock_controller.create_task.call_args.kwargs["coro"]
+
+        cast(Any, connection.events.emit).assert_awaited_once_with(event_type=EventType.CONNECTION_CLOSED, data=data)
+        cast(Any, connection.events.close).assert_awaited_once()
+        cast(Any, connection.events.emit_nowait).assert_not_called()
 
     def test_handle_event_connection_events(self, connection: WebTransportConnection, mocker: MockerFixture) -> None:
         connection._handle_event(event_type=EventType.CONNECTION_ESTABLISHED, data={})
 
         assert connection.is_closed is False
-        cast(MagicMock, connection.events.emit_nowait).assert_called_with(
+        cast(Any, connection.events.emit_nowait).assert_called_with(
             event_type=EventType.CONNECTION_ESTABLISHED, data=mocker.ANY
         )
         assert isinstance(
-            cast(MagicMock, connection.events.emit_nowait).call_args[1]["data"]["connection"], weakref.ProxyType
+            cast(Any, connection.events.emit_nowait).call_args[1]["data"]["connection"], weakref.ProxyType
         )
 
     def test_handle_event_data_already_populated(self, connection: WebTransportConnection) -> None:
@@ -648,20 +603,20 @@ class TestWebTransportConnection:
         assert data["connection_handle"] == connection.handle
 
     def test_handle_event_exception_handler(self, connection: WebTransportConnection, mocker: MockerFixture) -> None:
-        cast(MagicMock, connection.events.emit_nowait).side_effect = ValueError("boom")
+        cast(Any, connection.events.emit_nowait).side_effect = ValueError("boom")
 
         with pytest.raises(expected_exception=ConnectionError, match="wt_connection receive failed"):
             connection._handle_event(event_type=EventType.CONNECTION_ESTABLISHED, data={})
 
     @pytest.mark.parametrize(argnames="event_type", argvalues=[EventType.SESSION_PENDING, EventType.SESSION_READY])
     def test_handle_session_event_client_creation(
-        self, connection: WebTransportConnection, mock_session_class: MagicMock, event_type: EventType
+        self, connection: WebTransportConnection, mock_session_class: Any, event_type: EventType
     ) -> None:
         data = {"session_id": 1, "path": "/", "headers": {}, "wt_available_protocols": ["h3"], "wt_protocol": "h3"}
 
         connection._handle_event(event_type=event_type, data=data)
 
-        session = cast(MagicMock, mock_session_class.return_value)
+        session = mock_session_class.return_value
         mock_session_class.assert_called_once_with(
             connection=connection, session_id=1, path="/", headers={}, wt_available_protocols=["h3"], wt_protocol="h3"
         )
@@ -675,10 +630,10 @@ class TestWebTransportConnection:
         assert connection._incoming_sessions.empty()
 
     def test_handle_session_event_handle_exists(
-        self, connection: WebTransportConnection, mock_session_class: MagicMock, mocker: MockerFixture
+        self, connection: WebTransportConnection, mock_session_class: Any, mocker: MockerFixture
     ) -> None:
         data = {"session_id": 1, "path": "/", "headers": {}}
-        existing_session = mocker.Mock()
+        existing_session = mocker.create_autospec(spec=WebTransportSession, instance=True)
         connection._session_handles[1] = existing_session
 
         connection._handle_event(event_type=EventType.SESSION_READY, data=data)
@@ -709,7 +664,7 @@ class TestWebTransportConnection:
     def test_handle_session_event_role_mismatch_ignored(
         self,
         connection: WebTransportConnection,
-        mock_session_class: MagicMock,
+        mock_session_class: Any,
         is_client: bool,
         event_type: EventType,
     ) -> None:
@@ -723,7 +678,7 @@ class TestWebTransportConnection:
         mock_session_class.assert_not_called()
 
     def test_handle_session_event_server_request(
-        self, connection: WebTransportConnection, mock_session_class: MagicMock
+        self, connection: WebTransportConnection, mock_session_class: Any
     ) -> None:
         connection._is_client = False
         data = {"session_id": 2, "path": "/", "headers": {}}
@@ -741,8 +696,8 @@ class TestWebTransportConnection:
     def test_handle_stream_event_opened_handle_exists(
         self, connection: WebTransportConnection, mocker: MockerFixture
     ) -> None:
-        session_handle = mocker.Mock()
-        existing_stream = mocker.Mock()
+        session_handle = mocker.create_autospec(spec=WebTransportSession, instance=True)
+        existing_stream = mocker.create_autospec(spec=WebTransportStream, instance=True)
         connection._session_handles[1] = session_handle
         connection._stream_handles[10] = existing_stream
         data = {"stream_id": 10, "session_id": 1, "direction": StreamDirection.BIDIRECTIONAL}
@@ -755,7 +710,7 @@ class TestWebTransportConnection:
     def test_handle_stream_event_opened_invalid_direction(
         self, connection: WebTransportConnection, mocker: MockerFixture
     ) -> None:
-        session_handle = mocker.Mock()
+        session_handle = mocker.create_autospec(spec=WebTransportSession, instance=True)
         connection._session_handles[1] = session_handle
         spy_logger = mocker.patch(target="pywebtransport.connection._logger")
         data = {"stream_id": 10, "session_id": 1, "direction": 999, "is_peer_initiated": False}
@@ -798,7 +753,7 @@ class TestWebTransportConnection:
         direction: StreamDirection,
         handle_class_name: str,
     ) -> None:
-        session_handle = mocker.Mock()
+        session_handle = mocker.create_autospec(spec=WebTransportSession, instance=True)
         connection._session_handles[1] = session_handle
         mock_handle_class = mocker.patch(target=f"pywebtransport.connection.{handle_class_name}")
         data = {"stream_id": 10, "session_id": 1, "direction": direction, "is_peer_initiated": True}
@@ -812,13 +767,12 @@ class TestWebTransportConnection:
         session_handle._handle_stream_opened.assert_called_once_with(stream=stream)
         session_handle.events.emit_nowait.assert_called_once_with(event_type=EventType.STREAM_OPENED, data=data)
 
-    @pytest.mark.asyncio
     async def test_incoming_sessions_until_closed(
         self, connection: WebTransportConnection, mocker: MockerFixture
     ) -> None:
-        session = mocker.Mock(spec=WebTransportSession)
-        connection._incoming_sessions.put_nowait(session)
-        connection._incoming_sessions.put_nowait(None)
+        session = mocker.create_autospec(spec=WebTransportSession, instance=True)
+        connection._incoming_sessions.put_nowait(item=session)
+        connection._incoming_sessions.put_nowait(item=None)
 
         sessions = [item async for item in connection.incoming_sessions()]
 
@@ -828,8 +782,8 @@ class TestWebTransportConnection:
     def test_init(
         self,
         connection: WebTransportConnection,
-        mock_config: MagicMock,
-        mock_controller: MagicMock,
+        mock_config: Any,
+        mock_controller: Any,
     ) -> None:
         assert connection._config is mock_config
         assert connection._controller is mock_controller
@@ -843,13 +797,13 @@ class TestWebTransportConnection:
 
         assert not hasattr(connection, "__dict__")
 
-    def test_properties(self, connection: WebTransportConnection, mock_config: MagicMock) -> None:
+    def test_properties(self, connection: WebTransportConnection, mock_config: Any) -> None:
         assert connection.config is mock_config
         assert connection.handle == 42
         assert connection.is_client is True
         assert connection.is_closed is False
 
-    def test_remote_address(self, connection: WebTransportConnection, mock_controller: MagicMock) -> None:
+    def test_remote_address(self, connection: WebTransportConnection, mock_controller: Any) -> None:
         assert connection.remote_address == ("127.0.0.1", 443)
         mock_controller.get_remote_address.assert_called_once_with(handle=42)
 
@@ -858,7 +812,7 @@ class TestWebTransportConnection:
         assert connection.remote_address == ("127.0.0.1", 443)
         mock_controller.get_remote_address.assert_called_once_with(handle=42)
 
-    def test_remote_address_returns_none(self, connection: WebTransportConnection, mock_controller: MagicMock) -> None:
+    def test_remote_address_returns_none(self, connection: WebTransportConnection, mock_controller: Any) -> None:
         mock_controller.get_remote_address.return_value = None
 
         assert connection.remote_address is None
@@ -870,7 +824,7 @@ class TestWebTransportConnection:
             connection._resolve_session_handle(1)
 
     def test_resolve_session_handle_success(self, connection: WebTransportConnection, mocker: MockerFixture) -> None:
-        session_handle = mocker.Mock()
+        session_handle = mocker.create_autospec(spec=WebTransportSession, instance=True)
         connection._session_handles[1] = session_handle
 
         result = connection._resolve_session_handle(1)
@@ -882,21 +836,18 @@ class TestWebTransportConnection:
             connection._resolve_stream_handle(10)
 
     def test_resolve_stream_handle_success(self, connection: WebTransportConnection, mocker: MockerFixture) -> None:
-        stream_handle = mocker.Mock()
+        stream_handle = mocker.create_autospec(spec=WebTransportStream, instance=True)
         connection._stream_handles[10] = stream_handle
 
         result = connection._resolve_stream_handle(10)
 
         assert result is stream_handle
 
-    @pytest.mark.asyncio
     async def test_route_session_event_and_close(
-        self, connection: WebTransportConnection, mocker: MockerFixture
+        self, connection: WebTransportConnection, mock_controller: Any, mocker: MockerFixture
     ) -> None:
-        session_handle = mocker.Mock()
-        session_handle.events = mocker.Mock()
-        session_handle.events.emit = mocker.AsyncMock()
-        session_handle.events.close = mocker.AsyncMock()
+        session_handle = mocker.create_autospec(spec=WebTransportSession, instance=True)
+        session_handle.events = mocker.create_autospec(spec=EventEmitter, instance=True)
         connection._session_handles[1] = session_handle
         blocked_data: dict[str, Any] = {"session_id": 1}
 
@@ -909,10 +860,14 @@ class TestWebTransportConnection:
 
         closed_data: dict[str, Any] = {"session_id": 1, "error_code": 7}
         connection._handle_event(event_type=EventType.SESSION_CLOSED, data=closed_data)
-        await asyncio.sleep(0)
 
         assert 1 not in connection._session_handles
         session_handle._handle_closed.assert_called_once_with(error_code=7)
+        mock_controller.create_task.assert_called_once()
+        session_handle.events.emit.assert_not_awaited()
+
+        await mock_controller.create_task.call_args.kwargs["coro"]
+
         session_handle.events.emit.assert_awaited_once_with(event_type=EventType.SESSION_CLOSED, data=closed_data)
         session_handle.events.close.assert_awaited_once()
         session_handle.events.emit_nowait.assert_called_once()
@@ -932,21 +887,24 @@ class TestWebTransportConnection:
             "wt_session resolve failed event=%s session_id=%d", EventType.SESSION_DATA_BLOCKED, 999
         )
 
-    @pytest.mark.asyncio
-    async def test_route_stream_event_closed(self, connection: WebTransportConnection, mocker: MockerFixture) -> None:
-        stream_handle = mocker.Mock()
-        stream_handle.events = mocker.Mock()
-        stream_handle.events.emit = mocker.AsyncMock()
-        stream_handle.events.close = mocker.AsyncMock()
+    async def test_route_stream_event_closed(
+        self, connection: WebTransportConnection, mock_controller: Any, mocker: MockerFixture
+    ) -> None:
+        stream_handle = mocker.create_autospec(spec=WebTransportStream, instance=True)
+        stream_handle.events = mocker.create_autospec(spec=EventEmitter, instance=True)
         connection._stream_handles[10] = stream_handle
         data: dict[str, Any] = {"stream_id": 10}
 
         connection._handle_event(event_type=EventType.STREAM_CLOSED, data=data)
-        await asyncio.sleep(0)
 
         assert 10 not in connection._stream_handles
         assert data["stream"] is stream_handle
         stream_handle._handle_closed.assert_called_once_with()
+        mock_controller.create_task.assert_called_once()
+        stream_handle.events.emit.assert_not_awaited()
+
+        await mock_controller.create_task.call_args.kwargs["coro"]
+
         stream_handle.events.emit.assert_awaited_once_with(event_type=EventType.STREAM_CLOSED, data=data)
         stream_handle.events.close.assert_awaited_once()
         stream_handle.events.emit_nowait.assert_not_called()
@@ -973,14 +931,14 @@ class TestWebTransportConnection:
     def test_route_stream_event_stop_sending_reset(
         self, connection: WebTransportConnection, mocker: MockerFixture, event_type: EventType
     ) -> None:
-        stream_handle = mocker.Mock()
-        stream_handle.events = mocker.Mock()
+        stream_handle = mocker.create_autospec(spec=WebTransportStream, instance=True)
+        stream_handle.events = mocker.create_autospec(spec=EventEmitter, instance=True)
         connection._stream_handles[10] = stream_handle
         data = {"stream_id": 10, "error_code": 123}
 
         connection._handle_event(event_type=event_type, data=data)
 
-        cast(MagicMock, stream_handle.events.emit_nowait).assert_called_with(event_type=event_type, data=data)
+        cast(Any, stream_handle.events.emit_nowait).assert_called_with(event_type=event_type, data=data)
         stream_handle._handle_closed.assert_not_called()
 
     def test_route_stream_event_stop_sending_reset_missing(
@@ -996,7 +954,7 @@ class TestWebTransportConnection:
         )
 
     def test_sessions(self, connection: WebTransportConnection, mocker: MockerFixture) -> None:
-        session = mocker.Mock()
+        session = mocker.create_autospec(spec=WebTransportSession, instance=True)
         connection._session_handles[1] = session
 
         assert connection.sessions == [session]

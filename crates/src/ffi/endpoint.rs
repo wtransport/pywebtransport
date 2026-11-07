@@ -195,9 +195,7 @@ impl PyEndpoint {
 
     #[pyo3(signature = ())]
     fn close(&self) {
-        self.command_tx
-            .blocking_send(RuntimeCommand::ShutdownReactor)
-            .ok();
+        self.command_tx.send(RuntimeCommand::ShutdownReactor).ok();
 
         if let Ok(mut reactor_thread) = self.reactor_thread.lock()
             && let Some(handle) = reactor_thread.take()
@@ -213,14 +211,10 @@ impl PyEndpoint {
         remote_address: &Bound<'_, PyAny>,
         server_name: String,
     ) -> PyResult<()> {
-        if self.event_rx.len() > (self.event_rx.capacity() * 9) / 10 {
-            return Err(PyRuntimeError::new_err("rt_channel validate exceeded"));
-        }
-
         let remote_address = extract_socket_address(remote_address)?;
 
         self.command_tx
-            .try_send(RuntimeCommand::CreateConnection {
+            .send(RuntimeCommand::CreateConnection {
                 request_id,
                 remote_address,
                 server_name,
@@ -237,15 +231,11 @@ impl PyEndpoint {
         request_id: u64,
         event: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
-        if self.event_rx.len() > (self.event_rx.capacity() * 9) / 10 {
-            return Err(PyRuntimeError::new_err("rt_channel validate exceeded"));
-        }
-
         let event: ProtocolEvent = event.extract()?;
         let handle = QuicConnectionHandle(handle);
 
         self.command_tx
-            .try_send(RuntimeCommand::ProtocolEvent {
+            .send(RuntimeCommand::ProtocolEvent {
                 request_id,
                 handle,
                 event,

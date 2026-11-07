@@ -353,7 +353,7 @@ fn test_read_after_fin_consumed_returns_eof_success(mut fixture_stream: Stream) 
 
 #[rstest]
 fn test_read_after_fin_received_consumes_eof_success(mut fixture_stream: Stream) {
-    fixture_stream.recv_data(Bytes::new(), true);
+    fixture_stream.receive_data(Bytes::new(), true);
 
     let effects = fixture_stream.read(1, 100);
 
@@ -372,7 +372,7 @@ fn test_read_after_fin_received_consumes_eof_success(mut fixture_stream: Stream)
 
 #[rstest]
 fn test_read_after_reset_fails_with_peer_error_code(mut fixture_stream: Stream) {
-    fixture_stream.recv_reset(utils::webtransport_code_to_http_code(0x100));
+    fixture_stream.receive_reset(utils::webtransport_code_to_http_code(0x100));
 
     let effects = fixture_stream.read(1, 100);
 
@@ -433,7 +433,7 @@ fn test_read_send_only_fails() {
 
 #[rstest]
 fn test_read_zero_size_after_fin_received_keeps_eof_success(mut fixture_stream: Stream) {
-    fixture_stream.recv_data(Bytes::new(), true);
+    fixture_stream.receive_data(Bytes::new(), true);
 
     let effects = fixture_stream.read(1, 0);
 
@@ -465,19 +465,19 @@ fn test_read_zero_size_returns_empty_success(mut fixture_stream: Stream) {
 }
 
 #[rstest]
-fn test_recv_data_after_fin_ignored(mut fixture_stream: Stream) {
-    fixture_stream.recv_data(Bytes::new(), true);
+fn test_receive_data_after_fin_ignored(mut fixture_stream: Stream) {
+    fixture_stream.receive_data(Bytes::new(), true);
 
-    let effects = fixture_stream.recv_data(Bytes::from_static(b"ignore"), false);
+    let effects = fixture_stream.receive_data(Bytes::from_static(b"ignore"), false);
 
     assert!(effects.is_empty());
 }
 
 #[rstest]
-fn test_recv_data_delivers_to_pending_read_success(mut fixture_stream: Stream) {
+fn test_receive_data_delivers_to_pending_read_success(mut fixture_stream: Stream) {
     fixture_stream.read(1, 100);
 
-    let effects = fixture_stream.recv_data(Bytes::from_static(b"incoming"), false);
+    let effects = fixture_stream.receive_data(Bytes::from_static(b"incoming"), false);
 
     assert!(matches!(
         effects.as_slice(),
@@ -490,11 +490,13 @@ fn test_recv_data_delivers_to_pending_read_success(mut fixture_stream: Stream) {
 }
 
 #[rstest]
-fn test_recv_data_fin_with_data_drains_remaining_pending_reads_success(mut fixture_stream: Stream) {
+fn test_receive_data_fin_with_data_drains_remaining_pending_reads_success(
+    mut fixture_stream: Stream,
+) {
     fixture_stream.read(1, 100);
     fixture_stream.read(2, 100);
 
-    let effects = fixture_stream.recv_data(Bytes::from_static(b"final"), true);
+    let effects = fixture_stream.receive_data(Bytes::from_static(b"final"), true);
 
     assert!(matches!(
         effects.as_slice(),
@@ -517,10 +519,10 @@ fn test_recv_data_fin_with_data_drains_remaining_pending_reads_success(mut fixtu
 }
 
 #[rstest]
-fn test_recv_data_fin_with_data_keeps_eof_for_next_read_success(mut fixture_stream: Stream) {
+fn test_receive_data_fin_with_data_keeps_eof_for_next_read_success(mut fixture_stream: Stream) {
     fixture_stream.read(1, 100);
 
-    let effects = fixture_stream.recv_data(Bytes::from_static(b"final"), true);
+    let effects = fixture_stream.receive_data(Bytes::from_static(b"final"), true);
 
     assert!(matches!(
         effects.as_slice(),
@@ -536,10 +538,10 @@ fn test_recv_data_fin_with_data_keeps_eof_for_next_read_success(mut fixture_stre
 }
 
 #[rstest]
-fn test_recv_data_fin_without_data_delivers_eof_success(mut fixture_stream: Stream) {
+fn test_receive_data_fin_without_data_delivers_eof_success(mut fixture_stream: Stream) {
     fixture_stream.read(1, 100);
 
-    let effects = fixture_stream.recv_data(Bytes::new(), true);
+    let effects = fixture_stream.receive_data(Bytes::new(), true);
 
     assert!(matches!(
         effects.as_slice(),
@@ -555,8 +557,8 @@ fn test_recv_data_fin_without_data_delivers_eof_success(mut fixture_stream: Stre
 }
 
 #[rstest]
-fn test_recv_data_fin_without_pending_read_success(mut fixture_stream: Stream) {
-    let effects = fixture_stream.recv_data(Bytes::new(), true);
+fn test_receive_data_fin_without_pending_read_success(mut fixture_stream: Stream) {
+    let effects = fixture_stream.receive_data(Bytes::new(), true);
 
     assert!(effects.is_empty());
     assert_eq!(
@@ -566,11 +568,11 @@ fn test_recv_data_fin_without_pending_read_success(mut fixture_stream: Stream) {
 }
 
 #[rstest]
-fn test_recv_data_requests_data_for_next_pending_read_success(mut fixture_stream: Stream) {
+fn test_receive_data_requests_data_for_next_pending_read_success(mut fixture_stream: Stream) {
     fixture_stream.read(1, 100);
     fixture_stream.read(2, 50);
 
-    let effects = fixture_stream.recv_data(Bytes::from_static(b"incoming"), false);
+    let effects = fixture_stream.receive_data(Bytes::from_static(b"incoming"), false);
 
     assert!(matches!(
         effects.as_slice(),
@@ -589,8 +591,8 @@ fn test_recv_data_requests_data_for_next_pending_read_success(mut fixture_stream
 }
 
 #[rstest]
-fn test_recv_data_without_pending_read_no_op_success(mut fixture_stream: Stream) {
-    let effects = fixture_stream.recv_data(Bytes::from_static(b"incoming"), false);
+fn test_receive_data_without_pending_read_no_op_success(mut fixture_stream: Stream) {
+    let effects = fixture_stream.receive_data(Bytes::from_static(b"incoming"), false);
 
     assert!(effects.is_empty());
     assert_eq!(
@@ -600,10 +602,10 @@ fn test_recv_data_without_pending_read_no_op_success(mut fixture_stream: Stream)
 }
 
 #[rstest]
-fn test_recv_reset_after_fin_consumed_ignored(mut fixture_stream: Stream) {
+fn test_receive_reset_after_fin_consumed_ignored(mut fixture_stream: Stream) {
     fixture_stream.receive_state = Some(StreamReceiveState::DataRead);
 
-    let effects = fixture_stream.recv_reset(0x100);
+    let effects = fixture_stream.receive_reset(0x100);
 
     assert!(effects.is_empty());
     assert_eq!(
@@ -613,11 +615,11 @@ fn test_recv_reset_after_fin_consumed_ignored(mut fixture_stream: Stream) {
 }
 
 #[rstest]
-fn test_recv_reset_fails_pending_reads_success(mut fixture_stream: Stream) {
+fn test_receive_reset_fails_pending_reads_success(mut fixture_stream: Stream) {
     fixture_stream.read(1, 100);
     fixture_stream.read(2, 100);
 
-    let effects = fixture_stream.recv_reset(utils::webtransport_code_to_http_code(0x100));
+    let effects = fixture_stream.receive_reset(utils::webtransport_code_to_http_code(0x100));
 
     assert!(matches!(
         effects.as_slice(),
@@ -649,27 +651,27 @@ fn test_recv_reset_fails_pending_reads_success(mut fixture_stream: Stream) {
 }
 
 #[rstest]
-fn test_recv_reset_on_reset_read_idempotency_success(mut fixture_stream: Stream) {
-    fixture_stream.recv_reset(utils::webtransport_code_to_http_code(0x100));
+fn test_receive_reset_on_reset_read_idempotency_success(mut fixture_stream: Stream) {
+    fixture_stream.receive_reset(utils::webtransport_code_to_http_code(0x100));
 
-    let effects = fixture_stream.recv_reset(utils::webtransport_code_to_http_code(0x200));
+    let effects = fixture_stream.receive_reset(utils::webtransport_code_to_http_code(0x200));
 
     assert!(effects.is_empty());
     assert_eq!(fixture_stream.receive_error_code, Some(0x100));
 }
 
 #[rstest]
-fn test_recv_reset_send_only_ignored() {
+fn test_receive_reset_send_only_ignored() {
     let mut stream = create_stream(StreamDirection::SendOnly);
 
-    let effects = stream.recv_reset(0x100);
+    let effects = stream.receive_reset(0x100);
 
     assert!(effects.is_empty());
 }
 
 #[rstest]
-fn test_recv_reset_unknown_error_code_success(mut fixture_stream: Stream) {
-    let effects = fixture_stream.recv_reset(0x1234_5678);
+fn test_receive_reset_unknown_error_code_success(mut fixture_stream: Stream) {
+    let effects = fixture_stream.receive_reset(0x1234_5678);
 
     assert!(matches!(
         effects.as_slice(),
@@ -687,21 +689,21 @@ fn test_recv_reset_unknown_error_code_success(mut fixture_stream: Stream) {
 }
 
 #[rstest]
-fn test_recv_stop_sending_after_data_acknowledged_ignored(mut fixture_stream: Stream) {
+fn test_receive_stop_sending_after_data_acknowledged_ignored(mut fixture_stream: Stream) {
     fixture_stream.write(1, Bytes::new(), true, 0);
     fixture_stream.handle_data_acknowledged();
 
-    let effects = fixture_stream.recv_stop_sending(0x100);
+    let effects = fixture_stream.receive_stop_sending(0x100);
 
     assert!(effects.is_empty());
 }
 
 #[rstest]
-fn test_recv_stop_sending_fails_pending_write_success(mut fixture_stream: Stream) {
+fn test_receive_stop_sending_fails_pending_write_success(mut fixture_stream: Stream) {
     fixture_stream.write(1, Bytes::from_static(b"data"), true, 100);
     let network_code = utils::webtransport_code_to_http_code(0x100);
 
-    let effects = fixture_stream.recv_stop_sending(network_code);
+    let effects = fixture_stream.receive_stop_sending(network_code);
 
     assert!(matches!(
         effects.as_slice(),
@@ -724,29 +726,29 @@ fn test_recv_stop_sending_fails_pending_write_success(mut fixture_stream: Stream
 }
 
 #[rstest]
-fn test_recv_stop_sending_on_reset_sent_idempotency_success(mut fixture_stream: Stream) {
+fn test_receive_stop_sending_on_reset_sent_idempotency_success(mut fixture_stream: Stream) {
     fixture_stream.reset(1, 404);
 
-    let effects = fixture_stream.recv_stop_sending(0x100);
+    let effects = fixture_stream.receive_stop_sending(0x100);
 
     assert!(effects.is_empty());
     assert_eq!(fixture_stream.send_error_code, Some(404));
 }
 
 #[rstest]
-fn test_recv_stop_sending_receive_only_ignored() {
+fn test_receive_stop_sending_receive_only_ignored() {
     let mut stream = create_stream(StreamDirection::ReceiveOnly);
 
-    let effects = stream.recv_stop_sending(0x100);
+    let effects = stream.receive_stop_sending(0x100);
 
     assert!(effects.is_empty());
 }
 
 #[rstest]
-fn test_recv_stop_sending_success(mut fixture_stream: Stream) {
+fn test_receive_stop_sending_success(mut fixture_stream: Stream) {
     let network_code = utils::webtransport_code_to_http_code(0x100);
 
-    let effects = fixture_stream.recv_stop_sending(network_code);
+    let effects = fixture_stream.receive_stop_sending(network_code);
 
     assert!(matches!(
         effects.as_slice(),
@@ -882,7 +884,7 @@ fn test_reset_receive_only_fails() {
 
 #[rstest]
 fn test_stop_after_fin_received_terminates_without_frame_success(mut fixture_stream: Stream) {
-    fixture_stream.recv_data(Bytes::new(), true);
+    fixture_stream.receive_data(Bytes::new(), true);
 
     let effects = fixture_stream.stop(1, 500);
 

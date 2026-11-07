@@ -39,11 +39,11 @@ fn fixture_client_connection() -> Connection {
             initial_max_data: 4 * 1024 * 1024,
             initial_max_streams_bidi: 10,
             initial_max_streams_uni: 10,
-            max_connection_pending_events: 1000,
+            max_connection_early_events: 1000,
             max_pending_capsules: 20,
             max_pending_datagrams: 100,
             max_pending_streams: 10,
-            max_session_pending_events: 100,
+            max_session_early_events: 100,
             max_sessions: 10,
             max_write_buffer_size: 1024 * 1024,
             session_receive_window: 4 * 1024 * 1024,
@@ -82,11 +82,11 @@ fn fixture_server_connection() -> Connection {
             initial_max_data: 4 * 1024 * 1024,
             initial_max_streams_bidi: 10,
             initial_max_streams_uni: 10,
-            max_connection_pending_events: 1000,
+            max_connection_early_events: 1000,
             max_pending_capsules: 20,
             max_pending_datagrams: 100,
             max_pending_streams: 10,
-            max_session_pending_events: 100,
+            max_session_early_events: 100,
             max_sessions: 10,
             max_write_buffer_size: 1024 * 1024,
             session_receive_window: 4 * 1024 * 1024,
@@ -100,7 +100,7 @@ fn test_accept_session_delegates(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
 
     let effects = fixture_server_connection.accept_session(0, 100, vec![], None, 2.0);
 
@@ -139,7 +139,7 @@ fn test_accept_session_with_wt_protocol(
         Bytes::from_static(WT_AVAILABLE_PROTOCOLS),
         Bytes::from_static(b"\"h3\""),
     ));
-    fixture_server_connection.recv_headers(0, headers, 1.0);
+    fixture_server_connection.receive_headers(0, headers, 1.0);
 
     let effects = fixture_server_connection.accept_session(0, 100, vec![], Some("h3".into()), 2.0);
 
@@ -164,7 +164,7 @@ fn test_accessors(mut fixture_server_connection: Connection, fixture_headers: He
         None
     );
 
-    fixture_server_connection.recv_transport_parameters(1500);
+    fixture_server_connection.receive_transport_parameters(1500);
 
     assert_eq!(
         fixture_server_connection.peer_max_datagram_frame_size(),
@@ -178,7 +178,7 @@ fn test_accessors(mut fixture_server_connection: Connection, fixture_headers: He
 
     assert!(!fixture_server_connection.is_session_stream(0));
 
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
 
     assert!(fixture_server_connection.is_session_stream(0));
 }
@@ -195,7 +195,7 @@ fn test_bind_session(mut fixture_server_connection: Connection) {
 }
 
 #[rstest]
-fn test_bind_session_optimistic_completes_via_recv_headers(
+fn test_bind_session_optimistic_completes_via_receive_headers(
     mut fixture_client_connection: Connection,
 ) {
     fixture_client_connection.state = ConnectionState::Connected;
@@ -219,7 +219,7 @@ fn test_bind_session_optimistic_completes_via_recv_headers(
     ));
 
     let response_headers = vec![(Bytes::from_static(b":status"), Bytes::from_static(b"200"))];
-    let effects = fixture_client_connection.recv_headers(0, response_headers, 2.0);
+    let effects = fixture_client_connection.receive_headers(0, response_headers, 2.0);
 
     assert!(effects.iter().any(|effect| matches!(
         effect,
@@ -249,7 +249,7 @@ fn test_bind_stream_on_closed_session_not_mapped(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.reject_session(0, 100, vec![], 403, 1.5);
 
     let effects = fixture_server_connection.bind_stream(0, 1, 101, false, 2.0);
@@ -280,7 +280,7 @@ fn test_bind_stream_updates_map(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
 
     let effects = fixture_server_connection.bind_stream(0, 1, 101, false, 2.0);
@@ -473,7 +473,7 @@ fn test_client_create_session_wrong_state(mut fixture_client_connection: Connect
 }
 
 #[rstest]
-fn test_client_recv_headers_completes_session(mut fixture_client_connection: Connection) {
+fn test_client_receive_headers_completes_session(mut fixture_client_connection: Connection) {
     fixture_client_connection.state = ConnectionState::Connected;
     fixture_client_connection
         .pending_session_requests
@@ -481,7 +481,7 @@ fn test_client_recv_headers_completes_session(mut fixture_client_connection: Con
     fixture_client_connection.create_session(100, create_session_request(vec![], None, false));
     let response_headers = vec![(Bytes::from_static(b":status"), Bytes::from_static(b"200"))];
 
-    let effects = fixture_client_connection.recv_headers(0, response_headers, 2.0);
+    let effects = fixture_client_connection.receive_headers(0, response_headers, 2.0);
 
     assert!(fixture_client_connection.sessions.contains_key(&0));
     assert!(
@@ -503,7 +503,7 @@ fn test_client_recv_headers_completes_session(mut fixture_client_connection: Con
 }
 
 #[rstest]
-fn test_client_recv_headers_duplicate_wt_protocol_fails_request(
+fn test_client_receive_headers_duplicate_wt_protocol_fails_request(
     mut fixture_client_connection: Connection,
 ) {
     fixture_client_connection.state = ConnectionState::Connected;
@@ -526,7 +526,7 @@ fn test_client_recv_headers_duplicate_wt_protocol_fails_request(
             Bytes::from_static(b"\"h3\""),
         ),
     ];
-    let effects = fixture_client_connection.recv_headers(0, response_headers, 2.0);
+    let effects = fixture_client_connection.receive_headers(0, response_headers, 2.0);
 
     assert!(!fixture_client_connection.sessions.contains_key(&0));
     assert!(matches!(
@@ -544,12 +544,12 @@ fn test_client_recv_headers_duplicate_wt_protocol_fails_request(
 }
 
 #[rstest]
-fn test_client_recv_headers_missing_config(mut fixture_client_connection: Connection) {
+fn test_client_receive_headers_missing_config(mut fixture_client_connection: Connection) {
     fixture_client_connection
         .pending_session_requests
         .insert(0, 100);
 
-    let effects = fixture_client_connection.recv_headers(0, vec![], 1.0);
+    let effects = fixture_client_connection.receive_headers(0, vec![], 1.0);
 
     assert!(matches!(
         effects.as_slice(),
@@ -562,14 +562,14 @@ fn test_client_recv_headers_missing_config(mut fixture_client_connection: Connec
 }
 
 #[rstest]
-fn test_client_recv_headers_missing_status_rejects(mut fixture_client_connection: Connection) {
+fn test_client_receive_headers_missing_status_rejects(mut fixture_client_connection: Connection) {
     fixture_client_connection.state = ConnectionState::Connected;
     fixture_client_connection
         .pending_session_requests
         .insert(0, 100);
     fixture_client_connection.create_session(100, create_session_request(vec![], None, false));
 
-    let effects = fixture_client_connection.recv_headers(0, vec![], 2.0);
+    let effects = fixture_client_connection.receive_headers(0, vec![], 2.0);
 
     assert!(!fixture_client_connection.sessions.contains_key(&0));
     assert!(
@@ -592,7 +592,7 @@ fn test_client_recv_headers_missing_status_rejects(mut fixture_client_connection
 }
 
 #[rstest]
-fn test_client_recv_headers_negotiated_protocol_not_requested_fails(
+fn test_client_receive_headers_negotiated_protocol_not_requested_fails(
     mut fixture_client_connection: Connection,
 ) {
     fixture_client_connection.state = ConnectionState::Connected;
@@ -611,7 +611,7 @@ fn test_client_recv_headers_negotiated_protocol_not_requested_fails(
             Bytes::from_static(b"\"other-protocol\""),
         ),
     ];
-    let effects = fixture_client_connection.recv_headers(0, response_headers, 2.0);
+    let effects = fixture_client_connection.receive_headers(0, response_headers, 2.0);
 
     assert!(!fixture_client_connection.sessions.contains_key(&0));
     assert!(matches!(
@@ -628,7 +628,7 @@ fn test_client_recv_headers_negotiated_protocol_not_requested_fails(
 }
 
 #[rstest]
-fn test_client_recv_headers_non_200_aborts_existing_session(
+fn test_client_receive_headers_non_200_aborts_existing_session(
     mut fixture_client_connection: Connection,
 ) {
     fixture_client_connection.state = ConnectionState::Connected;
@@ -637,7 +637,7 @@ fn test_client_recv_headers_non_200_aborts_existing_session(
     assert!(fixture_client_connection.sessions.contains_key(&0));
 
     let response_headers = vec![(Bytes::from_static(b":status"), Bytes::from_static(b"404"))];
-    let effects = fixture_client_connection.recv_headers(0, response_headers, 2.0);
+    let effects = fixture_client_connection.receive_headers(0, response_headers, 2.0);
 
     assert!(effects.iter().any(|effect| matches!(
         effect,
@@ -649,7 +649,7 @@ fn test_client_recv_headers_non_200_aborts_existing_session(
 }
 
 #[rstest]
-fn test_client_recv_headers_protocol_mismatch_aborts_existing_session(
+fn test_client_receive_headers_protocol_mismatch_aborts_existing_session(
     mut fixture_client_connection: Connection,
 ) {
     fixture_client_connection.state = ConnectionState::Connected;
@@ -661,7 +661,7 @@ fn test_client_recv_headers_protocol_mismatch_aborts_existing_session(
     assert!(fixture_client_connection.sessions.contains_key(&0));
 
     let response_headers = vec![(Bytes::from_static(b":status"), Bytes::from_static(b"200"))];
-    let effects = fixture_client_connection.recv_headers(0, response_headers, 2.0);
+    let effects = fixture_client_connection.receive_headers(0, response_headers, 2.0);
 
     assert!(effects.iter().any(|effect| matches!(
         effect,
@@ -673,7 +673,7 @@ fn test_client_recv_headers_protocol_mismatch_aborts_existing_session(
 }
 
 #[rstest]
-fn test_client_recv_headers_protocol_mismatch_no_session_fails_request(
+fn test_client_receive_headers_protocol_mismatch_no_session_fails_request(
     mut fixture_client_connection: Connection,
 ) {
     fixture_client_connection.state = ConnectionState::Connected;
@@ -686,7 +686,7 @@ fn test_client_recv_headers_protocol_mismatch_no_session_fails_request(
     );
 
     let response_headers = vec![(Bytes::from_static(b":status"), Bytes::from_static(b"200"))];
-    let effects = fixture_client_connection.recv_headers(0, response_headers, 2.0);
+    let effects = fixture_client_connection.receive_headers(0, response_headers, 2.0);
 
     assert!(!fixture_client_connection.sessions.contains_key(&0));
     assert!(
@@ -708,18 +708,18 @@ fn test_client_recv_headers_protocol_mismatch_no_session_fails_request(
 }
 
 #[rstest]
-fn test_client_recv_headers_rejects_non_200(mut fixture_client_connection: Connection) {
+fn test_client_receive_headers_rejects_non_200(mut fixture_client_connection: Connection) {
     fixture_client_connection.state = ConnectionState::Connected;
     fixture_client_connection
         .pending_session_requests
         .insert(0, 100);
     fixture_client_connection.create_session(100, create_session_request(vec![], None, false));
-    fixture_client_connection.recv_datagram(0, Bytes::from_static(b"early"), 1.5);
+    fixture_client_connection.receive_datagram(0, Bytes::from_static(b"early"), 1.5);
     fixture_client_connection.handle_stream_opened(0, 1, 1.5);
     fixture_client_connection.handle_stream_opened(0, 3, 1.5);
 
     let response_headers = vec![(Bytes::from_static(b":status"), Bytes::from_static(b"404"))];
-    let effects = fixture_client_connection.recv_headers(0, response_headers, 2.0);
+    let effects = fixture_client_connection.receive_headers(0, response_headers, 2.0);
 
     assert!(!fixture_client_connection.sessions.contains_key(&0));
     assert_eq!(fixture_client_connection.early_event_count, 0);
@@ -761,7 +761,7 @@ fn test_client_recv_headers_rejects_non_200(mut fixture_client_connection: Conne
 }
 
 #[rstest]
-fn test_client_recv_headers_replays_early_events_for_new_session(
+fn test_client_receive_headers_replays_early_events_for_new_session(
     mut fixture_client_connection: Connection,
 ) {
     fixture_client_connection.state = ConnectionState::Connected;
@@ -769,11 +769,11 @@ fn test_client_recv_headers_replays_early_events_for_new_session(
         .pending_session_requests
         .insert(0, 100);
     fixture_client_connection.create_session(100, create_session_request(vec![], None, false));
-    fixture_client_connection.recv_datagram(0, Bytes::from_static(b"early"), 1.5);
+    fixture_client_connection.receive_datagram(0, Bytes::from_static(b"early"), 1.5);
     fixture_client_connection.handle_stream_opened(0, 1, 1.5);
 
     let response_headers = vec![(Bytes::from_static(b":status"), Bytes::from_static(b"200"))];
-    let effects = fixture_client_connection.recv_headers(0, response_headers, 2.0);
+    let effects = fixture_client_connection.receive_headers(0, response_headers, 2.0);
 
     assert!(
         !fixture_client_connection
@@ -813,14 +813,14 @@ fn test_client_recv_headers_replays_early_events_for_new_session(
 }
 
 #[rstest]
-fn test_client_recv_headers_unknown_request(mut fixture_client_connection: Connection) {
-    let effects = fixture_client_connection.recv_headers(0, vec![], 1.0);
+fn test_client_receive_headers_unknown_request(mut fixture_client_connection: Connection) {
+    let effects = fixture_client_connection.receive_headers(0, vec![], 1.0);
 
     assert!(effects.is_empty());
 }
 
 #[rstest]
-fn test_client_recv_headers_with_negotiated_protocol_success(
+fn test_client_receive_headers_with_negotiated_protocol_success(
     mut fixture_client_connection: Connection,
 ) {
     fixture_client_connection.state = ConnectionState::Connected;
@@ -839,7 +839,7 @@ fn test_client_recv_headers_with_negotiated_protocol_success(
             Bytes::from_static(b"\"h3\""),
         ),
     ];
-    let effects = fixture_client_connection.recv_headers(0, response_headers, 2.0);
+    let effects = fixture_client_connection.receive_headers(0, response_headers, 2.0);
 
     assert!(fixture_client_connection.sessions.contains_key(&0));
     assert!(matches!(
@@ -911,7 +911,7 @@ fn test_close_gracefully_drains_sessions(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
 
     let effects = fixture_server_connection.close_gracefully(101);
@@ -994,7 +994,7 @@ fn test_close_session_delegates(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
 
     let effects = fixture_server_connection.close_session(0, 100, 0, None, 2.0);
 
@@ -1017,7 +1017,7 @@ fn test_complete_stream_write_delegates(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
     fixture_server_connection.handle_stream_opened(0, 4, 2.0);
     fixture_server_connection.write_stream(4, 101, Bytes::from_static(b"data"), false);
@@ -1047,7 +1047,7 @@ fn test_complete_stream_write_removes_stale_stream(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
     fixture_server_connection.handle_stream_opened(0, 4, 2.0);
     fixture_server_connection.close_session(0, 101, 0, None, 2.5);
@@ -1094,7 +1094,7 @@ fn test_create_stream_delegates(
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
     fixture_server_connection.peer_initial_max_streams_bidi = 100;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
 
     let effects = fixture_server_connection.create_stream(0, 101, false);
@@ -1148,7 +1148,7 @@ fn test_diagnose(fixture_server_connection: Connection) {
 #[rstest]
 fn test_diagnose_session(mut fixture_server_connection: Connection, fixture_headers: Headers) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
 
     let effects = fixture_server_connection.diagnose_session(0, 100);
 
@@ -1177,7 +1177,7 @@ fn test_diagnose_session_not_found(fixture_server_connection: Connection) {
 #[rstest]
 fn test_diagnose_stream(mut fixture_server_connection: Connection, fixture_headers: Headers) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.0);
     fixture_server_connection.bind_stream(0, 1, 101, false, 2.0);
 
@@ -1211,7 +1211,7 @@ fn test_early_buffer_global_limit(mut fixture_server_connection: Connection) {
     fixture_server_connection.state = ConnectionState::Connected;
     for stream_id in 0..10 {
         for _ in 0..100 {
-            fixture_server_connection.recv_datagram(stream_id, Bytes::from_static(b"d"), 1.0);
+            fixture_server_connection.receive_datagram(stream_id, Bytes::from_static(b"d"), 1.0);
         }
     }
     assert_eq!(fixture_server_connection.early_event_count, 1000);
@@ -1242,7 +1242,7 @@ fn test_export_keying_material_delegates(mut fixture_client_connection: Connecti
         .insert(0, 100);
     fixture_client_connection.create_session(100, create_session_request(vec![], None, false));
     let response_headers = vec![(Bytes::from_static(b":status"), Bytes::from_static(b"200"))];
-    fixture_client_connection.recv_headers(0, response_headers, 2.0);
+    fixture_client_connection.receive_headers(0, response_headers, 2.0);
 
     let effects = fixture_client_connection.export_keying_material(0, 101, "label", &[1, 2, 3], 32);
 
@@ -1390,7 +1390,7 @@ fn test_handle_stream_data_acknowledged_removes_closed_stream(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
     fixture_server_connection.bind_stream(0, 3, 101, true, 2.0);
     fixture_server_connection.write_stream(3, 102, Bytes::new(), true);
@@ -1429,7 +1429,7 @@ fn test_handle_stream_opened_delegates(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
 
     let effects = fixture_server_connection.handle_stream_opened(0, 4, 2.0);
@@ -1451,7 +1451,7 @@ fn test_handle_stream_opened_early_buffer_full_bidirectional(
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
     for _ in 0..100 {
-        fixture_server_connection.recv_datagram(0, Bytes::from_static(b"d"), 1.0);
+        fixture_server_connection.receive_datagram(0, Bytes::from_static(b"d"), 1.0);
     }
 
     let effects = fixture_server_connection.handle_stream_opened(0, 4, 2.0);
@@ -1478,7 +1478,7 @@ fn test_handle_stream_opened_early_buffer_full_unidirectional(
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
     for _ in 0..100 {
-        fixture_server_connection.recv_datagram(0, Bytes::from_static(b"d"), 1.0);
+        fixture_server_connection.receive_datagram(0, Bytes::from_static(b"d"), 1.0);
     }
 
     let effects = fixture_server_connection.handle_stream_opened(0, 2, 2.0);
@@ -1499,7 +1499,7 @@ fn test_handle_stream_opened_on_closed_session_not_mapped(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.reject_session(0, 100, vec![], 403, 1.5);
 
     let effects = fixture_server_connection.handle_stream_opened(0, 4, 2.0);
@@ -1526,7 +1526,7 @@ fn test_handle_terminated_cleans_up(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
 
     let effects = fixture_server_connection.handle_terminated(0, "reset".into(), 2.0);
 
@@ -1647,7 +1647,7 @@ fn test_has_flow_control_with_unidirectional_streams() {
 #[rstest]
 fn test_is_session_closed(mut fixture_server_connection: Connection, fixture_headers: Headers) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
 
     assert!(!fixture_server_connection.is_session_closed(0));
     assert!(!fixture_server_connection.is_session_closed(999));
@@ -1682,7 +1682,7 @@ fn test_prune_early_events_retains_unexpired(mut fixture_server_connection: Conn
 #[rstest]
 fn test_prune_early_events_timeout(mut fixture_server_connection: Connection) {
     fixture_server_connection.handle_stream_opened(0, 4, 1.0);
-    fixture_server_connection.recv_datagram(0, Bytes::from_static(b"data"), 1.0);
+    fixture_server_connection.receive_datagram(0, Bytes::from_static(b"data"), 1.0);
 
     let effects = fixture_server_connection.prune_early_events(10.0);
 
@@ -1726,7 +1726,7 @@ fn test_prune_resources_cleans_stream_map(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_settings(
+    fixture_server_connection.receive_settings(
         &H3Settings {
             wt_initial_max_data: Some(4 * 1024 * 1024),
             wt_initial_max_streams_bidi: Some(10),
@@ -1736,13 +1736,13 @@ fn test_prune_resources_cleans_stream_map(
         0.5,
     );
 
-    fixture_server_connection.recv_headers(0, fixture_headers.clone(), 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers.clone(), 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
     fixture_server_connection.handle_stream_opened(0, 4, 2.0);
     fixture_server_connection.close_session(0, 101, 0, None, 2.5);
-    fixture_server_connection.recv_connect_close(0, 3.0);
+    fixture_server_connection.receive_connect_close(0, 3.0);
 
-    fixture_server_connection.recv_headers(8, fixture_headers, 3.5);
+    fixture_server_connection.receive_headers(8, fixture_headers, 3.5);
     fixture_server_connection.accept_session(8, 102, vec![], None, 4.0);
     fixture_server_connection.handle_stream_opened(8, 12, 4.5);
 
@@ -1760,7 +1760,7 @@ fn test_prune_resources_keeps_active_sessions(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
     fixture_server_connection.handle_stream_opened(0, 4, 2.0);
 
@@ -1776,10 +1776,10 @@ fn test_prune_resources_removes_closed_sessions(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
     fixture_server_connection.close_session(0, 101, 0, None, 2.0);
-    fixture_server_connection.recv_connect_close(0, 2.5);
+    fixture_server_connection.receive_connect_close(0, 2.5);
 
     fixture_server_connection.prune_resources();
 
@@ -1792,12 +1792,12 @@ fn test_read_datagram_delegates(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
 
     let read_effects = fixture_server_connection.read_datagram(0, 101);
     let datagram_effects =
-        fixture_server_connection.recv_datagram(0, Bytes::from_static(b"datagram"), 2.0);
+        fixture_server_connection.receive_datagram(0, Bytes::from_static(b"datagram"), 2.0);
 
     assert!(read_effects.is_empty());
     assert!(matches!(
@@ -1826,7 +1826,7 @@ fn test_read_datagram_not_found(mut fixture_server_connection: Connection) {
 #[rstest]
 fn test_read_stream_delegates(mut fixture_server_connection: Connection, fixture_headers: Headers) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
     fixture_server_connection.handle_stream_opened(0, 4, 2.0);
 
@@ -1861,11 +1861,11 @@ fn test_read_stream_removes_closed_stream(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
     fixture_server_connection.handle_stream_opened(0, 4, 2.0);
     fixture_server_connection.reset_stream(4, 101, 0);
-    fixture_server_connection.recv_stream_data(4, Bytes::new(), true, 2.5);
+    fixture_server_connection.receive_stream_data(4, Bytes::new(), true, 2.5);
 
     let effects = fixture_server_connection.read_stream(4, 102, 1024);
 
@@ -1887,51 +1887,51 @@ fn test_read_stream_removes_closed_stream(
 }
 
 #[rstest]
-fn test_recv_capsule_delegates(
+fn test_receive_capsule_delegates(
     mut fixture_server_connection: Connection,
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
 
-    let effects = fixture_server_connection.recv_capsule(0, 0, &[], 2.0);
-
-    assert!(effects.is_empty());
-}
-
-#[rstest]
-fn test_recv_capsule_not_found(mut fixture_server_connection: Connection) {
-    let effects = fixture_server_connection.recv_capsule(999, 0, &[], 1.0);
+    let effects = fixture_server_connection.receive_capsule(0, 0, &[], 2.0);
 
     assert!(effects.is_empty());
 }
 
 #[rstest]
-fn test_recv_connect_close(mut fixture_server_connection: Connection, fixture_headers: Headers) {
+fn test_receive_capsule_not_found(mut fixture_server_connection: Connection) {
+    let effects = fixture_server_connection.receive_capsule(999, 0, &[], 1.0);
+
+    assert!(effects.is_empty());
+}
+
+#[rstest]
+fn test_receive_connect_close(mut fixture_server_connection: Connection, fixture_headers: Headers) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
 
-    let effects = fixture_server_connection.recv_connect_close(0, 2.0);
+    let effects = fixture_server_connection.receive_connect_close(0, 2.0);
 
     assert!(!effects.is_empty());
 }
 
 #[rstest]
-fn test_recv_connect_close_not_found(mut fixture_server_connection: Connection) {
-    let effects = fixture_server_connection.recv_connect_close(999, 1.0);
+fn test_receive_connect_close_not_found(mut fixture_server_connection: Connection) {
+    let effects = fixture_server_connection.receive_connect_close(999, 1.0);
 
     assert!(effects.is_empty());
 }
 
 #[rstest]
-fn test_recv_datagram_delegates(
+fn test_receive_datagram_delegates(
     mut fixture_server_connection: Connection,
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
 
-    fixture_server_connection.recv_datagram(0, Bytes::from_static(b"data"), 2.0);
+    fixture_server_connection.receive_datagram(0, Bytes::from_static(b"data"), 2.0);
 
     assert!(
         !fixture_server_connection
@@ -1941,28 +1941,28 @@ fn test_recv_datagram_delegates(
 }
 
 #[rstest]
-fn test_recv_datagram_early_buffer_full(mut fixture_server_connection: Connection) {
+fn test_receive_datagram_early_buffer_full(mut fixture_server_connection: Connection) {
     fixture_server_connection.state = ConnectionState::Connected;
     for _ in 0..100 {
-        fixture_server_connection.recv_datagram(0, Bytes::from_static(b"d"), 1.0);
+        fixture_server_connection.receive_datagram(0, Bytes::from_static(b"d"), 1.0);
     }
 
-    let effects = fixture_server_connection.recv_datagram(0, Bytes::from_static(b"drop"), 2.0);
+    let effects = fixture_server_connection.receive_datagram(0, Bytes::from_static(b"drop"), 2.0);
 
     assert!(effects.is_empty());
     assert_eq!(fixture_server_connection.early_event_count, 100);
 }
 
 #[rstest]
-fn test_recv_goaway_drains_sessions(
+fn test_receive_goaway_drains_sessions(
     mut fixture_server_connection: Connection,
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
 
-    let effects = fixture_server_connection.recv_goaway();
+    let effects = fixture_server_connection.receive_goaway();
 
     assert!(fixture_server_connection.peer_goaway_received);
     assert!(effects.iter().any(|effect| matches!(
@@ -1975,12 +1975,12 @@ fn test_recv_goaway_drains_sessions(
 }
 
 #[rstest]
-fn test_recv_goaway_fails_blocked_session_requests(mut fixture_client_connection: Connection) {
+fn test_receive_goaway_fails_blocked_session_requests(mut fixture_client_connection: Connection) {
     fixture_client_connection.state = ConnectionState::Connected;
     fixture_client_connection.create_session(100, create_session_request(vec![], None, false));
     fixture_client_connection.defer_session(100);
 
-    let effects = fixture_client_connection.recv_goaway();
+    let effects = fixture_client_connection.receive_goaway();
 
     assert!(fixture_client_connection.peer_goaway_received);
     assert!(
@@ -2000,14 +2000,14 @@ fn test_recv_goaway_fails_blocked_session_requests(mut fixture_client_connection
 }
 
 #[rstest]
-fn test_recv_max_streams_releases_blocked_session_requests(
+fn test_receive_max_streams_releases_blocked_session_requests(
     mut fixture_client_connection: Connection,
 ) {
     fixture_client_connection.state = ConnectionState::Connected;
     fixture_client_connection.create_session(100, create_session_request(vec![], None, false));
     let deferred_effects = fixture_client_connection.defer_session(100);
 
-    let effects = fixture_client_connection.recv_max_streams(false);
+    let effects = fixture_client_connection.receive_max_streams(false);
 
     assert!(deferred_effects.is_empty());
     assert!(
@@ -2026,17 +2026,17 @@ fn test_recv_max_streams_releases_blocked_session_requests(
 }
 
 #[rstest]
-fn test_recv_max_streams_releases_blocked_stream_requests(
+fn test_receive_max_streams_releases_blocked_stream_requests(
     mut fixture_server_connection: Connection,
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
     fixture_server_connection.create_stream(0, 200, true);
     let deferred_effects = fixture_server_connection.defer_stream(0, 200, true);
 
-    let effects = fixture_server_connection.recv_max_streams(true);
+    let effects = fixture_server_connection.receive_max_streams(true);
 
     assert!(deferred_effects.is_empty());
     assert!(matches!(
@@ -2050,7 +2050,7 @@ fn test_recv_max_streams_releases_blocked_stream_requests(
 }
 
 #[rstest]
-fn test_recv_settings_parses_values(mut fixture_client_connection: Connection) {
+fn test_receive_settings_parses_values(mut fixture_client_connection: Connection) {
     fixture_client_connection.state = ConnectionState::Connecting;
     fixture_client_connection.handshake_completed = true;
     let settings = H3Settings {
@@ -2060,7 +2060,7 @@ fn test_recv_settings_parses_values(mut fixture_client_connection: Connection) {
         ..Default::default()
     };
 
-    fixture_client_connection.recv_settings(&settings, 1.0);
+    fixture_client_connection.receive_settings(&settings, 1.0);
 
     assert_eq!(fixture_client_connection.peer_initial_max_data, 1024);
     assert_eq!(fixture_client_connection.peer_initial_max_streams_bidi, 10);
@@ -2068,12 +2068,12 @@ fn test_recv_settings_parses_values(mut fixture_client_connection: Connection) {
 }
 
 #[rstest]
-fn test_recv_settings_triggers_ready(mut fixture_client_connection: Connection) {
+fn test_receive_settings_triggers_ready(mut fixture_client_connection: Connection) {
     fixture_client_connection.state = ConnectionState::Connecting;
     fixture_client_connection.handshake_completed = true;
     let settings = H3Settings::default();
 
-    let effects = fixture_client_connection.recv_settings(&settings, 1.0);
+    let effects = fixture_client_connection.receive_settings(&settings, 1.0);
 
     assert_eq!(fixture_client_connection.state, ConnectionState::Connected);
     assert!(fixture_client_connection.peer_settings_received);
@@ -2087,15 +2087,15 @@ fn test_recv_settings_triggers_ready(mut fixture_client_connection: Connection) 
 }
 
 #[rstest]
-fn test_recv_stop_sending_aborts_session(
+fn test_receive_stop_sending_aborts_session(
     mut fixture_server_connection: Connection,
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
 
-    let effects = fixture_server_connection.recv_stop_sending(0, ERR_H3_REQUEST_REJECTED, 2.0);
+    let effects = fixture_server_connection.receive_stop_sending(0, ERR_H3_REQUEST_REJECTED, 2.0);
 
     assert!(fixture_server_connection.is_session_closed(0));
     assert!(matches!(
@@ -2115,16 +2115,16 @@ fn test_recv_stop_sending_aborts_session(
 }
 
 #[rstest]
-fn test_recv_stop_sending_delegates(
+fn test_receive_stop_sending_delegates(
     mut fixture_server_connection: Connection,
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.0);
     fixture_server_connection.bind_stream(0, 1, 101, false, 2.0);
 
-    let effects = fixture_server_connection.recv_stop_sending(1, 0, 3.0);
+    let effects = fixture_server_connection.receive_stop_sending(1, 0, 3.0);
 
     assert!(fixture_server_connection.has_stream(1));
     assert!(matches!(
@@ -2140,23 +2140,23 @@ fn test_recv_stop_sending_delegates(
 }
 
 #[rstest]
-fn test_recv_stop_sending_not_found(mut fixture_server_connection: Connection) {
-    let effects = fixture_server_connection.recv_stop_sending(4, 0, 1.0);
+fn test_receive_stop_sending_not_found(mut fixture_server_connection: Connection) {
+    let effects = fixture_server_connection.receive_stop_sending(4, 0, 1.0);
 
     assert!(effects.is_empty());
 }
 
 #[rstest]
-fn test_recv_stop_sending_removes_closed_stream(
+fn test_receive_stop_sending_removes_closed_stream(
     mut fixture_server_connection: Connection,
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
     fixture_server_connection.bind_stream(0, 3, 101, true, 2.0);
 
-    let effects = fixture_server_connection.recv_stop_sending(3, 0, 3.0);
+    let effects = fixture_server_connection.receive_stop_sending(3, 0, 3.0);
 
     assert!(!fixture_server_connection.has_stream(3));
     assert!(matches!(
@@ -2177,18 +2177,18 @@ fn test_recv_stop_sending_removes_closed_stream(
 }
 
 #[rstest]
-fn test_recv_stream_data_delegates(
+fn test_receive_stream_data_delegates(
     mut fixture_server_connection: Connection,
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
     fixture_server_connection.handle_stream_opened(0, 4, 2.0);
     fixture_server_connection.read_stream(4, 101, 1024);
 
     let effects =
-        fixture_server_connection.recv_stream_data(4, Bytes::from_static(b"data"), false, 3.0);
+        fixture_server_connection.receive_stream_data(4, Bytes::from_static(b"data"), false, 3.0);
 
     assert!(fixture_server_connection.has_stream(4));
     assert!(matches!(
@@ -2201,27 +2201,27 @@ fn test_recv_stream_data_delegates(
 }
 
 #[rstest]
-fn test_recv_stream_data_not_found(mut fixture_server_connection: Connection) {
+fn test_receive_stream_data_not_found(mut fixture_server_connection: Connection) {
     let effects =
-        fixture_server_connection.recv_stream_data(4, Bytes::from_static(b"data"), false, 1.0);
+        fixture_server_connection.receive_stream_data(4, Bytes::from_static(b"data"), false, 1.0);
 
     assert!(effects.is_empty());
     assert_eq!(fixture_server_connection.early_event_count, 0);
 }
 
 #[rstest]
-fn test_recv_stream_data_removes_closed_stream(
+fn test_receive_stream_data_removes_closed_stream(
     mut fixture_server_connection: Connection,
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
     fixture_server_connection.handle_stream_opened(0, 4, 2.0);
     fixture_server_connection.reset_stream(4, 101, 0);
     fixture_server_connection.read_stream(4, 102, 1024);
 
-    let effects = fixture_server_connection.recv_stream_data(4, Bytes::new(), true, 3.0);
+    let effects = fixture_server_connection.receive_stream_data(4, Bytes::new(), true, 3.0);
 
     assert!(!fixture_server_connection.has_stream(4));
     assert!(matches!(
@@ -2241,15 +2241,15 @@ fn test_recv_stream_data_removes_closed_stream(
 }
 
 #[rstest]
-fn test_recv_stream_reset_aborts_session(
+fn test_receive_stream_reset_aborts_session(
     mut fixture_server_connection: Connection,
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
 
-    let effects = fixture_server_connection.recv_stream_reset(0, ERR_H3_REQUEST_REJECTED, 2.0);
+    let effects = fixture_server_connection.receive_stream_reset(0, ERR_H3_REQUEST_REJECTED, 2.0);
 
     assert!(fixture_server_connection.is_session_closed(0));
     assert!(matches!(
@@ -2269,16 +2269,16 @@ fn test_recv_stream_reset_aborts_session(
 }
 
 #[rstest]
-fn test_recv_stream_reset_delegates(
+fn test_receive_stream_reset_delegates(
     mut fixture_server_connection: Connection,
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
     fixture_server_connection.bind_stream(0, 1, 101, false, 2.0);
 
-    let effects = fixture_server_connection.recv_stream_reset(1, 0, 3.0);
+    let effects = fixture_server_connection.receive_stream_reset(1, 0, 3.0);
 
     assert!(fixture_server_connection.has_stream(1));
     assert!(matches!(
@@ -2292,23 +2292,23 @@ fn test_recv_stream_reset_delegates(
 }
 
 #[rstest]
-fn test_recv_stream_reset_not_found(mut fixture_server_connection: Connection) {
-    let effects = fixture_server_connection.recv_stream_reset(4, 0, 1.0);
+fn test_receive_stream_reset_not_found(mut fixture_server_connection: Connection) {
+    let effects = fixture_server_connection.receive_stream_reset(4, 0, 1.0);
 
     assert!(effects.is_empty());
 }
 
 #[rstest]
-fn test_recv_stream_reset_removes_closed_stream(
+fn test_receive_stream_reset_removes_closed_stream(
     mut fixture_server_connection: Connection,
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
     fixture_server_connection.handle_stream_opened(0, 2, 2.0);
 
-    let effects = fixture_server_connection.recv_stream_reset(2, 0, 3.0);
+    let effects = fixture_server_connection.receive_stream_reset(2, 0, 3.0);
 
     assert!(!fixture_server_connection.has_stream(2));
     assert!(matches!(
@@ -2329,8 +2329,8 @@ fn test_recv_stream_reset_removes_closed_stream(
 }
 
 #[rstest]
-fn test_recv_transport_parameters(mut fixture_server_connection: Connection) {
-    let effects = fixture_server_connection.recv_transport_parameters(2000);
+fn test_receive_transport_parameters(mut fixture_server_connection: Connection) {
+    let effects = fixture_server_connection.receive_transport_parameters(2000);
 
     assert_eq!(
         fixture_server_connection.peer_max_datagram_frame_size(),
@@ -2362,7 +2362,7 @@ fn test_reject_session_delegates(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
 
     let effects = fixture_server_connection.reject_session(0, 100, vec![], 403, 2.0);
 
@@ -2388,7 +2388,7 @@ fn test_reset_stream_delegates(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.0);
     fixture_server_connection.bind_stream(0, 1, 101, false, 2.0);
 
@@ -2426,7 +2426,7 @@ fn test_reset_stream_removes_closed_stream(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
     fixture_server_connection.bind_stream(0, 3, 101, true, 2.0);
 
@@ -2456,8 +2456,8 @@ fn test_send_datagram_delegates(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_transport_parameters(1200);
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_transport_parameters(1200);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
     let data = Bytes::from_static(b"datagram");
 
@@ -2483,7 +2483,7 @@ fn test_send_datagram_not_found(mut fixture_server_connection: Connection) {
 }
 
 #[rstest]
-fn test_server_recv_headers_combines_wt_available_protocols(
+fn test_server_receive_headers_combines_wt_available_protocols(
     mut fixture_server_connection: Connection,
     fixture_headers: Headers,
 ) {
@@ -2498,7 +2498,7 @@ fn test_server_recv_headers_combines_wt_available_protocols(
         Bytes::from_static(b"\"p1\";q=1"),
     ));
 
-    let effects = fixture_server_connection.recv_headers(0, headers, 1.0);
+    let effects = fixture_server_connection.receive_headers(0, headers, 1.0);
 
     assert!(matches!(
         effects.as_slice(),
@@ -2514,13 +2514,13 @@ fn test_server_recv_headers_combines_wt_available_protocols(
 }
 
 #[rstest]
-fn test_server_recv_headers_creates_session(
+fn test_server_receive_headers_creates_session(
     mut fixture_server_connection: Connection,
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
 
-    let effects = fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    let effects = fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
 
     assert!(fixture_server_connection.sessions.contains_key(&0));
     assert!(matches!(
@@ -2536,7 +2536,7 @@ fn test_server_recv_headers_creates_session(
 }
 
 #[rstest]
-fn test_server_recv_headers_defaults_path(mut fixture_server_connection: Connection) {
+fn test_server_receive_headers_defaults_path(mut fixture_server_connection: Connection) {
     fixture_server_connection.state = ConnectionState::Connected;
     let headers = vec![
         (
@@ -2549,7 +2549,7 @@ fn test_server_recv_headers_defaults_path(mut fixture_server_connection: Connect
         ),
     ];
 
-    let effects = fixture_server_connection.recv_headers(0, headers, 1.0);
+    let effects = fixture_server_connection.receive_headers(0, headers, 1.0);
 
     assert!(fixture_server_connection.sessions.contains_key(&0));
     assert!(matches!(
@@ -2563,27 +2563,14 @@ fn test_server_recv_headers_defaults_path(mut fixture_server_connection: Connect
 }
 
 #[rstest]
-fn test_server_recv_headers_existing_session_ignored(
-    mut fixture_server_connection: Connection,
-    fixture_headers: Headers,
-) {
-    fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers.clone(), 1.0);
-
-    let effects = fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
-
-    assert!(effects.is_empty());
-}
-
-#[rstest]
-fn test_server_recv_headers_local_goaway_rejects(
+fn test_server_receive_headers_local_goaway_rejects(
     mut fixture_server_connection: Connection,
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
     fixture_server_connection.local_goaway_sent = true;
 
-    let effects = fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    let effects = fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
 
     assert!(matches!(
         effects.as_slice(),
@@ -2598,7 +2585,7 @@ fn test_server_recv_headers_local_goaway_rejects(
 }
 
 #[rstest]
-fn test_server_recv_headers_no_flow_control_limit_reached(
+fn test_server_receive_headers_no_flow_control_limit_reached(
     mut fixture_server_connection: Connection,
     fixture_headers: Headers,
 ) {
@@ -2607,9 +2594,9 @@ fn test_server_recv_headers_no_flow_control_limit_reached(
     fixture_server_connection.initial_max_streams_bidi = 0;
     fixture_server_connection.initial_max_streams_uni = 0;
     fixture_server_connection.peer_initial_max_data = 0;
-    fixture_server_connection.recv_headers(0, fixture_headers.clone(), 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers.clone(), 1.0);
 
-    let effects = fixture_server_connection.recv_headers(1, fixture_headers, 1.0);
+    let effects = fixture_server_connection.receive_headers(4, fixture_headers, 1.0);
 
     assert_eq!(fixture_server_connection.sessions.len(), 1);
     assert!(matches!(
@@ -2619,7 +2606,9 @@ fn test_server_recv_headers_no_flow_control_limit_reached(
 }
 
 #[rstest]
-fn test_server_recv_headers_non_utf8_path_defaults_path(mut fixture_server_connection: Connection) {
+fn test_server_receive_headers_non_utf8_path_defaults_path(
+    mut fixture_server_connection: Connection,
+) {
     fixture_server_connection.state = ConnectionState::Connected;
     let headers = vec![
         (
@@ -2633,7 +2622,7 @@ fn test_server_recv_headers_non_utf8_path_defaults_path(mut fixture_server_conne
         (Bytes::from_static(b":path"), Bytes::from_static(b"/\xff")),
     ];
 
-    let effects = fixture_server_connection.recv_headers(0, headers, 1.0);
+    let effects = fixture_server_connection.receive_headers(0, headers, 1.0);
 
     assert!(matches!(
         effects.as_slice(),
@@ -2646,11 +2635,11 @@ fn test_server_recv_headers_non_utf8_path_defaults_path(mut fixture_server_conne
 }
 
 #[rstest]
-fn test_server_recv_headers_rejects_invalid_protocol(mut fixture_server_connection: Connection) {
+fn test_server_receive_headers_rejects_invalid_protocol(mut fixture_server_connection: Connection) {
     fixture_server_connection.state = ConnectionState::Connected;
     let headers = vec![(Bytes::from_static(b":method"), Bytes::from_static(b"POST"))];
 
-    let effects = fixture_server_connection.recv_headers(0, headers, 1.0);
+    let effects = fixture_server_connection.receive_headers(0, headers, 1.0);
 
     assert!(!fixture_server_connection.sessions.contains_key(&0));
     assert!(matches!(
@@ -2660,16 +2649,16 @@ fn test_server_recv_headers_rejects_invalid_protocol(mut fixture_server_connecti
 }
 
 #[rstest]
-fn test_server_recv_headers_rejects_max_sessions(
+fn test_server_receive_headers_rejects_max_sessions(
     mut fixture_server_connection: Connection,
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
     fixture_server_connection.peer_initial_max_data = 100;
     fixture_server_connection.max_sessions = 1;
-    fixture_server_connection.recv_headers(0, fixture_headers.clone(), 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers.clone(), 1.0);
 
-    let effects = fixture_server_connection.recv_headers(1, fixture_headers, 1.0);
+    let effects = fixture_server_connection.receive_headers(4, fixture_headers, 1.0);
 
     assert_eq!(fixture_server_connection.sessions.len(), 1);
     assert!(matches!(
@@ -2679,15 +2668,15 @@ fn test_server_recv_headers_rejects_max_sessions(
 }
 
 #[rstest]
-fn test_server_recv_headers_replays_early_events(
+fn test_server_receive_headers_replays_early_events(
     mut fixture_server_connection: Connection,
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_datagram(0, Bytes::from_static(b"early"), 0.5);
+    fixture_server_connection.receive_datagram(0, Bytes::from_static(b"early"), 0.5);
     fixture_server_connection.handle_stream_opened(0, 4, 0.5);
 
-    let effects = fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    let effects = fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
 
     assert_eq!(fixture_server_connection.early_event_count, 0);
     assert_eq!(fixture_server_connection.stream_map.get(&4), Some(&0));
@@ -2712,13 +2701,13 @@ fn test_server_recv_headers_replays_early_events(
 }
 
 #[rstest]
-fn test_server_recv_headers_wrong_state_rejects(
+fn test_server_receive_headers_wrong_state_rejects(
     mut fixture_server_connection: Connection,
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Idle;
 
-    let effects = fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    let effects = fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
 
     assert!(matches!(
         effects.as_slice(),
@@ -2729,7 +2718,7 @@ fn test_server_recv_headers_wrong_state_rejects(
 #[rstest]
 fn test_stop_stream_delegates(mut fixture_server_connection: Connection, fixture_headers: Headers) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.0);
     fixture_server_connection.bind_stream(0, 1, 101, false, 2.0);
 
@@ -2767,7 +2756,7 @@ fn test_stop_stream_removes_closed_stream(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
     fixture_server_connection.handle_stream_opened(0, 2, 2.0);
 
@@ -2798,7 +2787,7 @@ fn test_write_stream_delegates(
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
     fixture_server_connection.peer_initial_max_data = 1000;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
     fixture_server_connection.bind_stream(0, 1, 101, false, 2.0);
 
@@ -2849,7 +2838,7 @@ fn test_write_stream_removes_stale_stream(
     fixture_headers: Headers,
 ) {
     fixture_server_connection.state = ConnectionState::Connected;
-    fixture_server_connection.recv_headers(0, fixture_headers, 1.0);
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
     fixture_server_connection.handle_stream_opened(0, 4, 2.0);
     fixture_server_connection.close_session(0, 101, 0, None, 2.5);

@@ -316,7 +316,7 @@ class WebTransportReceiveStream(WebTransportStream):
                 )
                 self._read_task = read_task
 
-            outcome = await asyncio.shield(read_task)
+            outcome = await asyncio.shield(arg=read_task)
             if self._read_task is not read_task:
                 continue
             self._read_task = None
@@ -361,7 +361,7 @@ class WebTransportReceiveStream(WebTransportStream):
         bytes_read = 0
 
         try:
-            async with asyncio.timeout(read_timeout):
+            async with asyncio.timeout(delay=read_timeout):
                 while bytes_read < size:
                     needed = size - bytes_read
                     chunk = await self.read(max_size=needed)
@@ -392,7 +392,7 @@ class WebTransportReceiveStream(WebTransportStream):
 
         data = bytearray()
         try:
-            async with asyncio.timeout(read_timeout):
+            async with asyncio.timeout(delay=read_timeout):
                 while True:
                     chunk = await self.read(max_size=_READ_CHUNK_SIZE)
                     if not chunk:
@@ -547,16 +547,16 @@ class WebTransportSendStream(WebTransportStream):
             ) from e
 
         offset = 0
-        data_len = len(data)
+        data_length = len(data)
 
         if not data:
             await self.write(data=b"", end_stream=end_stream)
             return
 
-        while offset < data_len:
+        while offset < data_length:
             chunk = data[offset : offset + _WRITE_CHUNK_SIZE]
             offset += len(chunk)
-            is_last_chunk = offset >= data_len
+            is_last_chunk = offset >= data_length
             await self.write(data=chunk, end_stream=end_stream if is_last_chunk else False)
 
 

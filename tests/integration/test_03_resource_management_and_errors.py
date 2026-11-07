@@ -4,8 +4,6 @@ import pytest
 
 from pywebtransport import ClientConfig, ClientError, TimeoutError, WebTransportClient, WebTransportSession
 
-pytestmark = pytest.mark.asyncio
-
 
 @pytest.mark.parametrize(argnames="server_config", argvalues=[{"max_connections": 1}], indirect=True)
 async def test_max_connections_limit_rejection(

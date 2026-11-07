@@ -264,7 +264,7 @@ class WebTransportConnection:
         while True:
             session = await self._incoming_sessions.get()
             if session is None:
-                self._incoming_sessions.put_nowait(None)
+                self._incoming_sessions.put_nowait(item=None)
                 return
             yield session
 
@@ -315,7 +315,7 @@ class WebTransportConnection:
             stream._handle_closed()
         self._session_handles.clear()
         self._stream_handles.clear()
-        self._incoming_sessions.put_nowait(None)
+        self._incoming_sessions.put_nowait(item=None)
         _logger.info("wt_connection close connection_handle=%d", self.handle)
 
     def _handle_event(self, *, event_type: EventType, data: dict[str, Any]) -> None:
@@ -354,7 +354,7 @@ class WebTransportConnection:
                 self._route_stream_event(event_type=event_type, data=data)
 
             if event_type == EventType.CONNECTION_CLOSED:
-                asyncio.create_task(
+                self._controller.create_task(
                     coro=self._dispatch_final_event(emitter=self.events, event_type=event_type, data=data)
                 )
             else:
@@ -395,7 +395,7 @@ class WebTransportConnection:
                 data["session"] = session
 
                 if event_type == EventType.SESSION_REQUEST_RECEIVED:
-                    self._incoming_sessions.put_nowait(session)
+                    self._incoming_sessions.put_nowait(item=session)
             else:
                 _logger.warning("wt_session validate failed session_id=%d", session_id)
 
@@ -459,7 +459,7 @@ class WebTransportConnection:
             if event_type == EventType.SESSION_CLOSED:
                 self._session_handles.pop(session_id, None)
                 session._handle_closed(error_code=data.get("error_code"))
-                asyncio.create_task(
+                self._controller.create_task(
                     coro=self._dispatch_final_event(emitter=session.events, event_type=event_type, data=data)
                 )
             else:
@@ -479,7 +479,7 @@ class WebTransportConnection:
             if event_type == EventType.STREAM_CLOSED:
                 self._stream_handles.pop(stream_id, None)
                 stream._handle_closed()
-                asyncio.create_task(
+                self._controller.create_task(
                     coro=self._dispatch_final_event(emitter=stream.events, event_type=event_type, data=data)
                 )
             else:

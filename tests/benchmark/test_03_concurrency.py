@@ -23,14 +23,14 @@ STATIC_VIEW: Final[memoryview] = memoryview(b"x" * PAYLOAD_SIZE)
 logging.basicConfig(level=logging.CRITICAL, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def client_config() -> ClientConfig:
     return ClientConfig(verify_mode=ssl.CERT_NONE)
 
 
 class TestConcurrency:
 
-    def test_multiplexing_rps(self, *, benchmark: BenchmarkFixture, client_config: ClientConfig) -> None:
+    def test_multiplexing_rate(self, *, benchmark: BenchmarkFixture, client_config: ClientConfig) -> None:
         url = f"{SERVER_URL_BASE}/discard"
 
         with self._sync_session(config=client_config, url=url) as (loop, session):
@@ -46,16 +46,16 @@ class TestConcurrency:
                 await asyncio.gather(*tasks)
 
             for _ in range(WARMUP_ROUNDS):
-                loop.run_until_complete(run_multiplexing())
+                loop.run_until_complete(future=run_multiplexing())
             gc.collect()
 
-            benchmark(lambda: loop.run_until_complete(run_multiplexing()))
+            benchmark(function_to_benchmark=lambda: loop.run_until_complete(future=run_multiplexing()))
 
         stats = cast(dict[str, Any], benchmark.stats)
         mean_time = stats["mean"]
 
-        rps = CONCURRENT_STREAMS / mean_time if mean_time > 0 else 0
-        benchmark.extra_info["streams_per_second"] = rps
+        streams_per_second = CONCURRENT_STREAMS / mean_time if mean_time > 0 else 0
+        benchmark.extra_info["streams_per_second"] = streams_per_second
 
     def test_connection_rate(self, *, benchmark: BenchmarkFixture, client_config: ClientConfig) -> None:
         url = f"{SERVER_URL_BASE}/latency"
@@ -71,30 +71,28 @@ class TestConcurrency:
                 await asyncio.gather(*tasks)
 
         for _ in range(WARMUP_ROUNDS):
-            asyncio.run(run_concurrent_connections())
+            asyncio.run(main=run_concurrent_connections())
         gc.collect()
 
-        benchmark(lambda: asyncio.run(run_concurrent_connections()))
+        benchmark(function_to_benchmark=lambda: asyncio.run(main=run_concurrent_connections()))
 
         stats = cast(dict[str, Any], benchmark.stats)
         mean_time = stats["mean"]
-        rate = CONCURRENT_CONNECTIONS / mean_time if mean_time > 0 else 0
-        benchmark.extra_info["connections_per_second"] = rate
+        connections_per_second = CONCURRENT_CONNECTIONS / mean_time if mean_time > 0 else 0
+        benchmark.extra_info["connections_per_second"] = connections_per_second
 
     @contextlib.contextmanager
     def _sync_session(
         self, *, config: ClientConfig, url: str
     ) -> Generator[tuple[asyncio.AbstractEventLoop, WebTransportSession], None, None]:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        stack = contextlib.AsyncExitStack()
+        with asyncio.Runner() as runner:
+            loop = runner.get_loop()
+            stack = contextlib.AsyncExitStack()
 
-        try:
-            client = loop.run_until_complete(stack.enter_async_context(WebTransportClient(config=config)))
-            session = loop.run_until_complete(client.connect(url=url))
-            loop.run_until_complete(stack.enter_async_context(session))
-            yield loop, session
-        finally:
-            loop.run_until_complete(stack.aclose())
-            loop.close()
-            asyncio.set_event_loop(None)
+            try:
+                client = loop.run_until_complete(future=stack.enter_async_context(cm=WebTransportClient(config=config)))
+                session = loop.run_until_complete(future=client.connect(url=url))
+                loop.run_until_complete(future=stack.enter_async_context(cm=session))
+                yield loop, session
+            finally:
+                loop.run_until_complete(future=stack.aclose())

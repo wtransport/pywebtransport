@@ -7,16 +7,22 @@ import pytest
 from pytest_mock import MockerFixture
 
 from pywebtransport import ServerConfig, ServerError, WebTransportConnection, WebTransportServer
+from pywebtransport._controller.controller import EndpointController
 
 
 class TestWebTransportServer:
 
     @pytest.fixture
+    def mock_connection_class(self, mocker: MockerFixture) -> Any:
+        mock_connection = mocker.create_autospec(spec=WebTransportConnection, instance=True)
+        mock_connection.handle = 42
+
+        return mocker.patch(target="pywebtransport.server.WebTransportConnection", return_value=mock_connection)
+
+    @pytest.fixture
     def mock_controller(self, mocker: MockerFixture) -> Any:
-        controller = mocker.MagicMock()
-        controller.close = mocker.AsyncMock()
+        controller = mocker.create_autospec(spec=EndpointController, instance=True)
         controller.get_local_addresses.return_value = [("127.0.0.1", 4433)]
-        controller.start = mocker.AsyncMock()
         return controller
 
     @pytest.fixture
@@ -35,17 +41,9 @@ class TestWebTransportServer:
         )
 
     @pytest.fixture
-    def mock_connection_class(self, mocker: MockerFixture) -> Any:
-        mock_connection = mocker.create_autospec(spec=WebTransportConnection, instance=True)
-        mock_connection.handle = 42
-
-        return mocker.patch(target="pywebtransport.server.WebTransportConnection", return_value=mock_connection)
-
-    @pytest.fixture
     def server(self, mock_server_config: ServerConfig) -> WebTransportServer:
         return WebTransportServer(config=mock_server_config)
 
-    @pytest.mark.asyncio
     async def test_async_context_manager(self, server: WebTransportServer, mocker: MockerFixture) -> None:
         mock_close = mocker.patch.object(target=server, attribute="close", new_callable=mocker.AsyncMock)
 
@@ -55,7 +53,6 @@ class TestWebTransportServer:
 
         mock_close.assert_awaited_once()
 
-    @pytest.mark.asyncio
     async def test_async_context_manager_with_exception(
         self, server: WebTransportServer, mocker: MockerFixture
     ) -> None:
@@ -67,7 +64,6 @@ class TestWebTransportServer:
 
         mock_close.assert_awaited_once()
 
-    @pytest.mark.asyncio
     async def test_close(
         self,
         server: WebTransportServer,
@@ -83,7 +79,6 @@ class TestWebTransportServer:
         assert server._controller is None
         assert server._incoming_connections.get_nowait() is None
 
-    @pytest.mark.asyncio
     async def test_close_already_in_progress(self, server: WebTransportServer) -> None:
         async def dummy_task() -> None:
             await asyncio.sleep(delay=0.1)
@@ -103,7 +98,6 @@ class TestWebTransportServer:
 
         assert server._serving is True
 
-    @pytest.mark.asyncio
     async def test_close_defensive_check_no_controller(self, server: WebTransportServer) -> None:
         server._serving = True
         server._controller = None
@@ -113,7 +107,6 @@ class TestWebTransportServer:
         assert server.is_serving is False
         assert server.is_closed
 
-    @pytest.mark.asyncio
     async def test_close_idempotency(
         self, server: WebTransportServer, mock_endpoint_controller_class: Any, mock_controller: Any
     ) -> None:
@@ -128,7 +121,6 @@ class TestWebTransportServer:
         mock_controller.close.assert_awaited_once()
         assert not server.is_serving
 
-    @pytest.mark.asyncio
     async def test_close_reaches_terminal_state_on_controller_error(
         self, server: WebTransportServer, mock_endpoint_controller_class: Any, mock_controller: Any
     ) -> None:
@@ -142,7 +134,6 @@ class TestWebTransportServer:
         assert server._closing is False
         assert server._shutdown_event.is_set()
 
-    @pytest.mark.asyncio
     async def test_close_with_finished_previous_close_task(
         self, server: WebTransportServer, mock_controller: Any, mocker: MockerFixture
     ) -> None:
@@ -168,11 +159,10 @@ class TestWebTransportServer:
         assert result is mock_connection_class.return_value
         assert server._incoming_connections.get_nowait() is result
 
-    @pytest.mark.asyncio
     async def test_incoming_connections_until_closed(self, server: WebTransportServer, mocker: MockerFixture) -> None:
         connection = mocker.create_autospec(spec=WebTransportConnection, instance=True)
-        server._incoming_connections.put_nowait(connection)
-        server._incoming_connections.put_nowait(None)
+        server._incoming_connections.put_nowait(item=connection)
+        server._incoming_connections.put_nowait(item=None)
 
         connections = [item async for item in server.incoming_connections()]
 
@@ -185,7 +175,6 @@ class TestWebTransportServer:
     def test_is_closed_default(self, server: WebTransportServer) -> None:
         assert not server.is_closed
 
-    @pytest.mark.asyncio
     async def test_listen_after_close_raises_error(
         self, server: WebTransportServer, mock_endpoint_controller_class: Any, mock_controller: Any
     ) -> None:
@@ -195,7 +184,6 @@ class TestWebTransportServer:
         with pytest.raises(expected_exception=ServerError, match="app_server validate failed"):
             await server.listen()
 
-    @pytest.mark.asyncio
     async def test_listen_cert_file_not_found(
         self, server: WebTransportServer, mock_endpoint_controller_class: Any, mocker: MockerFixture
     ) -> None:
@@ -204,7 +192,6 @@ class TestWebTransportServer:
         with pytest.raises(expected_exception=ServerError, match="sys_file open failed"):
             await server.listen()
 
-    @pytest.mark.asyncio
     async def test_listen_generic_exception(
         self, server: WebTransportServer, mock_endpoint_controller_class: Any, mocker: MockerFixture
     ) -> None:
@@ -213,28 +200,24 @@ class TestWebTransportServer:
         with pytest.raises(expected_exception=ServerError, match="app_server open failed"):
             await server.listen()
 
-    @pytest.mark.asyncio
     async def test_listen_raises_error_if_already_closed(self, server: WebTransportServer) -> None:
         server._closed = True
 
         with pytest.raises(expected_exception=ServerError, match="app_server validate failed"):
             await server.listen()
 
-    @pytest.mark.asyncio
     async def test_listen_raises_error_if_already_closing(self, server: WebTransportServer) -> None:
         server._closing = True
 
         with pytest.raises(expected_exception=ServerError, match="app_server validate failed"):
             await server.listen()
 
-    @pytest.mark.asyncio
     async def test_listen_raises_error_if_already_serving(self, server: WebTransportServer) -> None:
         server._serving = True
 
         with pytest.raises(expected_exception=ServerError, match="app_server validate failed"):
             await server.listen()
 
-    @pytest.mark.asyncio
     async def test_listen_success(
         self, server: WebTransportServer, mock_endpoint_controller_class: Any, mock_controller: Any
     ) -> None:
@@ -250,7 +233,6 @@ class TestWebTransportServer:
 
         assert call_kwargs["connection_factory"] == server._create_connection
 
-    @pytest.mark.asyncio
     async def test_listen_success_no_addresses(
         self,
         server: WebTransportServer,
@@ -267,7 +249,6 @@ class TestWebTransportServer:
         assert server.local_addresses == []
         spy_logger.assert_any_call("app_server open")
 
-    @pytest.mark.asyncio
     async def test_listen_with_explicit_host_port(
         self,
         server: WebTransportServer,
@@ -300,7 +281,6 @@ class TestWebTransportServer:
 
         assert server.local_addresses == []
 
-    @pytest.mark.asyncio
     async def test_serve_forever_cancelled(
         self, server: WebTransportServer, mocker: MockerFixture, mock_endpoint_controller_class: Any
     ) -> None:
@@ -319,7 +299,6 @@ class TestWebTransportServer:
 
         assert task.result() is None
 
-    @pytest.mark.asyncio
     async def test_serve_forever_graceful_exit(
         self, server: WebTransportServer, mock_endpoint_controller_class: Any, mocker: MockerFixture
     ) -> None:
@@ -334,7 +313,6 @@ class TestWebTransportServer:
 
         assert not server.is_serving
 
-    @pytest.mark.asyncio
     async def test_serve_forever_keyboard_interrupt(
         self, server: WebTransportServer, mock_endpoint_controller_class: Any, mocker: MockerFixture
     ) -> None:
@@ -347,12 +325,10 @@ class TestWebTransportServer:
         with pytest.raises(expected_exception=KeyboardInterrupt):
             await server.serve_forever()
 
-    @pytest.mark.asyncio
     async def test_serve_forever_not_listening(self, server: WebTransportServer) -> None:
         with pytest.raises(expected_exception=ServerError, match="app_server validate failed"):
             await server.serve_forever()
 
-    @pytest.mark.asyncio
     async def test_serve_forever_wait_exception(
         self, server: WebTransportServer, mock_endpoint_controller_class: Any, mocker: MockerFixture
     ) -> None:

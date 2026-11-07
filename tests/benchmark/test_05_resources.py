@@ -20,7 +20,7 @@ STABILIZATION_SECONDS: Final[float] = 5.0
 logging.basicConfig(level=logging.CRITICAL, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def client_config() -> ClientConfig:
     return ClientConfig(verify_mode=ssl.CERT_NONE, connect_timeout=60.0, max_connections=4000)
 
@@ -61,14 +61,14 @@ class TestResources:
                         if sessions:
                             close_semaphore = asyncio.Semaphore(value=100)
 
-                            async def close_one(session: WebTransportSession) -> None:
+                            async def close_one(*, session: WebTransportSession) -> None:
                                 async with close_semaphore:
                                     await session.close()
 
-                            tasks = [asyncio.create_task(coro=close_one(session)) for session in sessions]
+                            tasks = [asyncio.create_task(coro=close_one(session=session)) for session in sessions]
                             await asyncio.gather(*tasks)
 
-            return asyncio.run(run_full_cycle())
+            return asyncio.run(main=run_full_cycle())
 
         memory_increase = benchmark.pedantic(
             target=run_measurement, iterations=1, rounds=1

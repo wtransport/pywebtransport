@@ -271,7 +271,7 @@ class WebTransportSession:
 
     async def ensure_ready(self) -> None:
         """Ensure the session is ready."""
-        error = await asyncio.shield(self._ready)
+        error = await asyncio.shield(arg=self._ready)
         if error is not None:
             raise error
 
@@ -305,7 +305,7 @@ class WebTransportSession:
         while True:
             stream = await self._incoming_streams_bidi.get()
             if stream is None:
-                self._incoming_streams_bidi.put_nowait(None)
+                self._incoming_streams_bidi.put_nowait(item=None)
                 return
             yield stream
 
@@ -314,7 +314,7 @@ class WebTransportSession:
         while True:
             stream = await self._incoming_streams_uni.get()
             if stream is None:
-                self._incoming_streams_uni.put_nowait(None)
+                self._incoming_streams_uni.put_nowait(item=None)
                 return
             yield stream
 
@@ -347,7 +347,7 @@ class WebTransportSession:
                 )
                 self._datagram_read_task = datagram_read_task
 
-            outcome = await asyncio.shield(datagram_read_task)
+            outcome = await asyncio.shield(arg=datagram_read_task)
             if self._datagram_read_task is not datagram_read_task:
                 continue
             self._datagram_read_task = None
@@ -448,8 +448,8 @@ class WebTransportSession:
 
     def _handle_closed(self, *, error_code: ErrorCode | None) -> None:
         self._is_closed = True
-        self._incoming_streams_bidi.put_nowait(None)
-        self._incoming_streams_uni.put_nowait(None)
+        self._incoming_streams_bidi.put_nowait(item=None)
+        self._incoming_streams_uni.put_nowait(item=None)
         if not self._ready.done():
             self._ready.set_result(
                 SessionError(
@@ -469,6 +469,6 @@ class WebTransportSession:
             return
 
         if isinstance(stream, WebTransportBidirectionalStream):
-            self._incoming_streams_bidi.put_nowait(stream)
+            self._incoming_streams_bidi.put_nowait(item=stream)
         elif isinstance(stream, WebTransportReceiveStream):
-            self._incoming_streams_uni.put_nowait(stream)
+            self._incoming_streams_uni.put_nowait(item=stream)

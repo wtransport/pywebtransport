@@ -36,7 +36,7 @@ async def test_sequential_streams() -> bool:
     logger.info("Test 03A: Sequential Multiple Streams")
     logger.info("-" * 50)
 
-    num_streams = 3
+    stream_count = 3
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
@@ -44,19 +44,19 @@ async def test_sequential_streams() -> bool:
             async with await client.connect(url=SERVER_URL) as session:
                 logger.info("Connected, session ID: %d", session.session_id)
 
-                for i in range(num_streams):
-                    stream_num = i + 1
-                    logger.info("Creating and testing stream %d/%d...", stream_num, num_streams)
+                for index in range(stream_count):
+                    stream_number = index + 1
+                    logger.info("Creating and testing stream %d/%d...", stream_number, stream_count)
                     stream = await session.create_bidirectional_stream()
-                    test_msg = f"Sequential stream {stream_num}".encode()
-                    await stream.write_all(data=test_msg, end_stream=True)
+                    test_message = f"Sequential stream {stream_number}".encode()
+                    await stream.write_all(data=test_message, end_stream=True)
                     response = await stream.read_all()
 
-                    expected = b"ECHO: " + test_msg
+                    expected = b"ECHO: " + test_message
                     if response != expected:
-                        logger.error("FAILURE: Stream %d echo failed", stream_num)
+                        logger.error("FAILURE: Stream %d echo failed", stream_number)
                         return False
-                    logger.info("Stream %d echo successful", stream_num)
+                    logger.info("Stream %d echo successful", stream_number)
 
                 logger.info("SUCCESS: All sequential streams worked correctly")
                 return True
@@ -73,7 +73,7 @@ async def test_concurrent_streams() -> bool:
     logger.info("Test 03B: Concurrent Streams")
     logger.info("-" * 50)
 
-    num_streams = 10
+    stream_count = 10
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     async def stream_task(*, session: WebTransportSession, task_id: int) -> bool:
@@ -81,11 +81,11 @@ async def test_concurrent_streams() -> bool:
         try:
             stream = await session.create_bidirectional_stream()
             logger.debug("Task %d: Stream created (ID=%d)", task_id, stream.stream_id)
-            test_msg = f"Concurrent stream {task_id}".encode()
-            await stream.write_all(data=test_msg, end_stream=True)
+            test_message = f"Concurrent stream {task_id}".encode()
+            await stream.write_all(data=test_message, end_stream=True)
             response = await stream.read_all()
 
-            expected = b"ECHO: " + test_msg
+            expected = b"ECHO: " + test_message
             if response == expected:
                 logger.debug("Task %d: Echo successful", task_id)
                 return True
@@ -99,22 +99,23 @@ async def test_concurrent_streams() -> bool:
     try:
         async with WebTransportClient(config=config) as client:
             async with await client.connect(url=SERVER_URL) as session:
-                logger.info("Starting %d concurrent stream tasks...", num_streams)
+                logger.info("Starting %d concurrent stream tasks...", stream_count)
                 start_time = time.time()
 
                 tasks = [
-                    asyncio.create_task(coro=stream_task(session=session, task_id=i + 1)) for i in range(num_streams)
+                    asyncio.create_task(coro=stream_task(session=session, task_id=index + 1))
+                    for index in range(stream_count)
                 ]
                 results = await asyncio.gather(*tasks)
                 duration = time.time() - start_time
                 logger.info("All tasks completed in %.2fs", duration)
 
                 success_count = sum(1 for result in results if result is True)
-                if success_count == num_streams:
+                if success_count == stream_count:
                     logger.info("SUCCESS: All concurrent streams completed successfully")
                     return True
                 else:
-                    logger.error("FAILURE: %d/%d concurrent streams failed", num_streams - success_count, num_streams)
+                    logger.error("FAILURE: %d/%d concurrent streams failed", stream_count - success_count, stream_count)
                     return False
     except (ConnectionError, TimeoutError) as e:
         logger.error("FAILURE: Test failed due to connection or timeout issue: %s", e)
@@ -161,28 +162,30 @@ async def test_stream_stress() -> bool:
     logger.info("Test 03D: Stream Stress Test")
     logger.info("-" * 50)
 
-    num_iterations = 20
+    iteration_count = 20
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
             async with await client.connect(url=SERVER_URL) as session:
-                logger.info("Starting stress test with %d iterations...", num_iterations)
+                logger.info("Starting stress test with %d iterations...", iteration_count)
 
                 start_time = time.time()
-                for i in range(num_iterations):
+                for index in range(iteration_count):
                     stream = await session.create_bidirectional_stream()
-                    test_msg = f"Stress test {i + 1}".encode()
-                    await stream.write_all(data=test_msg, end_stream=True)
+                    test_message = f"Stress test {index + 1}".encode()
+                    await stream.write_all(data=test_message, end_stream=True)
                     response = await stream.read_all()
-                    expected = b"ECHO: " + test_msg
+                    expected = b"ECHO: " + test_message
                     if response != expected:
-                        logger.error("FAILURE: Iteration %d echo mismatch", i + 1)
+                        logger.error("FAILURE: Iteration %d echo mismatch", index + 1)
                         return False
 
                 duration = time.time() - start_time
-                rate = num_iterations / duration if duration > 0 else float("inf")
-                logger.info("SUCCESS: %d stream operations in %.2fs (%.1f ops/s)", num_iterations, duration, rate)
+                rate = iteration_count / duration if duration > 0 else float("inf")
+                logger.info(
+                    "SUCCESS: %d stream operations in %.2fs (%.1f operations/s)", iteration_count, duration, rate
+                )
                 return True
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)
@@ -202,10 +205,10 @@ async def main() -> int:
     passed = 0
     total = len(tests)
 
-    for test_name, test_func in tests:
+    for test_name, test_function in tests:
         logger.info("")
         try:
-            if await test_func():
+            if await test_function():
                 logger.info("%s: PASSED", test_name)
                 passed += 1
             else:
@@ -229,7 +232,7 @@ async def main() -> int:
 if __name__ == "__main__":
     exit_code = 1
     try:
-        exit_code = asyncio.run(main())
+        exit_code = asyncio.run(main=main())
     except KeyboardInterrupt:
         logger.warning("\nTest interrupted by user")
         exit_code = 130

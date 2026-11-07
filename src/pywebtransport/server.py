@@ -87,7 +87,7 @@ class WebTransportServer:
         while True:
             connection = await self._incoming_connections.get()
             if connection is None:
-                self._incoming_connections.put_nowait(None)
+                self._incoming_connections.put_nowait(item=None)
                 return
             yield connection
 
@@ -138,7 +138,7 @@ class WebTransportServer:
                 await self._controller.close()
                 self._controller = None
         finally:
-            self._incoming_connections.put_nowait(None)
+            self._incoming_connections.put_nowait(item=None)
             self._shutdown_event.set()
             self._closing = False
             self._closed = True
@@ -147,5 +147,5 @@ class WebTransportServer:
 
     def _create_connection(self, controller: EndpointController, handle: ConnectionHandle) -> WebTransportConnection:
         connection = WebTransportConnection(handle=handle, controller=controller, config=self._config, is_client=False)
-        self._incoming_connections.put_nowait(connection)
+        self._incoming_connections.put_nowait(item=connection)
         return connection

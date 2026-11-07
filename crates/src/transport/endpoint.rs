@@ -268,10 +268,7 @@ impl TransportEndpoint {
                 continue;
             };
 
-            if connection
-                .poll_timeout()
-                .is_some_and(|timeout| now_instant >= timeout)
-            {
+            if now_instant >= connection.poll_timeout() {
                 connection.handle_timeout(now, now_instant);
 
                 let effects = Self::collect_effects(connection);
@@ -309,7 +306,7 @@ impl TransportEndpoint {
             if let Some(timeout) = self
                 .connections
                 .get_mut(handle)
-                .and_then(TransportConnection::poll_timeout)
+                .map(TransportConnection::poll_timeout)
             {
                 earliest = Some(
                     earliest.map_or(timeout, |earliest_timeout| earliest_timeout.min(timeout)),
@@ -392,17 +389,17 @@ impl TransportEndpoint {
 
     fn build_engine_parameters(config: &RustBaseConfig) -> EngineParameters {
         EngineParameters {
-            early_event_ttl: config.pending_event_ttl.as_secs_f64(),
+            early_event_ttl: config.early_event_ttl.as_secs_f64(),
             initial_max_data: config.initial_max_data,
             initial_max_streams_bidi: config.initial_max_streams_bidi,
             initial_max_streams_uni: config.initial_max_streams_uni,
             max_capsule_size: config.max_capsule_size,
-            max_connection_pending_events: config.max_connection_pending_events,
+            max_connection_early_events: config.max_connection_early_events,
             max_field_section_size: config.max_field_section_size,
             max_pending_capsules: config.max_pending_capsules,
             max_pending_datagrams: config.max_pending_datagrams,
             max_pending_streams: config.max_pending_streams,
-            max_session_pending_events: config.max_session_pending_events,
+            max_session_early_events: config.max_session_early_events,
             max_sessions: config.max_sessions,
             max_write_buffer_size: config.max_write_buffer_size,
             session_receive_window: config.session_receive_window,
@@ -437,23 +434,11 @@ impl TransportEndpoint {
             Self::build_engine_parameters(base_config),
         );
 
-        let resource_cleanup_interval = if base_config.resource_cleanup_interval.is_zero() {
-            None
-        } else {
-            Some(base_config.resource_cleanup_interval)
-        };
-
-        let early_event_ttl = if base_config.pending_event_ttl.is_zero() {
-            None
-        } else {
-            Some(base_config.pending_event_ttl)
-        };
-
         let mut transport_connection = TransportConnection::new(
             quic_connection,
             engine,
-            resource_cleanup_interval,
-            early_event_ttl,
+            base_config.resource_cleanup_interval,
+            base_config.early_event_ttl,
             now_instant,
         );
 

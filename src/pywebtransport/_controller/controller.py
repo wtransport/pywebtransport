@@ -6,7 +6,7 @@ import asyncio
 import functools
 import logging
 import socket
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Any, Final
 
 from pywebtransport._controller import conversion
@@ -50,6 +50,7 @@ class EndpointController:
         self._config = config
         self._is_client = is_client
 
+        self._background_tasks: set[asyncio.Task[None]] = set()
         self._connections: dict[ConnectionHandle, WebTransportConnection] = {}
         self._endpoint: Endpoint | None = None
         self._is_closed = False
@@ -67,11 +68,11 @@ class EndpointController:
 
         self._is_closed = True
 
-        task = asyncio.create_task(self._release_runtime())
+        task = asyncio.create_task(coro=self._release_runtime())
         try:
-            await asyncio.shield(task)
+            await asyncio.shield(arg=task)
         except asyncio.CancelledError:
-            await asyncio.shield(task)
+            await asyncio.shield(arg=task)
             raise
 
     async def connect(self, *, remote_address: Address, server_name: str) -> WebTransportConnection:
@@ -90,6 +91,11 @@ class EndpointController:
             dispatcher=dispatch_connect, resolver=self._resolve_connection
         )
         return connection
+
+    def create_task(self, *, coro: Coroutine[Any, Any, None]) -> None:
+        task = asyncio.create_task(coro=coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     async def execute_request(
         self, *, dispatcher: Callable[[RequestId], None], resolver: Callable[[Any], Any] | None = None
@@ -120,11 +126,11 @@ class EndpointController:
             ) from e
 
     async def start(self) -> None:
-        task = asyncio.create_task(self._acquire_runtime())
+        task = asyncio.create_task(coro=self._acquire_runtime())
         try:
-            await asyncio.shield(task)
+            await asyncio.shield(arg=task)
         except asyncio.CancelledError:
-            await asyncio.shield(task)
+            await asyncio.shield(arg=task)
             raise
 
     async def _acquire_runtime(self) -> None:
@@ -143,11 +149,11 @@ class EndpointController:
             try:
                 waker = Waker(fd=write_socket.fileno())
                 endpoint = await asyncio.get_running_loop().run_in_executor(
-                    None,
-                    functools.partial(Endpoint, config=self._config, is_client=self._is_client, waker=waker),
+                    executor=None,
+                    func=functools.partial(Endpoint, config=self._config, is_client=self._is_client, waker=waker),
                 )
                 waker_task = asyncio.get_running_loop().create_task(
-                    self._run_waker_loop(endpoint=endpoint, waker=waker, read_socket=read_socket)
+                    coro=self._run_waker_loop(endpoint=endpoint, waker=waker, read_socket=read_socket)
                 )
             except BaseException:
                 if endpoint is not None:
@@ -228,7 +234,11 @@ class EndpointController:
                         self._pending_manager.fail_request(request_id=effect.request_id, exception=effect.exception)
             except Exception as e:
                 _logger.warning(
-                    "rt_event receive failed actual=%s ptr=%s err=%s", effect_tuple[0], handle, e, exc_info=True
+                    "rt_event receive failed actual=%s connection_handle=%s err=%s",
+                    effect_tuple[0],
+                    handle,
+                    e,
+                    exc_info=True,
                 )
 
     def _process_runtime_event(self, *, event_tuple: tuple[int, Any]) -> None:
@@ -257,7 +267,7 @@ class EndpointController:
             if self._endpoint is not None:
                 try:
                     async with asyncio.timeout(delay=_RUNTIME_SHUTDOWN_TIMEOUT):
-                        await asyncio.get_running_loop().run_in_executor(None, self._endpoint.close)
+                        await asyncio.get_running_loop().run_in_executor(executor=None, func=self._endpoint.close)
                         await self._runtime_shutdown_event.wait()
                 except asyncio.TimeoutError:
                     _logger.warning("rt close failed")
