@@ -71,13 +71,13 @@ async def test_session_diagnostics() -> bool:
             async with await client.connect(url=SERVER_URL) as session:
                 logger.info("Performing operations to generate diagnostics...")
 
-                total_bytes_written = 0
+                data_sent = 0
                 for index in range(3):
                     data = f"Diagnostics test {index + 1}".encode()
                     stream = await session.create_bidirectional_stream()
                     await stream.write_all(data=data, end_stream=True)
                     await stream.read_all()
-                    total_bytes_written += len(data)
+                    data_sent += len(data)
 
                 diagnostics = await session.diagnose()
                 logger.info("Session diagnostics retrieved")
@@ -89,7 +89,7 @@ async def test_session_diagnostics() -> bool:
                     and diagnostics.state == SessionState.CONNECTED
                     and diagnostics.ready_at is not None
                     and diagnostics.local_streams_bidi_opened >= 3
-                    and diagnostics.data_sent >= total_bytes_written
+                    and diagnostics.data_sent >= data_sent
                 ):
                     logger.info("SUCCESS: Session diagnostics appear correct")
                     return True

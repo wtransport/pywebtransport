@@ -14,7 +14,7 @@ use rcgen::{
     Issuer, KeyPair, KeyUsagePurpose, SanType,
 };
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::pem::{Error as RustlsPemError, PemObject};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, Error as RustlsError, SignatureScheme};
 use time::{Duration, OffsetDateTime};
@@ -123,13 +123,18 @@ pub(crate) fn generate_self_signed_cert(
 
 pub(crate) fn load_certs(path: &Path) -> io::Result<Vec<CertificateDer<'static>>> {
     CertificateDer::pem_file_iter(path)
-        .map_err(|e| Error::new(ErrorKind::InvalidData, e))?
-        .map(|result| result.map_err(|e| Error::new(ErrorKind::InvalidData, e)))
-        .collect::<Result<Vec<_>, _>>()
+        .and_then(Iterator::collect)
+        .map_err(|e| match e {
+            RustlsPemError::Io(e) => e,
+            e => Error::new(ErrorKind::InvalidData, e),
+        })
 }
 
 pub(crate) fn load_private_key(path: &Path) -> io::Result<PrivateKeyDer<'static>> {
-    PrivateKeyDer::from_pem_file(path).map_err(|e| Error::new(ErrorKind::InvalidData, e))
+    PrivateKeyDer::from_pem_file(path).map_err(|e| match e {
+        RustlsPemError::Io(e) => e,
+        e => Error::new(ErrorKind::InvalidData, e),
+    })
 }
 
 fn build_ca_parameters(validity_days: i64) -> CertificateParams {

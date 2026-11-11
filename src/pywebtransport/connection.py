@@ -64,6 +64,7 @@ class ConnectionDiagnostics:
     peer_initial_max_streams_bidi: int
     peer_initial_max_streams_uni: int
     peer_max_datagram_frame_size: int | None
+    peer_max_field_section_size: int | None
     peer_settings_received: bool
     state: ConnectionState
 

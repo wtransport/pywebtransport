@@ -5,10 +5,11 @@ use pyo3::IntoPyObjectExt;
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyBytes, PyDict, PyList, PyString, PyTuple};
 use tracing::debug;
 
-use crate::common::types::{ErrorSource, Headers};
+use crate::common::types::{ErrorCode, ErrorSource, Headers};
 use crate::ffi::abi::{
     COMMAND_FAILED, CONNECTION_EFFECTS, CONNECTION_SPAWNED, EMIT_CONNECTION_EVENT,
     EMIT_SESSION_EVENT, EMIT_STREAM_EVENT, NOTIFY_REQUEST_DONE, NOTIFY_REQUEST_FAILED,
@@ -18,10 +19,11 @@ use crate::ffi::abi::{
     USER_EXPORT_KEYING_MATERIAL, USER_READ_DATAGRAM, USER_READ_STREAM, USER_REJECT_SESSION,
     USER_RESET_STREAM, USER_SEND_DATAGRAM, USER_STOP_SENDING, USER_WRITE_STREAM,
 };
-use crate::ffi::error;
 use crate::protocol::events::{Effect, ProtocolEvent, RequestResult};
 use crate::protocol::{ConnectionDiagnostics, SessionDiagnostics, StreamDiagnostics};
 use crate::runtime::channel::RuntimeEvent;
+
+static EXCEPTION_MODULE: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
 
 impl<'py> IntoPyObject<'py> for Effect {
     type Target = PyAny;
@@ -179,7 +181,7 @@ impl<'py> IntoPyObject<'py> for Effect {
                 error_code,
                 reason,
             } => {
-                let py_exception = error::create_py_exception(py, source, error_code, &reason);
+                let py_exception = create_py_exception(py, source, error_code, &reason);
                 let payload = PyTuple::new(
                     py,
                     &[
@@ -218,7 +220,7 @@ impl<'py> IntoPyObject<'py> for RuntimeEvent {
                 reason,
             } => {
                 let py_exception =
-                    error::create_py_exception(py, ErrorSource::Connection, error_code, &reason);
+                    create_py_exception(py, ErrorSource::Connection, error_code, &reason);
                 let payload = PyTuple::new(
                     py,
                     &[
@@ -462,10 +464,46 @@ fn connection_diagnostics_to_py<'py>(
         "peer_max_datagram_frame_size",
         diagnostics.peer_max_datagram_frame_size,
     )?;
+    py_diagnostics.set_item(
+        "peer_max_field_section_size",
+        diagnostics.peer_max_field_section_size,
+    )?;
     py_diagnostics.set_item("peer_settings_received", diagnostics.peer_settings_received)?;
     py_diagnostics.set_item("state", diagnostics.state)?;
 
     Ok(py_diagnostics.into_any())
+}
+
+fn create_py_exception(
+    py: Python<'_>,
+    source: ErrorSource,
+    error_code: Option<ErrorCode>,
+    reason: &str,
+) -> PyErr {
+    let class_name = match source {
+        ErrorSource::Connection => "ConnectionError",
+        ErrorSource::Datagram => "DatagramError",
+        ErrorSource::Session => "SessionError",
+        ErrorSource::Stream => "StreamError",
+        ErrorSource::Unspecified => "WebTransportError",
+    };
+
+    let kwargs = PyDict::new(py);
+    if let Some(error_code) = error_code {
+        kwargs.set_item("error_code", error_code).ok();
+    }
+
+    let instance = EXCEPTION_MODULE
+        .get_or_try_init(py, || {
+            py.import("pywebtransport.exceptions").map(Into::into)
+        })
+        .and_then(|module| module.bind(py).getattr(class_name))
+        .and_then(|class| class.call((reason,), Some(&kwargs)));
+
+    match instance {
+        Ok(instance) => PyErr::from_value(instance),
+        Err(e) => e,
+    }
 }
 
 fn extract_bytes(object: &Bound<'_, PyAny>) -> PyResult<Bytes> {

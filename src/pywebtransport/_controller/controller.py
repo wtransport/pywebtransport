@@ -328,8 +328,6 @@ class EndpointController:
                         self._process_runtime_event(event_tuple=event_tuple)
                 except Exception as e:
                     _logger.warning("rt_event receive failed err=%s", e, exc_info=True)
-        except asyncio.CancelledError:
-            pass
         except OSError as e:
             if not self._is_closed:
                 _logger.debug("sys_socket drain failed err=%s", e)

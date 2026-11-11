@@ -59,20 +59,14 @@ fn fixture_stream_id() -> StreamId {
 }
 
 #[rstest]
-fn test_effect_create_h3_connect_stream_success(
-    fixture_request_id: RequestId,
-    fixture_headers: Headers,
-) {
+fn test_effect_create_h3_connect_stream_success(fixture_request_id: RequestId) {
     let effect = Effect::CreateH3ConnectStream {
         request_id: fixture_request_id,
-        authority: "example.com".to_owned(),
-        path: "/".to_owned(),
-        headers: fixture_headers,
     };
 
     let debug_output = format!("{effect:?}");
     assert!(debug_output.contains("CreateH3ConnectStream"));
-    assert!(debug_output.contains("example.com"));
+    assert!(debug_output.contains(&fixture_request_id.to_string()));
 }
 
 #[rstest]
@@ -514,6 +508,7 @@ fn test_request_result_read_data_content_success(fixture_data: Bytes) {
     peer_initial_max_streams_bidi: 0,
     peer_initial_max_streams_uni: 0,
     peer_max_datagram_frame_size: None,
+    peer_max_field_section_size: None,
     peer_settings_received: true,
     state: ConnectionState::Connected,
 })))]

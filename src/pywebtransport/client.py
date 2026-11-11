@@ -26,7 +26,7 @@ _logger = logging.getLogger(name=__name__)
 
 
 class WebTransportClient:
-    """Manage WebTransport connections and sessions."""
+    """Manage WebTransport connections."""
 
     def __init__(self, *, config: ClientConfig | None = None) -> None:
         """Initialize the instance."""

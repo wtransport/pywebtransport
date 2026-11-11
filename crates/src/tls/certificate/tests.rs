@@ -134,10 +134,33 @@ fn test_load_certs_fails_with_invalid_path() {
 
     let result = load_certs(path);
 
-    let Err(_) = result else {
+    let Err(e) = result else {
         assert_eq!("err", "ok");
         unreachable!()
     };
+    assert_eq!(e.kind(), ErrorKind::NotFound);
+}
+
+#[test]
+fn test_load_certs_fails_with_malformed_pem() {
+    let temp_dir = env::temp_dir().join("pywebtransport_load_certs_malformed_test");
+    drop(fs::remove_dir_all(&temp_dir));
+    let path = temp_dir.join("certs.pem");
+    assert!(fs::create_dir_all(&temp_dir).is_ok(), "should succeed");
+    assert!(
+        fs::write(&path, "-----BEGIN CERTIFICATE-----\n").is_ok(),
+        "should succeed"
+    );
+
+    let result = load_certs(&path);
+
+    let Err(e) = result else {
+        assert_eq!("err", "ok");
+        unreachable!()
+    };
+    assert_eq!(e.kind(), ErrorKind::InvalidData);
+
+    drop(fs::remove_dir_all(&temp_dir));
 }
 
 #[test]
@@ -168,10 +191,33 @@ fn test_load_private_key_fails_with_invalid_path() {
 
     let result = load_private_key(path);
 
-    let Err(_) = result else {
+    let Err(e) = result else {
         assert_eq!("err", "ok");
         unreachable!()
     };
+    assert_eq!(e.kind(), ErrorKind::NotFound);
+}
+
+#[test]
+fn test_load_private_key_fails_without_private_key() {
+    let temp_dir = env::temp_dir().join("pywebtransport_load_private_key_test");
+    drop(fs::remove_dir_all(&temp_dir));
+    let hostname = "load-private-key-node";
+
+    let Ok((ca_path, _, _)) = generate_self_signed_cert(hostname, &temp_dir, 1) else {
+        assert_eq!("ok", "err");
+        unreachable!()
+    };
+
+    let result = load_private_key(Path::new(&ca_path));
+
+    let Err(e) = result else {
+        assert_eq!("err", "ok");
+        unreachable!()
+    };
+    assert_eq!(e.kind(), ErrorKind::InvalidData);
+
+    drop(fs::remove_dir_all(&temp_dir));
 }
 
 #[test]

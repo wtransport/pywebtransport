@@ -11,6 +11,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _(No planned changes for the next release yet.)_
 
+## [0.22.1] - 2026-11-11
+
+This release completes the client handling of CONNECT responses and CONNECT stream termination, enforces field section limits in both directions, and applies received GOAWAY identifiers. It additionally retains events parsed before an HTTP/3 error and removes `WebTransportServer.serve_forever()` and `ProtocolError`.
+
+### Added
+
+- **Connection Diagnostics**: Added `peer_max_field_section_size` to `ConnectionDiagnostics`, reporting the `SETTINGS_MAX_FIELD_SECTION_SIZE` advertised by the peer.
+
+### Changed
+
+- **Configuration Errors**: QUIC configuration failures, including PEM file loading, raise `OSError` subclasses that preserve the I/O error kind in place of `ConfigurationError`.
+
+### Removed
+
+- **Server Blocking Loop**: Removed `WebTransportServer.serve_forever()`, superseded by `incoming_connections()`.
+- **Protocol Exception**: Removed `ProtocolError`, which was never raised.
+
+### Fixed
+
+- **Parse Error Events**: Delivered the events parsed before an HTTP/3 error in the same read instead of discarding them.
+- **Request Stream Reads**: Bounded request stream reads to the current frame until the final header section is received, so content and trailers no longer reset non-CONNECT requests, and treated a `HEADERS` frame after it as `H3_FRAME_UNEXPECTED` (RFC 9114, Sec. 4.1).
+- **Client PUSH_PROMISE**: Validated `PUSH_PROMISE` received by a client before the final response by its push ID, closing the connection with `H3_ID_ERROR`, as no push is permitted, or with `H3_FRAME_ERROR` when the payload cannot hold a push ID, instead of rejecting the frame type (RFC 9114, Sec. 7.1 & 7.2.5).
+- **Field Section Size**: Enforced `SETTINGS_MAX_FIELD_SECTION_SIZE` on the decoded field section size instead of the encoded `HEADERS` frame length, resetting the stream with `H3_MESSAGE_ERROR` when exceeded. Outgoing field sections are checked against the peer's limit: `create_session()`, `accept()`, and `reject()` fail before any state change, and requests whose response cannot fit are rejected with `H3_REQUEST_REJECTED` (RFC 9114, Sec. 4.2.2).
+- **Field String Size**: Failed `create_session()`, `accept()`, and `reject()` before any state change when a field name or value exceeds the 65535-byte QPACK limit, instead of failing at encoding after the request was answered.
+- **Encoding Failures**: Closed the connection with `H3_INTERNAL_ERROR` when encoding outgoing HTTP/3 data fails, instead of dropping it.
+- **CONNECT Responses**: Established sessions on any 2xx status, skipped 1xx interim responses, rejected a `:status` that is not three digits with `H3_MESSAGE_ERROR`, and cancelled the CONNECT stream with `H3_REQUEST_CANCELLED` upon a final non-2xx response instead of terminating it with `H3_REQUEST_REJECTED` (RFC 9114, Sec. 4.1).
+- **GOAWAY Handling**: Validated received `GOAWAY` frames, closing the connection with `H3_FRAME_ERROR` on a malformed payload and with `H3_ID_ERROR` when a client receives an identifier that is not a client-initiated bidirectional stream ID or an identifier exceeds the previous one. Session requests at or above the identifier are rejected with `H3_REQUEST_REJECTED` and their CONNECT streams cancelled with `H3_REQUEST_CANCELLED`, and requests deferred by the stream limit fail, instead of being left unanswered or reissued (RFC 9114, Sec. 5.2).
+- **CONNECT Stream Termination**: Failed the session request or closed the session when its CONNECT stream is reset by the peer or aborted with an HTTP/3 stream error, instead of waiting for connection termination, and treated a CONNECT stream ending before the final response or with a truncated capsule as `H3_MESSAGE_ERROR` (RFC 9114, Sec. 4.1.2).
+- **Request Admission**: Responded with status 501 instead of 400 to requests other than WebTransport extended CONNECT, rejected targets whose `:scheme` is not `https` with status 421, and matched the scheme and the upgrade token case-insensitively.
+- **Session Limit**: Counted only sessions that are not closing or closed toward the session limit, and applied it only to admissible WebTransport requests.
+- **Early Event Expiry**: Expired early events past `early_event_ttl` before replaying them and before admitting new early streams and datagrams against the buffering limits, instead of at the next periodic cleanup.
+- **Flow Control on Accept**: Withheld `WT_DATA_BLOCKED` and `WT_STREAMS_BLOCKED` until the server responds, and evaluated them along with `WT_MAX_DATA` and `WT_MAX_STREAMS` on accept.
+
 ## [0.22.0] - 2026-11-07
 
 This release aligns the implementation with the `draft-ietf-webtrans-http3-17` specification, validates HTTP/3 frames by type and stream state before their payloads are buffered, and makes the runtime relays lossless. It additionally merges request headers by field name and restricts configuration values to those the runtime can consume.
@@ -1176,7 +1209,8 @@ This is a major release focused on enhancing runtime safety and modernizing the 
 - cryptography (>=45.0.4,<46.0.0) for SSL/TLS operations
 - typing-extensions (>=4.14.0,<5.0.0) for Python <3.10 support
 
-[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/wtransport/pywebtransport/compare/v0.22.1...HEAD
+[0.22.1]: https://github.com/wtransport/pywebtransport/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/wtransport/pywebtransport/compare/v0.21.1...v0.22.0
 [0.21.1]: https://github.com/wtransport/pywebtransport/compare/v0.21.0...v0.21.1
 [0.21.0]: https://github.com/wtransport/pywebtransport/compare/v0.20.1...v0.21.0

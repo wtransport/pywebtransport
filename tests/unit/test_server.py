@@ -132,7 +132,7 @@ class TestWebTransportServer:
 
         assert server.is_closed
         assert server._closing is False
-        assert server._shutdown_event.is_set()
+        assert server._incoming_connections.get_nowait() is None
 
     async def test_close_with_finished_previous_close_task(
         self, server: WebTransportServer, mock_controller: Any, mocker: MockerFixture
@@ -280,63 +280,3 @@ class TestWebTransportServer:
         server._controller = None
 
         assert server.local_addresses == []
-
-    async def test_serve_forever_cancelled(
-        self, server: WebTransportServer, mocker: MockerFixture, mock_endpoint_controller_class: Any
-    ) -> None:
-        await server.listen()
-
-        assert server._shutdown_event is not None
-
-        task = asyncio.create_task(coro=server.serve_forever())
-        await asyncio.sleep(delay=0.01)
-        task.cancel()
-
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-
-        assert task.result() is None
-
-    async def test_serve_forever_graceful_exit(
-        self, server: WebTransportServer, mock_endpoint_controller_class: Any, mocker: MockerFixture
-    ) -> None:
-        await server.listen()
-
-        async def trigger_shutdown() -> None:
-            await asyncio.sleep(delay=0.01)
-            await server.close()
-
-        asyncio.create_task(coro=trigger_shutdown())
-        await server.serve_forever()
-
-        assert not server.is_serving
-
-    async def test_serve_forever_keyboard_interrupt(
-        self, server: WebTransportServer, mock_endpoint_controller_class: Any, mocker: MockerFixture
-    ) -> None:
-        await server.listen()
-
-        assert server._shutdown_event is not None
-
-        mocker.patch.object(target=server._shutdown_event, attribute="wait", side_effect=KeyboardInterrupt)
-
-        with pytest.raises(expected_exception=KeyboardInterrupt):
-            await server.serve_forever()
-
-    async def test_serve_forever_not_listening(self, server: WebTransportServer) -> None:
-        with pytest.raises(expected_exception=ServerError, match="app_server validate failed"):
-            await server.serve_forever()
-
-    async def test_serve_forever_wait_exception(
-        self, server: WebTransportServer, mock_endpoint_controller_class: Any, mocker: MockerFixture
-    ) -> None:
-        await server.listen()
-
-        assert server._shutdown_event is not None
-
-        mocker.patch.object(target=server._shutdown_event, attribute="wait", side_effect=ValueError("wait error"))
-
-        with pytest.raises(expected_exception=ServerError, match="rt_event resolve failed"):
-            await server.serve_forever()

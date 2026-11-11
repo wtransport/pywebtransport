@@ -12,7 +12,6 @@ __all__: list[str] = [
     "ConfigurationError",
     "ConnectionError",
     "DatagramError",
-    "ProtocolError",
     "ServerError",
     "SessionError",
     "StreamError",
@@ -102,16 +101,6 @@ class DatagramError(WebTransportError):
         """Initialize the instance."""
         super().__init__(
             message=message, error_code=error_code if error_code is not None else ErrorCodes.APP_GENERIC_ERROR
-        )
-
-
-class ProtocolError(WebTransportError):
-    """Manage protocol violation errors."""
-
-    def __init__(self, message: str, *, error_code: ErrorCode | None = None) -> None:
-        """Initialize the instance."""
-        super().__init__(
-            message=message, error_code=error_code if error_code is not None else ErrorCodes.H3_GENERAL_PROTOCOL_ERROR
         )
 
 

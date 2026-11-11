@@ -151,21 +151,21 @@ async def test_datagram_burst() -> bool:
     logger.info("Test 05D: Datagram Burst")
     logger.info("-" * 50)
 
-    burst_size = 50
+    burst_count = 50
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
             async with await client.connect(url=SERVER_URL) as session:
-                logger.info("Starting burst of %d datagrams...", burst_size)
+                logger.info("Starting burst of %d datagrams...", burst_count)
                 start_time = time.time()
 
-                tasks = [session.send_datagram(data=f"Burst {index}".encode()) for index in range(burst_size)]
+                tasks = [session.send_datagram(data=f"Burst {index}".encode()) for index in range(burst_count)]
                 await asyncio.gather(*tasks)
                 duration = time.time() - start_time
-                rate = burst_size / duration if duration > 0 else float("inf")
+                rate = burst_count / duration if duration > 0 else float("inf")
 
-                logger.info("SUCCESS: Sent %d datagrams in %.3fs (%.1f datagrams/s)", burst_size, duration, rate)
+                logger.info("SUCCESS: Sent %d datagrams in %.3fs (%.1f datagrams/s)", burst_count, duration, rate)
                 return True
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)

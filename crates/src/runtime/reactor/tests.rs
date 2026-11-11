@@ -134,20 +134,10 @@ fn create_dummy_endpoint(is_server: bool) -> TransportEndpoint {
 
     if is_server {
         let server_config = create_dummy_rust_server_config();
-        let Ok(endpoint) = TransportEndpoint::new_server(quic_endpoint, base_config, server_config)
-        else {
-            assert_eq!("ok", "err");
-            unreachable!()
-        };
-        endpoint
+        TransportEndpoint::new_server(quic_endpoint, base_config, server_config)
     } else {
         let client_config = create_dummy_client_config();
-        let Ok(endpoint) = TransportEndpoint::new_client(quic_endpoint, base_config, client_config)
-        else {
-            assert_eq!("ok", "err");
-            unreachable!()
-        };
-        endpoint
+        TransportEndpoint::new_client(quic_endpoint, base_config, client_config)
     }
 }
 
@@ -192,12 +182,7 @@ async fn create_idle_client_reactor() -> (
     client_config.transport_config(Arc::new(transport_config));
     let quic_endpoint =
         QuicEndpoint::new(Arc::new(QuicEndpointConfig::default()), None, false, None);
-    let Ok(endpoint) =
-        TransportEndpoint::new_client(quic_endpoint, mock_base_config(), client_config)
-    else {
-        assert_eq!("ok", "err");
-        unreachable!()
-    };
+    let endpoint = TransportEndpoint::new_client(quic_endpoint, mock_base_config(), client_config);
     let reactor = Reactor::new(
         command_rx,
         endpoint,

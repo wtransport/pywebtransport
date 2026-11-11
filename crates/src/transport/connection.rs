@@ -202,36 +202,12 @@ impl TransportConnection {
                         reason: reason.unwrap_or_default(),
                     });
                 }
-                Effect::CreateH3ConnectStream {
-                    request_id,
-                    authority,
-                    path,
-                    headers,
-                } => {
+                Effect::CreateH3ConnectStream { request_id } => {
                     if let Some(stream_id) = self.connection.streams().open(QuicDir::Bi) {
-                        let stream_id = u64::from(stream_id);
-
-                        match self
-                            .engine
-                            .encode_connect_request(stream_id, authority, path, &headers)
-                        {
-                            Ok(effects) => {
-                                self.process_effects(effects, event_queue, now_instant);
-
-                                event_queue.push_back(ProtocolEvent::InternalBindH3ConnectStream {
-                                    request_id,
-                                    stream_id,
-                                });
-                            }
-                            Err(e) => {
-                                debug!("wt_session encode failed err={e:?}");
-                                event_queue.push_back(ProtocolEvent::InternalFailH3ConnectStream {
-                                    request_id,
-                                    error_code: None,
-                                    reason: "wt_session encode failed".into(),
-                                });
-                            }
-                        }
+                        event_queue.push_back(ProtocolEvent::InternalBindH3ConnectStream {
+                            request_id,
+                            stream_id: u64::from(stream_id),
+                        });
                     } else {
                         event_queue
                             .push_back(ProtocolEvent::InternalDeferH3ConnectStream { request_id });
@@ -268,18 +244,9 @@ impl TransportConnection {
                     };
 
                     if let Some(stream_id) = self.connection.streams().open(direction) {
-                        let stream_id = u64::from(stream_id);
-                        let effects = WebTransportEngine::encode_stream_header(
-                            stream_id,
-                            session_id,
-                            is_unidirectional,
-                        );
-
-                        self.process_effects(effects, event_queue, now_instant);
-
                         event_queue.push_back(ProtocolEvent::InternalBindQuicStream {
                             request_id,
-                            stream_id,
+                            stream_id: u64::from(stream_id),
                             session_id,
                             is_unidirectional,
                         });
@@ -352,53 +319,6 @@ impl TransportConnection {
 
                     self.send_buffers.remove(&stream_id);
                 }
-                Effect::SendH3Capsule {
-                    stream_id,
-                    capsule_type,
-                    capsule_value,
-                    end_stream,
-                } => {
-                    match WebTransportEngine::encode_capsule(
-                        stream_id,
-                        capsule_type,
-                        capsule_value,
-                        end_stream,
-                    ) {
-                        Ok(effects) => {
-                            self.process_effects(effects, event_queue, now_instant);
-                        }
-                        Err(e) => {
-                            debug!("wt_capsule encode failed err={e:?}");
-                        }
-                    }
-                }
-                Effect::SendH3Datagram { session_id, data } => {
-                    match WebTransportEngine::encode_datagram(session_id, data) {
-                        Ok(effects) => {
-                            self.process_effects(effects, event_queue, now_instant);
-                        }
-                        Err(e) => {
-                            debug!("wt_datagram encode failed err={e:?}");
-                        }
-                    }
-                }
-                Effect::SendH3Goaway { identifier } => {
-                    let effects = self.engine.encode_goaway(identifier);
-
-                    self.process_effects(effects, event_queue, now_instant);
-                }
-                Effect::SendH3Headers {
-                    stream_id,
-                    headers,
-                    end_stream,
-                } => match self.engine.encode_headers(stream_id, &headers, end_stream) {
-                    Ok(effects) => {
-                        self.process_effects(effects, event_queue, now_instant);
-                    }
-                    Err(e) => {
-                        debug!("h3_headers encode failed err={e:?}");
-                    }
-                },
                 Effect::SendQuicData {
                     stream_id,
                     data,
@@ -571,11 +491,11 @@ impl TransportConnection {
     }
 
     fn receive_stream_data(&mut self, stream_id: QuicStreamId) -> Option<ProtocolEvent> {
-        let max_size = *self.pending_receives.get(&stream_id)?;
-        let limit = usize::try_from(max_size).unwrap_or(usize::MAX);
+        let max_size =
+            usize::try_from(*self.pending_receives.get(&stream_id)?).unwrap_or(usize::MAX);
 
         let mut chunks = Vec::new();
-        let mut size = 0;
+        let mut data_length = 0;
         let mut is_finished = false;
         let mut reset_error_code = None;
 
@@ -585,10 +505,10 @@ impl TransportConnection {
             return None;
         };
 
-        while size < limit {
-            match chunks_reader.next(limit - size) {
+        while data_length < max_size {
+            match chunks_reader.next(max_size - data_length) {
                 Ok(Some(chunk)) => {
-                    size += chunk.bytes.len();
+                    data_length += chunk.bytes.len();
                     chunks.push(chunk.bytes);
                 }
                 Ok(None) => {
@@ -616,7 +536,7 @@ impl TransportConnection {
             });
         }
 
-        if size == 0 && !is_finished {
+        if data_length == 0 && !is_finished {
             return None;
         }
 
@@ -625,7 +545,7 @@ impl TransportConnection {
         let data = if chunks.len() == 1 {
             chunks.pop().unwrap_or_default()
         } else {
-            let mut buffer = BytesMut::with_capacity(size);
+            let mut buffer = BytesMut::with_capacity(data_length);
             for chunk in chunks {
                 buffer.put(chunk);
             }

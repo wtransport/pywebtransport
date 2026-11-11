@@ -103,11 +103,11 @@ class TestStreamThroughput:
             asyncio.run(main=run_scenario())
         gc.collect()
 
-        result_bytes = benchmark(function_to_benchmark=lambda: asyncio.run(main=run_scenario()))
+        transferred = benchmark(function_to_benchmark=lambda: asyncio.run(main=run_scenario()))
 
         stats = cast(dict[str, Any], benchmark.stats)
         mean_time = stats["mean"]
 
-        total_mb = result_bytes / (1024 * 1024)
+        total_mb = transferred / (1024 * 1024)
         throughput = total_mb / mean_time if mean_time > 0 else 0
         benchmark.extra_info["throughput_mb_s"] = throughput

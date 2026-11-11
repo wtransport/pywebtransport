@@ -16,6 +16,7 @@ use crate::protocol::qpack::sys::{
     lsqpack_dec, lsqpack_dec_hset_if, lsqpack_enc, lsqpack_enc_status, lsqpack_read_header_status,
     lsxpack_header,
 };
+use crate::protocol::utils;
 
 mod sys {
     #![allow(warnings, clippy::all, clippy::pedantic, clippy::restriction)]
@@ -62,14 +63,17 @@ impl Decoder {
         &mut self,
         stream_id: StreamId,
         data: &[u8],
+        max_field_section_size: u64,
     ) -> Result<Headers, QpackError> {
         let inner = unsafe { self.inner.as_mut().get_unchecked_mut() };
 
         let mut context = HeaderBlockContext {
             error: None,
+            field_section_size: 0,
             header: unsafe { MaybeUninit::zeroed().assume_init() },
             header_buffer: Vec::with_capacity(4096),
             headers: Headers::new(),
+            max_field_section_size,
         };
         let mut cursor = data.as_ptr();
 
@@ -165,16 +169,16 @@ impl Encoder {
             inner.encode_single_header(header)?;
         }
 
-        let max_prefix =
+        let max_prefix_size =
             unsafe { sys::lsqpack_enc_header_block_prefix_size(&raw const inner.encoder) };
-        let total_length = max_prefix + inner.header_buffer.len();
-        let mut final_header_block = Vec::with_capacity(total_length);
+        let mut final_header_block =
+            Vec::with_capacity(max_prefix_size + inner.header_buffer.len());
 
         let result = unsafe {
             sys::lsqpack_enc_end_header(
                 &raw mut inner.encoder,
                 final_header_block.as_mut_ptr(),
-                max_prefix,
+                max_prefix_size,
                 ptr::null_mut(),
             )
         };
@@ -216,6 +220,7 @@ impl Encoder {
 pub(super) enum QpackError {
     DecoderError,
     EncoderError,
+    FieldSectionTooLarge,
     HeaderTooLong,
 }
 
@@ -276,9 +281,11 @@ impl Header {
 
 struct HeaderBlockContext {
     error: Option<QpackError>,
+    field_section_size: u64,
     header: lsxpack_header,
     header_buffer: Vec<u8>,
     headers: Headers,
+    max_field_section_size: u64,
 }
 
 struct InnerDecoder {
@@ -350,7 +357,7 @@ unsafe extern "C" fn dhi_prepare_decode(
 ) -> *mut lsxpack_header {
     let hblock_ctx = unsafe { &mut *hblock_ctx.cast::<HeaderBlockContext>() };
 
-    let used_bytes = if header.is_null() {
+    let used_length = if header.is_null() {
         hblock_ctx.header = unsafe { mem::zeroed() };
         0
     } else {
@@ -372,11 +379,11 @@ unsafe extern "C" fn dhi_prepare_decode(
 
     // SAFETY: Synchronization of the Rust Vec's view of physical bytes written by the C library.
     unsafe {
-        hblock_ctx.header_buffer.set_len(used_bytes);
+        hblock_ctx.header_buffer.set_len(used_length);
     }
     hblock_ctx
         .header_buffer
-        .reserve(space.saturating_sub(used_bytes));
+        .reserve(space.saturating_sub(used_length));
 
     hblock_ctx.header.buf = hblock_ctx.header_buffer.as_mut_ptr().cast::<c_char>();
     hblock_ctx.header.val_len = val_len;
@@ -415,6 +422,13 @@ unsafe extern "C" fn dhi_process_header(
             usize::from(header.val_len),
         )
     };
+
+    hblock_ctx.field_section_size += utils::field_size(name, value);
+
+    if hblock_ctx.field_section_size > hblock_ctx.max_field_section_size {
+        hblock_ctx.error = Some(QpackError::FieldSectionTooLarge);
+        return 1;
+    }
 
     hblock_ctx
         .headers

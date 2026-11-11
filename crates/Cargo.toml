@@ -1,6 +1,6 @@
 [package]
 name = "pywebtransport-engine"
-version = "0.22.0"
+version = "0.22.1"
 edition = "2024"
 license = "Apache-2.0"
 rust-version = "1.97.1"
@@ -23,7 +23,6 @@ rustls = { version = "0.23.46", default-features = false, features = [
     "std",
 ] }
 rustls-native-certs = "0.8.5"
-thiserror = "2.0.21"
 time = "0.3.55"
 tokio = { version = "1.54.1", features = [
     "io-util",
@@ -36,7 +35,7 @@ tokio = { version = "1.54.1", features = [
 ] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-webpki-roots = "1.0.11"
+webpki-roots = "1.0.12"
 
 [dev-dependencies]
 rstest = "0.28.0"

@@ -10,7 +10,6 @@ from pywebtransport import (
     ConnectionError,
     DatagramError,
     ErrorCodes,
-    ProtocolError,
     ServerError,
     SessionError,
     StreamError,
@@ -36,7 +35,6 @@ class TestSubclassExceptions:
         argvalues=[
             (ClientError, ErrorCodes.APP_INVALID_REQUEST),
             (DatagramError, ErrorCodes.APP_GENERIC_ERROR),
-            (ProtocolError, ErrorCodes.H3_GENERAL_PROTOCOL_ERROR),
             (ServerError, ErrorCodes.APP_SERVICE_UNAVAILABLE),
             (TimeoutError, ErrorCodes.APP_OPERATION_TIMEOUT),
         ],

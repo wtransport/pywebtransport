@@ -9,14 +9,13 @@ use super::*;
 use crate::common::constants::{
     ERR_H3_CLOSED_CRITICAL_STREAM, ERR_H3_DATAGRAM_ERROR, ERR_H3_EXCESSIVE_LOAD,
     ERR_H3_FRAME_ERROR, ERR_H3_FRAME_UNEXPECTED, ERR_H3_GENERAL_PROTOCOL_ERROR, ERR_H3_ID_ERROR,
-    ERR_H3_INTERNAL_ERROR, ERR_H3_MESSAGE_ERROR, ERR_H3_MISSING_SETTINGS, ERR_H3_SETTINGS_ERROR,
-    ERR_H3_STREAM_CREATION_ERROR, ERR_LIB_INTERNAL_ERROR, ERR_QPACK_DECODER_STREAM_ERROR,
+    ERR_H3_INTERNAL_ERROR, ERR_H3_MESSAGE_ERROR, ERR_H3_MISSING_SETTINGS, ERR_H3_REQUEST_CANCELLED,
+    ERR_H3_SETTINGS_ERROR, ERR_H3_STREAM_CREATION_ERROR, ERR_QPACK_DECODER_STREAM_ERROR,
     ERR_QPACK_DECOMPRESSION_FAILED, ERR_QPACK_ENCODER_STREAM_ERROR, ERR_WT_REQUIREMENTS_NOT_MET,
     ERR_WT_SESSION_GONE, H3_FRAME_TYPE_DATA, H3_FRAME_TYPE_HEADERS,
     H3_FRAME_TYPE_RESERVED_PRIORITY, H3_FRAME_TYPE_SETTINGS, H3_FRAME_TYPE_WT_STREAM,
     WT_UPGRADE_TOKEN,
 };
-use crate::common::error::WebTransportError;
 use crate::common::types::{Headers, StreamId};
 use crate::protocol::connection::{Connection, ConnectionParameters};
 use crate::protocol::events::{Effect, ProtocolEvent};
@@ -36,12 +35,9 @@ fn create_h3(is_client: bool) -> H3 {
 }
 
 fn create_headers_frame(header_block: &[u8]) -> Bytes {
-    let header = match encode_frame_header(H3_FRAME_TYPE_HEADERS, header_block.len()) {
-        Ok(header) => header,
-        Err(e) => {
-            assert_eq!(format!("{e:?}"), "");
-            unreachable!()
-        }
+    let Some(header) = encode_frame_header(H3_FRAME_TYPE_HEADERS, header_block.len()) else {
+        assert_eq!("some", "none");
+        unreachable!()
     };
 
     let mut frame = BytesMut::with_capacity(header.len() + header_block.len());
@@ -89,20 +85,14 @@ fn valid_settings_frame() -> Bytes {
         ..Default::default()
     };
 
-    let payload = match encode_settings(&settings) {
-        Ok(payload) => payload,
-        Err(e) => {
-            assert_eq!(format!("{e:?}"), "");
-            unreachable!()
-        }
+    let Some(payload) = encode_settings(&settings) else {
+        assert_eq!("some", "none");
+        unreachable!()
     };
 
-    let header = match encode_frame_header(H3_FRAME_TYPE_SETTINGS, payload.len()) {
-        Ok(header) => header,
-        Err(e) => {
-            assert_eq!(format!("{e:?}"), "");
-            unreachable!()
-        }
+    let Some(header) = encode_frame_header(H3_FRAME_TYPE_SETTINGS, payload.len()) else {
+        assert_eq!("some", "none");
+        unreachable!()
     };
 
     let mut frame = BytesMut::with_capacity(header.len() + payload.len());
@@ -112,16 +102,54 @@ fn valid_settings_frame() -> Bytes {
 }
 
 #[test]
-fn test_bind_connect_stream_registers_stream() {
+fn test_abort_request_stream_resets_and_stops() {
+    let effects = H3::abort_request_stream(0);
+
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            Effect::ResetQuicStream {
+                stream_id: 0,
+                error_code: ERR_H3_REQUEST_CANCELLED,
+            },
+            Effect::StopQuicStream {
+                stream_id: 0,
+                error_code: ERR_H3_REQUEST_CANCELLED,
+            }
+        ]
+    ));
+}
+
+#[test]
+fn test_bind_connect_stream_after_goaway_rejected() {
     let mut h3 = create_h3(true);
+    h3.peer_goaway_identifier = Some(0);
 
-    let effects = h3.bind_connect_stream(0);
+    let (events, effects) = h3.bind_connect_stream(0);
 
+    assert!(matches!(
+        events.as_slice(),
+        [ProtocolEvent::H3ConnectStreamRejected { stream_id: 0 }]
+    ));
+    assert!(effects.is_empty());
+    assert!(!h3.streams.contains_key(&0));
+}
+
+#[rstest]
+#[case::below_goaway(Some(4))]
+#[case::no_goaway(None)]
+fn test_bind_connect_stream_registers_stream(#[case] peer_goaway_identifier: Option<u64>) {
+    let mut h3 = create_h3(true);
+    h3.peer_goaway_identifier = peer_goaway_identifier;
+
+    let (events, effects) = h3.bind_connect_stream(0);
+
+    assert!(events.is_empty());
     assert!(matches!(
         effects.as_slice(),
         [Effect::ReceiveQuicData {
             stream_id: 0,
-            max_size: u64::MAX,
+            max_size: 1,
         }]
     ));
     assert!(
@@ -153,7 +181,7 @@ fn test_bind_local_streams_settings_encode_failure() {
             reason: Some(reason),
         }] if reason == "h3_settings encode failed"
     ));
-    assert_eq!(h3.local_control_stream_id(), None);
+    assert_eq!(h3.local_control_stream_id, None);
 }
 
 #[test]
@@ -184,7 +212,7 @@ fn test_bind_local_streams_success() {
             && encoder_data.as_ref() == b"\x02"
             && decoder_data.as_ref() == b"\x03"
     ));
-    assert_eq!(h3.local_control_stream_id(), Some(2));
+    assert_eq!(h3.local_control_stream_id, Some(2));
 }
 
 #[test]
@@ -229,89 +257,98 @@ fn test_client_rejects_server_initiated_non_webtransport_bidirectional_stream() 
 
 #[test]
 fn test_encode_capsule_invalid_type_failure() {
-    let result = H3::encode_capsule(u64::MAX, Bytes::new());
+    let effects = H3::encode_capsule(0, u64::MAX, Bytes::new(), false);
 
     assert!(matches!(
-        result,
-        Err(WebTransportError::Protocol(Some(ERR_LIB_INTERNAL_ERROR), _))
+        effects.as_slice(),
+        [Effect::CloseQuicConnection {
+            error_code: ERR_H3_INTERNAL_ERROR,
+            reason: Some(reason),
+        }] if reason == "wt_capsule encode failed"
     ));
 }
 
 #[test]
 fn test_encode_capsule_success() {
-    let capsule_type = 0x1234;
-    let data = Bytes::from("capsule_payload");
-    let result = H3::encode_capsule(capsule_type, data);
-    match result {
-        Ok(parts) => assert_eq!(parts.first().and_then(|part| part.first()), Some(&0x00)),
-        Err(e) => {
-            assert_eq!(format!("{e:?}"), "");
-        }
-    }
-}
-
-#[test]
-fn test_encode_connect_request_success() {
-    let mut h3 = create_h3(true);
-
-    let result = h3.encode_connect_request(0, "localhost".to_owned(), "/".to_owned(), &Vec::new());
+    let effects = H3::encode_capsule(0, 0x1234, Bytes::from("capsule_payload"), true);
 
     assert!(matches!(
-        result.as_deref(),
-        Ok([
+        effects.as_slice(),
+        [
             Effect::SendQuicData {
                 stream_id: 0,
+                data: frame_header,
                 end_stream: false,
-                ..
             },
             Effect::SendQuicData {
                 stream_id: 0,
+                data: capsule_header,
                 end_stream: false,
-                ..
-            }
-        ])
+            },
+            Effect::SendQuicData {
+                stream_id: 0,
+                data: capsule_value,
+                end_stream: true,
+            },
+        ] if frame_header.as_ref() == [0x00, 0x12]
+            && capsule_header.as_ref() == [0x52, 0x34, 0x0F]
+            && capsule_value.as_ref() == b"capsule_payload"
     ));
 }
 
 #[test]
 fn test_encode_datagram_success() {
-    let session_id = 0;
     let data = Bytes::from("datagram");
-    let result = H3::encode_datagram(session_id, data);
-    match result {
-        Ok(parts) => {
-            assert_eq!(parts.len(), 2);
-            if let Some(header) = parts.first() {
-                assert_eq!(header.as_ref(), &[0x00]);
-            } else {
-                assert_eq!(parts.len(), 0);
-            }
-        }
-        Err(e) => {
-            assert_eq!(format!("{e:?}"), "");
-        }
-    }
-}
 
-#[test]
-fn test_encode_goaway_invalid_identifier_failure() {
-    let result = H3::encode_goaway(u64::MAX);
+    let effects = H3::encode_datagram(4, data.clone());
 
     assert!(matches!(
-        result,
-        Err(WebTransportError::Protocol(Some(ERR_LIB_INTERNAL_ERROR), _))
+        effects.as_slice(),
+        [Effect::SendQuicDatagram { header, payload }]
+            if header.as_ref() == [0x01] && *payload == data
     ));
 }
 
 #[test]
+fn test_encode_goaway_invalid_identifier_failure() {
+    let mut h3 = create_h3(true);
+    h3.bind_local_streams(2, 6, 10);
+
+    let effects = h3.encode_goaway(u64::MAX);
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CloseQuicConnection {
+            error_code: ERR_H3_INTERNAL_ERROR,
+            reason: Some(reason),
+        }] if reason == "h3_goaway encode failed"
+    ));
+}
+
+#[test]
+fn test_encode_goaway_no_control_stream() {
+    let h3 = create_h3(true);
+
+    let effects = h3.encode_goaway(0);
+
+    assert!(effects.is_empty());
+}
+
+#[test]
 fn test_encode_goaway_success() {
-    let result = H3::encode_goaway(100);
-    match result {
-        Ok(frame) => assert_eq!(frame.first(), Some(&0x07)),
-        Err(e) => {
-            assert_eq!(format!("{e:?}"), "");
-        }
-    }
+    let mut h3 = create_h3(true);
+    h3.bind_local_streams(2, 6, 10);
+
+    let effects = h3.encode_goaway(100);
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::SendQuicData {
+            stream_id: 2,
+            data,
+            end_stream: false,
+        }] if data.as_ref() == [0x07, 0x02, 0x40, 0x64]
+    ));
 }
 
 #[test]
@@ -319,34 +356,39 @@ fn test_encode_headers_field_too_long_failure() {
     let mut h3 = create_h3(true);
     let headers = vec![(Bytes::from("x-large"), Bytes::from(vec![b'a'; 70000]))];
 
-    let result = h3.encode_headers(0, &headers, false);
+    let effects = h3.encode_headers(0, &headers, false);
 
     assert!(matches!(
-        result,
-        Err(WebTransportError::Protocol(Some(ERR_LIB_INTERNAL_ERROR), _))
+        effects.as_slice(),
+        [Effect::CloseQuicConnection {
+            error_code: ERR_H3_INTERNAL_ERROR,
+            reason: Some(reason),
+        }] if reason == "qpack_encoder encode failed"
     ));
 }
 
 #[test]
 fn test_encode_headers_success() {
     let mut h3 = create_h3(true);
-    let stream_id = 0;
     let headers = valid_request_headers();
 
-    let result = h3.encode_headers(stream_id, &headers, true);
+    let effects = h3.encode_headers(0, &headers, true);
 
-    match result {
-        Ok(effects) => {
-            assert!(
-                effects
-                    .iter()
-                    .any(|effect| matches!(effect, Effect::SendQuicData { .. }))
-            );
-        }
-        Err(e) => {
-            assert_eq!(format!("{e:?}"), "");
-        }
-    }
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            Effect::SendQuicData {
+                stream_id: 0,
+                data: frame_header,
+                end_stream: false,
+            },
+            Effect::SendQuicData {
+                stream_id: 0,
+                end_stream: true,
+                ..
+            },
+        ] if frame_header.first() == Some(&0x01)
+    ));
 }
 
 #[rstest]
@@ -360,10 +402,7 @@ fn test_encode_settings_invalid_unknown_failure(#[case] identifier: u64, #[case]
 
     let result = encode_settings(&settings);
 
-    assert!(matches!(
-        result,
-        Err(WebTransportError::Protocol(Some(ERR_LIB_INTERNAL_ERROR), _))
-    ));
+    assert!(result.is_none());
 }
 
 #[test]
@@ -384,7 +423,13 @@ fn test_encode_stream_header_bidirectional() {
 fn test_encode_stream_header_invalid_session_id() {
     let effects = H3::encode_stream_header(4, u64::MAX, false);
 
-    assert!(effects.is_empty());
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CloseQuicConnection {
+            error_code: ERR_H3_INTERNAL_ERROR,
+            reason: Some(reason),
+        }] if reason == "wt_stream encode failed"
+    ));
 }
 
 #[test]
@@ -659,29 +704,13 @@ fn test_parse_capsules_incomplete_header_buffered(#[case] data: &'static [u8]) {
         ..Default::default()
     };
     stream.capsule_buffer.extend_from_slice(data);
+    let mut events = Vec::new();
 
-    let events = match h3.parse_capsules(0, &mut stream) {
-        Ok(events) => events,
-        Err(e) => {
-            assert_eq!(format!("{e:?}"), "");
-            unreachable!()
-        }
-    };
+    let result = h3.parse_capsules(0, &mut stream, &mut events);
 
+    assert!(matches!(result, Ok(())));
     assert!(events.is_empty());
     assert_eq!(stream.capsule_buffer.as_ref(), data);
-}
-
-#[rstest]
-#[case::missing(&[])]
-#[case::trailing(&[0x00, 0x00])]
-fn test_parse_push_id_invalid_layout_failure(#[case] data: &'static [u8]) {
-    let result = parse_push_id(data);
-
-    assert!(matches!(
-        result,
-        Err(WebTransportError::Protocol(Some(ERR_H3_FRAME_ERROR), _))
-    ));
 }
 
 #[test]
@@ -698,7 +727,7 @@ fn test_parse_settings_all_named_and_unknown_fields() {
         ..Default::default()
     };
 
-    let Ok(payload) = encode_settings(&settings) else {
+    let Some(payload) = encode_settings(&settings) else {
         return;
     };
 
@@ -727,7 +756,10 @@ fn test_parse_settings_duplicate_id_failure() {
     let result = parse_settings(&buffer.freeze());
     assert!(matches!(
         result,
-        Err(WebTransportError::Protocol(Some(ERR_H3_SETTINGS_ERROR), _))
+        Err(H3Error::Connection {
+            error_code: ERR_H3_SETTINGS_ERROR,
+            ..
+        })
     ));
 }
 
@@ -741,7 +773,10 @@ fn test_parse_settings_duplicate_unknown_id_failure() {
 
     assert!(matches!(
         result,
-        Err(WebTransportError::Protocol(Some(ERR_H3_SETTINGS_ERROR), _))
+        Err(H3Error::Connection {
+            error_code: ERR_H3_SETTINGS_ERROR,
+            ..
+        })
     ));
 }
 
@@ -757,7 +792,10 @@ fn test_parse_settings_entries_limit_exceeded() {
 
     assert!(matches!(
         result,
-        Err(WebTransportError::Protocol(Some(ERR_H3_EXCESSIVE_LOAD), _))
+        Err(H3Error::Connection {
+            error_code: ERR_H3_EXCESSIVE_LOAD,
+            ..
+        })
     ));
 }
 
@@ -768,7 +806,10 @@ fn test_parse_settings_reserved_id_failure() {
     let result = parse_settings(&buffer.freeze());
     assert!(matches!(
         result,
-        Err(WebTransportError::Protocol(Some(ERR_H3_SETTINGS_ERROR), _))
+        Err(H3Error::Connection {
+            error_code: ERR_H3_SETTINGS_ERROR,
+            ..
+        })
     ));
 }
 
@@ -780,7 +821,10 @@ fn test_parse_settings_truncated_id_failure() {
 
     assert!(matches!(
         result,
-        Err(WebTransportError::Protocol(Some(ERR_H3_FRAME_ERROR), _))
+        Err(H3Error::Connection {
+            error_code: ERR_H3_FRAME_ERROR,
+            ..
+        })
     ));
 }
 
@@ -792,7 +836,10 @@ fn test_parse_settings_truncated_value_failure() {
 
     assert!(matches!(
         result,
-        Err(WebTransportError::Protocol(Some(ERR_H3_FRAME_ERROR), _))
+        Err(H3Error::Connection {
+            error_code: ERR_H3_FRAME_ERROR,
+            ..
+        })
     ));
 }
 
@@ -820,7 +867,7 @@ fn test_parse_settings_valid() {
         ..Default::default()
     };
 
-    let Ok(payload) = encode_settings(&settings) else {
+    let Some(payload) = encode_settings(&settings) else {
         return;
     };
 
@@ -834,6 +881,21 @@ fn test_parse_settings_valid() {
             assert_eq!(format!("{e:?}"), "");
         }
     }
+}
+
+#[rstest]
+#[case::missing(&[])]
+#[case::trailing(&[0x00, 0x00])]
+fn test_parse_varint_payload_invalid_layout_failure(#[case] data: &'static [u8]) {
+    let result = parse_varint_payload(data);
+
+    assert!(matches!(
+        result,
+        Err(H3Error::Connection {
+            error_code: ERR_H3_FRAME_ERROR,
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -852,12 +914,17 @@ fn test_receive_capsule_too_large() {
     data.extend_from_slice(&[0x80, 0x01, 0x00, 0x01]);
 
     stream.capsule_buffer.extend_from_slice(&data);
+    let mut events = Vec::new();
 
-    let result = h3.parse_capsules(stream_id, &mut stream);
+    let result = h3.parse_capsules(stream_id, &mut stream, &mut events);
     assert!(matches!(
         result,
-        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(H3Error::Stream {
+            stream_id: 0,
+            error_code: ERR_H3_MESSAGE_ERROR,
+        })
     ));
+    assert!(events.is_empty());
 }
 
 #[test]
@@ -946,34 +1013,25 @@ fn test_receive_connect_stream_capsule_fragmented() {
     chunk1.extend_from_slice(&[0x03]);
 
     stream.capsule_buffer.extend_from_slice(&chunk1);
+    let mut events = Vec::new();
 
-    let events1 = match h3.parse_capsules(stream_id, &mut stream) {
-        Ok(events) => events,
-        Err(e) => {
-            assert_eq!(format!("{e:?}"), "");
-            unreachable!()
-        }
-    };
-    assert!(events1.is_empty());
+    let result1 = h3.parse_capsules(stream_id, &mut stream, &mut events);
+    assert!(matches!(result1, Ok(())));
+    assert!(events.is_empty());
 
     let mut chunk2 = BytesMut::new();
     chunk2.extend_from_slice(b"ABC");
 
     stream.capsule_buffer.extend_from_slice(&chunk2);
 
-    let events2 = match h3.parse_capsules(stream_id, &mut stream) {
-        Ok(events) => events,
-        Err(e) => {
-            assert_eq!(format!("{e:?}"), "");
-            unreachable!()
-        }
-    };
+    let result2 = h3.parse_capsules(stream_id, &mut stream, &mut events);
 
-    assert_eq!(events2.len(), 1);
-    if let Some(ProtocolEvent::H3CapsuleReceived { capsule_value, .. }) = events2.first() {
+    assert!(matches!(result2, Ok(())));
+    assert_eq!(events.len(), 1);
+    if let Some(ProtocolEvent::H3CapsuleReceived { capsule_value, .. }) = events.first() {
         assert_eq!(capsule_value.as_ref(), b"ABC");
     } else {
-        assert_eq!(events2.len(), 0);
+        assert_eq!(events.len(), 0);
     }
 }
 
@@ -1047,15 +1105,11 @@ fn test_receive_connect_stream_capsules() {
     buffer.put_slice(b"ABC");
 
     stream.capsule_buffer.extend_from_slice(&buffer);
+    let mut events = Vec::new();
 
-    let events = match h3.parse_capsules(stream_id, &mut stream) {
-        Ok(events) => events,
-        Err(e) => {
-            assert_eq!(format!("{e:?}"), "");
-            unreachable!()
-        }
-    };
+    let result = h3.parse_capsules(stream_id, &mut stream, &mut events);
 
+    assert!(matches!(result, Ok(())));
     assert!(!events.is_empty());
     if let Some(ProtocolEvent::H3CapsuleReceived {
         capsule_type,
@@ -1227,12 +1281,80 @@ fn test_receive_control_frame_incomplete_type_buffered() {
 }
 
 #[test]
-fn test_receive_control_goaway_success() {
+fn test_receive_control_goaway_rejects_pending_connect_streams() {
     let mut h3 = create_h3(true);
     let mock = MockConnectionLayout {
         _padding: [0; 1024],
     };
     let stream_id = 3;
+    h3.bind_connect_stream(0);
+    h3.bind_connect_stream(4);
+    h3.bind_connect_stream(8);
+    h3.streams.insert(
+        12,
+        H3Stream {
+            headers_processed: true,
+            is_connect_stream: true,
+            is_request_stream: true,
+            ..Default::default()
+        },
+    );
+    h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: Bytes::from(vec![0x00]),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+    h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: valid_settings_frame(),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    let (events, effects) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: Bytes::from(vec![0x07, 0x01, 0x08, 0x07, 0x01, 0x04]),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    assert!(matches!(
+        events.as_slice(),
+        [
+            ProtocolEvent::H3GoawayReceived,
+            ProtocolEvent::H3ConnectStreamRejected { stream_id: 8 },
+            ProtocolEvent::H3GoawayReceived,
+            ProtocolEvent::H3ConnectStreamRejected { stream_id: 4 }
+        ]
+    ));
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::ReceiveQuicData {
+            stream_id: 3,
+            max_size: u64::MAX,
+        }]
+    ));
+    assert!(h3.streams.contains_key(&0));
+    assert!(!h3.streams.contains_key(&4));
+    assert!(!h3.streams.contains_key(&8));
+    assert!(h3.streams.contains_key(&12));
+    assert_eq!(h3.peer_goaway_identifier, Some(4));
+}
+
+#[test]
+fn test_receive_control_goaway_success() {
+    let mut h3 = create_h3(false);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    let stream_id = 2;
     h3.handle_transport_event(
         &ProtocolEvent::TransportStreamDataReceived {
             stream_id,
@@ -1251,19 +1373,80 @@ fn test_receive_control_goaway_success() {
         mock.as_connection(),
     );
 
-    let (events, _) = h3.handle_transport_event(
+    let (events, effects) = h3.handle_transport_event(
         &ProtocolEvent::TransportStreamDataReceived {
             stream_id,
-            data: Bytes::from(vec![0x07, 0x01, 0x00]),
+            data: Bytes::from(vec![0x07, 0x01, 0x01]),
             end_stream: false,
         },
         mock.as_connection(),
     );
+
+    assert!(matches!(
+        events.as_slice(),
+        [ProtocolEvent::H3GoawayReceived]
+    ));
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::ReceiveQuicData {
+            stream_id: 2,
+            max_size: u64::MAX,
+        }]
+    ));
+    assert_eq!(h3.peer_goaway_identifier, Some(1));
+}
+
+#[rstest]
+#[case::bidirectional_server(&[0x07, 0x01, 0x01], ERR_H3_ID_ERROR, 0)]
+#[case::increased(&[0x07, 0x01, 0x00, 0x07, 0x01, 0x04], ERR_H3_ID_ERROR, 1)]
+#[case::trailing(&[0x07, 0x02, 0x00, 0x00], ERR_H3_FRAME_ERROR, 0)]
+#[case::unidirectional(&[0x07, 0x01, 0x02], ERR_H3_ID_ERROR, 0)]
+fn test_receive_control_goaway_validation_fails(
+    #[case] data: &'static [u8],
+    #[case] expected_error_code: u64,
+    #[case] expected_event_count: usize,
+) {
+    let mut h3 = create_h3(true);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    let stream_id = 3;
+    h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: Bytes::from(vec![0x00]),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+    h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: valid_settings_frame(),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    let (events, effects) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: Bytes::from_static(data),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    assert_eq!(events.len(), expected_event_count);
     assert!(
         events
             .iter()
-            .any(|event| matches!(event, ProtocolEvent::H3GoawayReceived))
+            .all(|event| matches!(event, ProtocolEvent::H3GoawayReceived))
     );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CloseQuicConnection { error_code, .. }] if *error_code == expected_error_code
+    ));
 }
 
 #[test]
@@ -1334,7 +1517,7 @@ fn test_receive_control_large_unknown_frame_streamed() {
 
     let mut data = BytesMut::new();
     data.put_u8(0x21);
-    assert!(matches!(utils::write_varint(&mut data, 5000), Ok(())));
+    assert!(matches!(utils::write_varint(&mut data, 5000), Some(())));
     data.put_slice(&[0xFF; 3]);
 
     let (events, effects) = h3.handle_transport_event(
@@ -1389,9 +1572,9 @@ fn test_receive_control_reserved_frame_fails() {
     let mut data = BytesMut::new();
     assert!(matches!(
         utils::write_varint(&mut data, H3_FRAME_TYPE_RESERVED_PRIORITY),
-        Ok(())
+        Some(())
     ));
-    assert!(matches!(utils::write_varint(&mut data, 0), Ok(())));
+    assert!(matches!(utils::write_varint(&mut data, 0), Some(())));
 
     let (_, effects) = h3.handle_transport_event(
         &ProtocolEvent::TransportStreamDataReceived {
@@ -1561,7 +1744,7 @@ fn test_receive_control_wt_stream_frame_fails() {
     let mut data = BytesMut::new();
     assert!(matches!(
         utils::write_varint(&mut data, H3_FRAME_TYPE_WT_STREAM),
-        Ok(())
+        Some(())
     ));
 
     let (_, effects) = h3.handle_transport_event(
@@ -1584,7 +1767,7 @@ fn test_receive_control_wt_stream_frame_fails() {
 
 #[test]
 fn test_receive_data_on_non_connect_stream_ignored() {
-    let mut h3 = create_h3(true);
+    let mut h3 = create_h3(false);
     let mock = MockConnectionLayout {
         _padding: [0; 1024],
     };
@@ -1631,6 +1814,7 @@ fn test_receive_double_headers_error() {
 
     let stream = H3Stream {
         headers_processed: true,
+        is_connect_stream: true,
         is_request_stream: true,
         ..Default::default()
     };
@@ -1648,16 +1832,10 @@ fn test_receive_double_headers_error() {
 
     assert!(matches!(
         effects.as_slice(),
-        [
-            Effect::ResetQuicStream {
-                stream_id: 0,
-                error_code: ERR_H3_FRAME_UNEXPECTED,
-            },
-            Effect::StopQuicStream {
-                stream_id: 0,
-                error_code: ERR_H3_FRAME_UNEXPECTED,
-            }
-        ]
+        [Effect::CloseQuicConnection {
+            error_code: ERR_H3_FRAME_UNEXPECTED,
+            ..
+        }]
     ));
     assert!(!h3.streams.contains_key(&stream_id));
 }
@@ -1666,7 +1844,7 @@ fn test_receive_double_headers_error() {
 #[case::connect_stream(true)]
 #[case::request_stream(false)]
 fn test_receive_empty_data_frame_ignored(#[case] is_connect_stream: bool) {
-    let mut h3 = create_h3(true);
+    let mut h3 = create_h3(false);
     let mock = MockConnectionLayout {
         _padding: [0; 1024],
     };
@@ -1710,7 +1888,7 @@ fn test_receive_headers_dynamic_table_fails_with_zero_capacity() {
 
     let mut data = BytesMut::new();
     data.put_u8(0x01);
-    assert!(matches!(utils::write_varint(&mut data, 3), Ok(())));
+    assert!(matches!(utils::write_varint(&mut data, 3), Some(())));
     data.extend_from_slice(&[0x02, 0x00, 0x80]);
 
     let (_, effects) = h3.handle_transport_event(
@@ -1727,6 +1905,46 @@ fn test_receive_headers_dynamic_table_fails_with_zero_capacity() {
         unreachable!()
     };
     assert_eq!(*error_code, ERR_QPACK_DECOMPRESSION_FAILED);
+}
+
+#[test]
+fn test_receive_headers_field_section_too_large_fails() {
+    let mut h3 = create_h3(false);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    let stream_id = 0;
+    h3.settings_received = true;
+    h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamOpened { stream_id },
+        mock.as_connection(),
+    );
+    let headers = vec![(Bytes::from("accept"), Bytes::from("*/*")); 1599];
+
+    let (events, effects) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: create_headers_frame(&encode_header_block(&headers)),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    assert!(events.is_empty());
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            Effect::ResetQuicStream {
+                stream_id: 0,
+                error_code: ERR_H3_MESSAGE_ERROR,
+            },
+            Effect::StopQuicStream {
+                stream_id: 0,
+                error_code: ERR_H3_MESSAGE_ERROR,
+            }
+        ]
+    ));
+    assert!(!h3.streams.contains_key(&stream_id));
 }
 
 #[test]
@@ -1805,8 +2023,10 @@ fn test_receive_malformed_control_frame() {
     ));
 }
 
-#[test]
-fn test_receive_request_data_connect_headers_marks_connect_stream() {
+#[rstest]
+#[case::canonical(WT_UPGRADE_TOKEN)]
+#[case::mixed_case(b"WebTransport-H3")]
+fn test_receive_request_data_connect_headers_marks_connect_stream(#[case] protocol: &'static [u8]) {
     let mut h3 = create_h3(false);
     let mock = MockConnectionLayout {
         _padding: [0; 1024],
@@ -1819,10 +2039,7 @@ fn test_receive_request_data_connect_headers_marks_connect_stream() {
     );
     let headers = vec![
         (Bytes::from(":method"), Bytes::from("CONNECT")),
-        (
-            Bytes::from(":protocol"),
-            Bytes::from_static(WT_UPGRADE_TOKEN),
-        ),
+        (Bytes::from(":protocol"), Bytes::from_static(protocol)),
         (Bytes::from(":scheme"), Bytes::from("https")),
         (Bytes::from(":authority"), Bytes::from("localhost")),
         (Bytes::from(":path"), Bytes::from("/")),
@@ -1858,10 +2075,17 @@ fn test_receive_request_data_connect_stream_fin_closes() {
     let mock = MockConnectionLayout {
         _padding: [0; 1024],
     };
-    h3.bind_connect_stream(0);
+    let stream = H3Stream {
+        headers_processed: true,
+        is_connect_stream: true,
+        is_request_stream: true,
+        ..Default::default()
+    };
+    h3.streams.insert(0, stream);
+    let mut events = Vec::new();
 
-    let (events, effects) = match h3.receive_request_data(0, &[], true, mock.as_connection()) {
-        Ok(result) => result,
+    let effects = match h3.receive_request_data(0, &[], &mut events, true, mock.as_connection()) {
+        Ok(effects) => effects,
         Err(e) => {
             assert_eq!(format!("{e:?}"), "");
             unreachable!()
@@ -1870,10 +2094,66 @@ fn test_receive_request_data_connect_stream_fin_closes() {
 
     assert!(matches!(
         events.as_slice(),
-        [ProtocolEvent::H3ConnectStreamClosed { stream_id: 0 }]
+        [ProtocolEvent::H3ConnectStreamClosed {
+            stream_id: 0,
+            error_code: None,
+        }]
     ));
     assert!(effects.is_empty());
     assert!(!h3.streams.contains_key(&0));
+}
+
+#[rstest]
+#[case::missing_response(&[], false)]
+#[case::truncated_capsule(&[0x00, 0x02, 0x00, 0x05], true)]
+fn test_receive_request_data_connect_stream_incomplete_fin_fails(
+    #[case] data: &'static [u8],
+    #[case] headers_processed: bool,
+) {
+    let mut h3 = create_h3(true);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    let stream_id = 0;
+
+    let stream = H3Stream {
+        headers_processed,
+        is_connect_stream: true,
+        is_request_stream: true,
+        ..Default::default()
+    };
+    h3.streams.insert(stream_id, stream);
+
+    let (events, effects) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: Bytes::from_static(data),
+            end_stream: true,
+        },
+        mock.as_connection(),
+    );
+
+    assert!(matches!(
+        events.as_slice(),
+        [ProtocolEvent::H3ConnectStreamClosed {
+            stream_id: 0,
+            error_code: Some(ERR_H3_MESSAGE_ERROR),
+        }]
+    ));
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            Effect::ResetQuicStream {
+                stream_id: 0,
+                error_code: ERR_H3_MESSAGE_ERROR,
+            },
+            Effect::StopQuicStream {
+                stream_id: 0,
+                error_code: ERR_H3_MESSAGE_ERROR,
+            }
+        ]
+    ));
+    assert!(!h3.streams.contains_key(&stream_id));
 }
 
 #[test]
@@ -1944,9 +2224,7 @@ fn test_receive_request_data_headers_frame_flow() {
     let mut sender_h3 = create_h3(true);
     sender_h3.bind_local_streams(2, 6, 10);
 
-    let Ok(encoded_effects) = sender_h3.encode_headers(stream_id, &headers, false) else {
-        return;
-    };
+    let encoded_effects = sender_h3.encode_headers(stream_id, &headers, false);
 
     let mut frame_data = BytesMut::new();
 
@@ -1987,7 +2265,7 @@ fn test_receive_request_data_headers_too_large() {
 
     let mut data = BytesMut::new();
     data.put_u8(0x01);
-    assert!(matches!(utils::write_varint(&mut data, 65537), Ok(())));
+    assert!(matches!(utils::write_varint(&mut data, 65537), Some(())));
 
     let (_, effects) = h3.handle_transport_event(
         &ProtocolEvent::TransportStreamDataReceived {
@@ -2039,7 +2317,7 @@ fn test_receive_request_data_incomplete_frame_buffered() {
         effects.as_slice(),
         [Effect::ReceiveQuicData {
             stream_id: 0,
-            max_size: u64::MAX,
+            max_size: 1,
         }]
     ));
     assert!(
@@ -2060,7 +2338,7 @@ fn test_receive_request_data_large_unknown_frame_streamed() {
 
     let mut data = BytesMut::new();
     data.put_u8(0x21);
-    assert!(matches!(utils::write_varint(&mut data, 5000), Ok(())));
+    assert!(matches!(utils::write_varint(&mut data, 5000), Some(())));
     data.put_slice(&[0xFF; 3]);
 
     let (events, effects) = h3.handle_transport_event(
@@ -2077,7 +2355,7 @@ fn test_receive_request_data_large_unknown_frame_streamed() {
         effects.as_slice(),
         [Effect::ReceiveQuicData {
             stream_id: 0,
-            max_size: u64::MAX,
+            max_size: 4997,
         }]
     ));
     assert!(
@@ -2110,7 +2388,7 @@ fn test_receive_request_data_partial_headers_frame_buffered() {
         effects.as_slice(),
         [Effect::ReceiveQuicData {
             stream_id: 0,
-            max_size: u64::MAX,
+            max_size: 7,
         }]
     ));
     assert!(
@@ -2120,29 +2398,117 @@ fn test_receive_request_data_partial_headers_frame_buffered() {
     );
 }
 
-#[test]
-fn test_receive_request_data_push_promise_frame_fails() {
+#[rstest]
+#[case::missing_push_id(&[0x05, 0x00], ERR_H3_FRAME_ERROR)]
+#[case::truncated_push_id(&[0x05, 0x01, 0x40, 0x00], ERR_H3_FRAME_ERROR)]
+#[case::unadvertised_push_id(&[0x05, 0x01, 0x00], ERR_H3_ID_ERROR)]
+fn test_receive_request_data_push_promise_frame_fails(
+    #[case] data: &'static [u8],
+    #[case] expected_error_code: u64,
+) {
     let mut h3 = create_h3(true);
     let mock = MockConnectionLayout {
         _padding: [0; 1024],
     };
     let stream_id = 0;
-    h3.settings_received = true;
     h3.bind_connect_stream(stream_id);
 
-    let mut data = BytesMut::new();
-    data.put_u8(0x05);
-    data.put_u8(0x00);
-
-    let (_, effects) = h3.handle_transport_event(
+    let (events, effects) = h3.handle_transport_event(
         &ProtocolEvent::TransportStreamDataReceived {
             stream_id,
-            data: data.freeze(),
+            data: Bytes::from_static(data),
             end_stream: false,
         },
         mock.as_connection(),
     );
 
+    assert!(events.is_empty());
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CloseQuicConnection { error_code, .. }] if *error_code == expected_error_code
+    ));
+}
+
+#[test]
+fn test_receive_request_data_push_promise_frame_partial_push_id_buffered() {
+    let mut h3 = create_h3(true);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    let stream_id = 0;
+    h3.bind_connect_stream(stream_id);
+
+    let (events, effects) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: Bytes::from(vec![0x05, 0x02, 0x40]),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    assert!(events.is_empty());
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::ReceiveQuicData {
+            stream_id: 0,
+            max_size: 1,
+        }]
+    ));
+    assert!(h3.streams.get(&stream_id).is_some_and(|stream| {
+        stream.partial_frame.is_none() && stream.buffer.as_ref() == [0x05, 0x02, 0x40]
+    }));
+
+    let (events, effects) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: Bytes::from(vec![0x00]),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    assert!(events.is_empty());
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CloseQuicConnection {
+            error_code: ERR_H3_ID_ERROR,
+            ..
+        }]
+    ));
+}
+
+#[rstest]
+#[case::client_after_response(true, true)]
+#[case::server(false, false)]
+fn test_receive_request_data_push_promise_frame_unexpected_fails(
+    #[case] headers_processed: bool,
+    #[case] is_client: bool,
+) {
+    let mut h3 = create_h3(is_client);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    let stream_id = 0;
+
+    let stream = H3Stream {
+        headers_processed,
+        is_connect_stream: headers_processed,
+        is_request_stream: true,
+        ..Default::default()
+    };
+    h3.streams.insert(stream_id, stream);
+
+    let (events, effects) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: Bytes::from(vec![0x05, 0x01, 0x00]),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    assert!(events.is_empty());
     assert!(matches!(
         effects.as_slice(),
         [Effect::CloseQuicConnection {
@@ -2215,7 +2581,7 @@ fn test_receive_request_data_unknown_frame_ignored() {
         effects.as_slice(),
         [Effect::ReceiveQuicData {
             stream_id: 0,
-            max_size: u64::MAX,
+            max_size: 1,
         }]
     ));
 }
@@ -2384,9 +2750,9 @@ fn test_receive_request_reserved_frame_fails() {
     let mut data = BytesMut::new();
     assert!(matches!(
         utils::write_varint(&mut data, H3_FRAME_TYPE_RESERVED_PRIORITY),
-        Ok(())
+        Some(())
     ));
-    assert!(matches!(utils::write_varint(&mut data, 5000), Ok(())));
+    assert!(matches!(utils::write_varint(&mut data, 5000), Some(())));
 
     let (_, effects) = h3.handle_transport_event(
         &ProtocolEvent::TransportStreamDataReceived {
@@ -2434,6 +2800,101 @@ fn test_receive_request_settings_frame_fails() {
 }
 
 #[test]
+fn test_receive_response_headers_interim_before_final() {
+    let mut h3 = create_h3(true);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    let stream_id = 0;
+    h3.bind_connect_stream(stream_id);
+    let interim_headers = vec![(Bytes::from(":status"), Bytes::from("103"))];
+    let headers = vec![(Bytes::from(":status"), Bytes::from("200"))];
+
+    let (events, effects) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: create_headers_frame(&encode_header_block(&interim_headers)),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    assert!(events.is_empty());
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::ReceiveQuicData {
+            stream_id: 0,
+            max_size: 1,
+        }]
+    ));
+    assert!(
+        h3.streams
+            .get(&stream_id)
+            .is_some_and(|stream| !stream.headers_processed)
+    );
+
+    let (events, effects) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: create_headers_frame(&encode_header_block(&headers)),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    assert!(matches!(
+        events.as_slice(),
+        [ProtocolEvent::H3HeadersReceived {
+            stream_id: 0,
+            headers: received_headers,
+        }] if *received_headers == headers
+    ));
+    assert!(effects.is_empty());
+}
+
+#[test]
+fn test_receive_response_headers_non_2xx_aborts_stream() {
+    let mut h3 = create_h3(true);
+    let mock = MockConnectionLayout {
+        _padding: [0; 1024],
+    };
+    let stream_id = 0;
+    h3.bind_connect_stream(stream_id);
+    let headers = vec![(Bytes::from(":status"), Bytes::from("403"))];
+
+    let (events, effects) = h3.handle_transport_event(
+        &ProtocolEvent::TransportStreamDataReceived {
+            stream_id,
+            data: create_headers_frame(&encode_header_block(&headers)),
+            end_stream: false,
+        },
+        mock.as_connection(),
+    );
+
+    assert!(matches!(
+        events.as_slice(),
+        [ProtocolEvent::H3HeadersReceived {
+            stream_id: 0,
+            headers: received_headers,
+        }] if *received_headers == headers
+    ));
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            Effect::ResetQuicStream {
+                stream_id: 0,
+                error_code: ERR_H3_REQUEST_CANCELLED,
+            },
+            Effect::StopQuicStream {
+                stream_id: 0,
+                error_code: ERR_H3_REQUEST_CANCELLED,
+            }
+        ]
+    ));
+    assert!(!h3.streams.contains_key(&stream_id));
+}
+
+#[test]
 fn test_receive_response_headers_on_connect_stream() {
     let mut h3 = create_h3(true);
     let mock = MockConnectionLayout {
@@ -2460,6 +2921,11 @@ fn test_receive_response_headers_on_connect_stream() {
         }] if *received_headers == headers
     ));
     assert!(effects.is_empty());
+    assert!(
+        h3.streams
+            .get(&stream_id)
+            .is_some_and(|stream| stream.is_connect_stream && stream.headers_processed)
+    );
 }
 
 #[test]
@@ -2531,9 +2997,9 @@ fn test_receive_unidirectional_stream_data_control_data_frame_fails() {
     let mut data = BytesMut::new();
     assert!(matches!(
         utils::write_varint(&mut data, H3_FRAME_TYPE_DATA),
-        Ok(())
+        Some(())
     ));
-    assert!(matches!(utils::write_varint(&mut data, 0), Ok(())));
+    assert!(matches!(utils::write_varint(&mut data, 0), Some(())));
 
     let (_, effects) = h3.handle_transport_event(
         &ProtocolEvent::TransportStreamDataReceived {
@@ -2591,9 +3057,6 @@ fn test_receive_unidirectional_stream_data_control_missing_settings_failure(
 }
 #[test]
 fn test_receive_unidirectional_stream_data_control_settings_success() {
-    let h3 = create_h3(true);
-    assert_eq!(h3.local_control_stream_id(), None);
-
     let mut h3 = create_h3(true);
     let mock = MockConnectionLayout {
         _padding: [0; 1024],
@@ -3300,7 +3763,10 @@ fn test_validate_request_headers_duplicate_pseudo() {
     let result = validate_request_headers(0, &headers);
     assert!(matches!(
         result,
-        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(H3Error::Stream {
+            stream_id: 0,
+            error_code: ERR_H3_MESSAGE_ERROR,
+        })
     ));
 }
 
@@ -3315,7 +3781,10 @@ fn test_validate_request_headers_empty_path_failure() {
     let result = validate_request_headers(0, &headers);
     assert!(matches!(
         result,
-        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(H3Error::Stream {
+            stream_id: 0,
+            error_code: ERR_H3_MESSAGE_ERROR,
+        })
     ));
 }
 
@@ -3330,7 +3799,10 @@ fn test_validate_request_headers_extended_connect_missing_path_failure() {
     let result = validate_request_headers(0, &headers);
     assert!(matches!(
         result,
-        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(H3Error::Stream {
+            stream_id: 0,
+            error_code: ERR_H3_MESSAGE_ERROR,
+        })
     ));
 }
 
@@ -3369,6 +3841,27 @@ fn test_validate_request_headers_http_path(
 }
 
 #[rstest]
+#[case::http(b"http")]
+#[case::uppercase_https(b"HTTPS")]
+fn test_validate_request_headers_http_scheme_without_authority_failure(
+    #[case] scheme: &'static [u8],
+) {
+    let headers = vec![
+        (Bytes::from(":method"), Bytes::from("GET")),
+        (Bytes::from(":scheme"), Bytes::from_static(scheme)),
+        (Bytes::from(":path"), Bytes::from("/")),
+    ];
+    let result = validate_request_headers(0, &headers);
+    assert!(matches!(
+        result,
+        Err(H3Error::Stream {
+            stream_id: 0,
+            error_code: ERR_H3_MESSAGE_ERROR,
+        })
+    ));
+}
+
+#[rstest]
 #[case::connection_specific(b"connection", b"close")]
 #[case::invalid_value(b"custom", b"line\nbreak")]
 #[case::te_not_trailers(b"te", b"gzip")]
@@ -3382,7 +3875,10 @@ fn test_validate_request_headers_invalid_field_failure(
     let result = validate_request_headers(0, &headers);
     assert!(matches!(
         result,
-        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(H3Error::Stream {
+            stream_id: 0,
+            error_code: ERR_H3_MESSAGE_ERROR,
+        })
     ));
 }
 
@@ -3396,7 +3892,10 @@ fn test_validate_request_headers_missing_method_failure() {
     let result = validate_request_headers(0, &headers);
     assert!(matches!(
         result,
-        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(H3Error::Stream {
+            stream_id: 0,
+            error_code: ERR_H3_MESSAGE_ERROR,
+        })
     ));
 }
 
@@ -3406,7 +3905,10 @@ fn test_validate_request_headers_missing_pseudo_failure() {
     let result = validate_request_headers(0, &headers);
     assert!(matches!(
         result,
-        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(H3Error::Stream {
+            stream_id: 0,
+            error_code: ERR_H3_MESSAGE_ERROR,
+        })
     ));
 }
 
@@ -3430,7 +3932,10 @@ fn test_validate_request_headers_plain_connect_empty_authority_failure() {
     let result = validate_request_headers(0, &headers);
     assert!(matches!(
         result,
-        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(H3Error::Stream {
+            stream_id: 0,
+            error_code: ERR_H3_MESSAGE_ERROR,
+        })
     ));
 }
 
@@ -3440,7 +3945,10 @@ fn test_validate_request_headers_plain_connect_missing_authority_failure() {
     let result = validate_request_headers(0, &headers);
     assert!(matches!(
         result,
-        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(H3Error::Stream {
+            stream_id: 0,
+            error_code: ERR_H3_MESSAGE_ERROR,
+        })
     ));
 }
 
@@ -3465,7 +3973,10 @@ fn test_validate_request_headers_plain_connect_with_scheme_and_path_failure() {
     let result = validate_request_headers(0, &headers);
     assert!(matches!(
         result,
-        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(H3Error::Stream {
+            stream_id: 0,
+            error_code: ERR_H3_MESSAGE_ERROR,
+        })
     ));
 }
 
@@ -3481,7 +3992,10 @@ fn test_validate_request_headers_protocol_without_connect_failure() {
     let result = validate_request_headers(0, &headers);
     assert!(matches!(
         result,
-        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(H3Error::Stream {
+            stream_id: 0,
+            error_code: ERR_H3_MESSAGE_ERROR,
+        })
     ));
 }
 
@@ -3495,7 +4009,10 @@ fn test_validate_request_headers_pseudo_after_regular_failure() {
     let result = validate_request_headers(0, &headers);
     assert!(matches!(
         result,
-        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(H3Error::Stream {
+            stream_id: 0,
+            error_code: ERR_H3_MESSAGE_ERROR,
+        })
     ));
 }
 
@@ -3513,7 +4030,10 @@ fn test_validate_request_headers_unknown_pseudo() {
     let result = validate_request_headers(0, &headers);
     assert!(matches!(
         result,
-        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(H3Error::Stream {
+            stream_id: 0,
+            error_code: ERR_H3_MESSAGE_ERROR,
+        })
     ));
 }
 
@@ -3526,7 +4046,10 @@ fn test_validate_response_headers_duplicate_status() {
     let result = validate_response_headers(0, &headers);
     assert!(matches!(
         result,
-        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(H3Error::Stream {
+            stream_id: 0,
+            error_code: ERR_H3_MESSAGE_ERROR,
+        })
     ));
 }
 
@@ -3545,7 +4068,10 @@ fn test_validate_response_headers_invalid_field_failure(
     let result = validate_response_headers(0, &headers);
     assert!(matches!(
         result,
-        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(H3Error::Stream {
+            stream_id: 0,
+            error_code: ERR_H3_MESSAGE_ERROR,
+        })
     ));
 }
 
@@ -3555,7 +4081,26 @@ fn test_validate_response_headers_invalid_pseudo_name_failure() {
     let result = validate_response_headers(0, &headers);
     assert!(matches!(
         result,
-        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(H3Error::Stream {
+            stream_id: 0,
+            error_code: ERR_H3_MESSAGE_ERROR,
+        })
+    ));
+}
+
+#[rstest]
+#[case::non_digit(b"2xx")]
+#[case::too_long(b"2000")]
+#[case::too_short(b"20")]
+fn test_validate_response_headers_invalid_status_failure(#[case] status: &'static [u8]) {
+    let headers = vec![(Bytes::from(":status"), Bytes::from_static(status))];
+    let result = validate_response_headers(0, &headers);
+    assert!(matches!(
+        result,
+        Err(H3Error::Stream {
+            stream_id: 0,
+            error_code: ERR_H3_MESSAGE_ERROR,
+        })
     ));
 }
 
@@ -3565,7 +4110,10 @@ fn test_validate_response_headers_missing_status() {
     let result = validate_response_headers(0, &headers);
     assert!(matches!(
         result,
-        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(H3Error::Stream {
+            stream_id: 0,
+            error_code: ERR_H3_MESSAGE_ERROR,
+        })
     ));
 }
 
@@ -3579,7 +4127,10 @@ fn test_validate_response_headers_pseudo_after_regular_failure() {
     let result = validate_response_headers(0, &headers);
     assert!(matches!(
         result,
-        Err(WebTransportError::Stream(0, Some(ERR_H3_MESSAGE_ERROR), _))
+        Err(H3Error::Stream {
+            stream_id: 0,
+            error_code: ERR_H3_MESSAGE_ERROR,
+        })
     ));
 }
 
@@ -3620,7 +4171,10 @@ fn test_validate_settings_client_rejects_invalid_wt_enabled() {
     let result = validate_settings(&settings, &connection);
     assert!(matches!(
         result,
-        Err(WebTransportError::Protocol(Some(ERR_H3_SETTINGS_ERROR), _))
+        Err(H3Error::Connection {
+            error_code: ERR_H3_SETTINGS_ERROR,
+            ..
+        })
     ));
 }
 
@@ -3638,7 +4192,10 @@ fn test_validate_settings_datagram_not_supported() {
     let result = validate_settings(&settings, mock.as_connection());
     assert!(matches!(
         result,
-        Err(WebTransportError::Protocol(Some(ERR_H3_SETTINGS_ERROR), _))
+        Err(H3Error::Connection {
+            error_code: ERR_H3_SETTINGS_ERROR,
+            ..
+        })
     ));
 }
 
@@ -3655,7 +4212,10 @@ fn test_validate_settings_enable_connect_protocol_invalid() {
     let result = validate_settings(&settings, mock.as_connection());
     assert!(matches!(
         result,
-        Err(WebTransportError::Protocol(Some(ERR_H3_SETTINGS_ERROR), _))
+        Err(H3Error::Connection {
+            error_code: ERR_H3_SETTINGS_ERROR,
+            ..
+        })
     ));
 }
 
@@ -3668,9 +4228,9 @@ fn test_validate_settings_missing_wt_enabled() {
     let result = validate_settings(&settings, mock.as_connection());
     assert!(matches!(
         result,
-        Err(WebTransportError::Protocol(
-            Some(ERR_WT_REQUIREMENTS_NOT_MET),
-            _
-        ))
+        Err(H3Error::Connection {
+            error_code: ERR_WT_REQUIREMENTS_NOT_MET,
+            ..
+        })
     ));
 }

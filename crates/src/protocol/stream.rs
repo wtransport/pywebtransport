@@ -134,8 +134,8 @@ impl Stream {
         let is_request_complete = data_length <= available_credit;
 
         if !is_request_complete {
-            let sendable = usize::try_from(available_credit).unwrap_or(usize::MAX);
-            let remaining_data = data.split_off(sendable);
+            let available_credit = usize::try_from(available_credit).unwrap_or(usize::MAX);
+            let remaining_data = data.split_off(available_credit);
             self.write_buffer
                 .push_front((remaining_data, request_id, end_stream));
         }

@@ -14,12 +14,12 @@ use crate::common::constants::{
     ERR_APP_NO_ERROR, ERR_H3_EXCESSIVE_LOAD, ERR_H3_FRAME_UNEXPECTED,
     ERR_H3_GENERAL_PROTOCOL_ERROR, ERR_H3_MESSAGE_ERROR, ERR_LIB_SESSION_STATE_ERROR,
     ERR_LIB_STREAM_STATE_ERROR, ERR_WT_BUFFERED_STREAM_REJECTED, ERR_WT_FLOW_CONTROL_ERROR,
-    ERR_WT_SESSION_GONE, WT_CAPSULE_TYPE_CLOSE_SESSION, WT_CAPSULE_TYPE_DATA_BLOCKED,
-    WT_CAPSULE_TYPE_DRAIN_SESSION, WT_CAPSULE_TYPE_MAX_DATA, WT_CAPSULE_TYPE_MAX_STREAM_DATA,
-    WT_CAPSULE_TYPE_MAX_STREAMS_BIDI, WT_CAPSULE_TYPE_MAX_STREAMS_UNI,
-    WT_CAPSULE_TYPE_STREAM_DATA_BLOCKED, WT_CAPSULE_TYPE_STREAMS_BLOCKED_BIDI,
-    WT_CAPSULE_TYPE_STREAMS_BLOCKED_UNI, WT_CLOSE_REASON_SIZE_LIMIT, WT_EXPORTER_LABEL,
-    WT_PROTOCOL, WT_STREAMS_LIMIT,
+    ERR_WT_SESSION_GONE, H3_FIELD_STRING_SIZE_LIMIT, WT_CAPSULE_TYPE_CLOSE_SESSION,
+    WT_CAPSULE_TYPE_DATA_BLOCKED, WT_CAPSULE_TYPE_DRAIN_SESSION, WT_CAPSULE_TYPE_MAX_DATA,
+    WT_CAPSULE_TYPE_MAX_STREAM_DATA, WT_CAPSULE_TYPE_MAX_STREAMS_BIDI,
+    WT_CAPSULE_TYPE_MAX_STREAMS_UNI, WT_CAPSULE_TYPE_STREAM_DATA_BLOCKED,
+    WT_CAPSULE_TYPE_STREAMS_BLOCKED_BIDI, WT_CAPSULE_TYPE_STREAMS_BLOCKED_UNI,
+    WT_CLOSE_REASON_SIZE_LIMIT, WT_EXPORTER_LABEL, WT_PROTOCOL, WT_STREAMS_LIMIT,
 };
 use crate::common::types::{
     ErrorCode, ErrorSource, EventType, Headers, RequestId, SessionId, SessionState,
@@ -232,6 +232,7 @@ impl Session {
         request_id: RequestId,
         headers: Headers,
         wt_protocol: Option<String>,
+        peer_max_field_section_size: Option<u64>,
         now: f64,
     ) -> Vec<Effect> {
         let mut effects = Vec::new();
@@ -321,6 +322,43 @@ impl Session {
             response_headers.push((Bytes::from_static(WT_PROTOCOL), encoded));
         }
 
+        if response_headers.iter().any(|(key, value)| {
+            key.len() > H3_FIELD_STRING_SIZE_LIMIT || value.len() > H3_FIELD_STRING_SIZE_LIMIT
+        }) {
+            debug!(
+                "h3_headers validate exceeded expected=h3_field_string_size_limit request_id={request_id} session_id={}",
+                self.id
+            );
+            effects.push(Effect::NotifyRequestFailed {
+                request_id,
+                source: ErrorSource::Session,
+                error_code: None,
+                reason: "h3_headers validate exceeded".into(),
+            });
+            return effects;
+        }
+
+        let field_section_size: u64 = response_headers
+            .iter()
+            .map(|(key, value)| utils::field_size(key, value))
+            .sum();
+
+        if let Some(peer_max_field_section_size) = peer_max_field_section_size
+            && field_section_size > peer_max_field_section_size
+        {
+            debug!(
+                "h3_field_section validate exceeded actual={field_section_size} limit={peer_max_field_section_size} request_id={request_id} session_id={}",
+                self.id
+            );
+            effects.push(Effect::NotifyRequestFailed {
+                request_id,
+                source: ErrorSource::Session,
+                error_code: None,
+                reason: "h3_field_section validate exceeded".into(),
+            });
+            return effects;
+        }
+
         debug!(
             "wt_session open actual={:?} request_id={request_id} session_id={}",
             self.state, self.id
@@ -356,6 +394,27 @@ impl Session {
         });
 
         effects.extend(self.replay_pending_queues(now));
+
+        if let Some(effect) = self.emit_data_blocked() {
+            effects.push(effect);
+        }
+        if self.data_consumed > 0
+            && let Some(effect) = self.replenish_data_credit(false)
+        {
+            effects.push(effect);
+        }
+        if let Some(effect) = self.replenish_streams_credit(false, false) {
+            effects.push(effect);
+        }
+        if let Some(effect) = self.replenish_streams_credit(true, false) {
+            effects.push(effect);
+        }
+        if let Some(effect) = self.emit_streams_blocked(false) {
+            effects.push(effect);
+        }
+        if let Some(effect) = self.emit_streams_blocked(true) {
+            effects.push(effect);
+        }
 
         effects
     }
@@ -769,9 +828,9 @@ impl Session {
         }
 
         if label.len() > usize::from(u8::MAX) || context.len() > usize::from(u8::MAX) {
-            let length = cmp::max(label.len(), context.len());
             debug!(
-                "wt_session validate invalid actual={length} request_id={request_id} session_id={}",
+                "wt_session validate invalid actual={} request_id={request_id} session_id={}",
+                cmp::max(label.len(), context.len()),
                 self.id
             );
             return vec![Effect::NotifyRequestFailed {
@@ -995,6 +1054,10 @@ impl Session {
         self.state == SessionState::Closed
     }
 
+    pub(super) fn is_terminated(&self) -> bool {
+        matches!(self.state, SessionState::Closed | SessionState::Closing)
+    }
+
     pub(super) fn read_datagram(&mut self, request_id: RequestId) -> Vec<Effect> {
         if !matches!(
             self.state,
@@ -1030,7 +1093,7 @@ impl Session {
         &mut self,
         stream_id: StreamId,
         request_id: RequestId,
-        max_bytes: u64,
+        max_size: u64,
     ) -> Vec<Effect> {
         let mut effects = Vec::new();
 
@@ -1048,7 +1111,7 @@ impl Session {
             return effects;
         };
 
-        effects.extend(stream.read(request_id, max_bytes));
+        effects.extend(stream.read(request_id, max_size));
         effects.extend(self.handle_closed(stream_id));
 
         effects
@@ -1252,7 +1315,7 @@ impl Session {
                 });
             }
             WT_CAPSULE_TYPE_MAX_DATA => {
-                let Ok(peer_max_data) = utils::read_varint(&mut cursor) else {
+                let Some(peer_max_data) = utils::read_varint(&mut cursor) else {
                     debug!("varint decode invalid session_id={}", self.id);
                     return self.abort(
                         ERR_H3_GENERAL_PROTOCOL_ERROR,
@@ -1304,7 +1367,7 @@ impl Session {
                 );
             }
             WT_CAPSULE_TYPE_MAX_STREAMS_BIDI => {
-                let Ok(peer_max_streams_bidi) = utils::read_varint(&mut cursor) else {
+                let Some(peer_max_streams_bidi) = utils::read_varint(&mut cursor) else {
                     debug!("varint decode invalid session_id={}", self.id);
                     return self.abort(
                         ERR_H3_GENERAL_PROTOCOL_ERROR,
@@ -1357,7 +1420,7 @@ impl Session {
                 }
             }
             WT_CAPSULE_TYPE_MAX_STREAMS_UNI => {
-                let Ok(peer_max_streams_uni) = utils::read_varint(&mut cursor) else {
+                let Some(peer_max_streams_uni) = utils::read_varint(&mut cursor) else {
                     debug!("varint decode invalid session_id={}", self.id);
                     return self.abort(
                         ERR_H3_GENERAL_PROTOCOL_ERROR,
@@ -1412,7 +1475,7 @@ impl Session {
             WT_CAPSULE_TYPE_STREAMS_BLOCKED_BIDI | WT_CAPSULE_TYPE_STREAMS_BLOCKED_UNI => {
                 let is_unidirectional = capsule_type == WT_CAPSULE_TYPE_STREAMS_BLOCKED_UNI;
 
-                let Ok(peer_reported_limit) = utils::read_varint(&mut cursor) else {
+                let Some(peer_reported_limit) = utils::read_varint(&mut cursor) else {
                     debug!("varint decode invalid session_id={}", self.id);
                     return self.abort(
                         ERR_H3_GENERAL_PROTOCOL_ERROR,
@@ -1461,7 +1524,7 @@ impl Session {
         effects
     }
 
-    pub(super) fn receive_connect_close(
+    pub(super) fn receive_connect_stream_close(
         &mut self,
         error_code: ErrorCode,
         reason: Cow<'static, str>,
@@ -1631,6 +1694,7 @@ impl Session {
         request_id: RequestId,
         headers: Headers,
         status_code: u16,
+        peer_max_field_section_size: Option<u64>,
         now: f64,
     ) -> Vec<Effect> {
         let mut effects = Vec::new();
@@ -1691,6 +1755,49 @@ impl Session {
             return effects;
         }
 
+        let mut response_headers: Headers = vec![(
+            Bytes::from_static(b":status"),
+            Bytes::from(status_code.to_string()),
+        )];
+        response_headers.extend(headers);
+
+        if response_headers.iter().any(|(key, value)| {
+            key.len() > H3_FIELD_STRING_SIZE_LIMIT || value.len() > H3_FIELD_STRING_SIZE_LIMIT
+        }) {
+            debug!(
+                "h3_headers validate exceeded expected=h3_field_string_size_limit request_id={request_id} session_id={}",
+                self.id
+            );
+            effects.push(Effect::NotifyRequestFailed {
+                request_id,
+                source: ErrorSource::Session,
+                error_code: None,
+                reason: "h3_headers validate exceeded".into(),
+            });
+            return effects;
+        }
+
+        let field_section_size: u64 = response_headers
+            .iter()
+            .map(|(key, value)| utils::field_size(key, value))
+            .sum();
+
+        if let Some(peer_max_field_section_size) = peer_max_field_section_size
+            && field_section_size > peer_max_field_section_size
+        {
+            debug!(
+                "h3_field_section validate exceeded actual={field_section_size} limit={peer_max_field_section_size} request_id={request_id} session_id={}",
+                self.id
+            );
+            effects.push(Effect::NotifyRequestFailed {
+                request_id,
+                source: ErrorSource::Session,
+                error_code: None,
+                reason: "h3_field_section validate exceeded".into(),
+            });
+            return effects;
+        }
+
         debug!(
             "wt_session reject actual={:?} request_id={request_id} session_id={} err={status_code}",
             self.state, self.id
@@ -1710,12 +1817,6 @@ impl Session {
                 reason: "wt_session abort".into(),
             });
         }
-
-        let mut response_headers: Headers = vec![(
-            Bytes::from_static(b":status"),
-            Bytes::from(status_code.to_string()),
-        )];
-        response_headers.extend(headers);
 
         effects.push(Effect::SendH3Headers {
             stream_id: self.id,
@@ -1795,12 +1896,12 @@ impl Session {
         }
 
         let quarter_stream_id = self.id / 4;
-        let header_size = utils::varint_size(quarter_stream_id) as u64;
-        let max_allowed_payload = peer_max_datagram_frame_size.saturating_sub(header_size);
+        let header_length = utils::varint_length(quarter_stream_id) as u64;
+        let max_payload_size = peer_max_datagram_frame_size.saturating_sub(header_length);
 
-        if (data.len() as u64) > max_allowed_payload {
+        if (data.len() as u64) > max_payload_size {
             debug!(
-                "wt_datagram validate exceeded actual={} limit={max_allowed_payload} request_id={request_id} session_id={}",
+                "wt_datagram validate exceeded actual={} limit={max_payload_size} request_id={request_id} session_id={}",
                 data.len(),
                 self.id
             );
@@ -2000,6 +2101,14 @@ impl Session {
             return None;
         }
 
+        if !matches!(
+            (self.state, self.is_client),
+            (SessionState::Connected | SessionState::Draining, _)
+                | (SessionState::Connecting, true)
+        ) {
+            return None;
+        }
+
         if self.data_sent >= self.peer_max_data
             && !self.blocked_streams.is_empty()
             && self
@@ -2008,8 +2117,11 @@ impl Session {
         {
             self.last_data_blocked_sent = Some(self.peer_max_data);
             let mut buffer = BytesMut::with_capacity(8);
-            if let Err(e) = utils::write_varint(&mut buffer, self.peer_max_data) {
-                debug!("varint encode failed session_id={} err={e:?}", self.id);
+            if utils::write_varint(&mut buffer, self.peer_max_data).is_none() {
+                debug!(
+                    "varint encode failed actual={} session_id={}",
+                    self.peer_max_data, self.id
+                );
                 return None;
             }
 
@@ -2026,6 +2138,14 @@ impl Session {
 
     fn emit_streams_blocked(&mut self, is_unidirectional: bool) -> Option<Effect> {
         if !self.flow_control_negotiated {
+            return None;
+        }
+
+        if !matches!(
+            (self.state, self.is_client),
+            (SessionState::Connected | SessionState::Draining, _)
+                | (SessionState::Connecting, true)
+        ) {
             return None;
         }
 
@@ -2056,8 +2176,8 @@ impl Session {
         }
 
         let mut buffer = BytesMut::with_capacity(8);
-        if let Err(e) = utils::write_varint(&mut buffer, limit) {
-            debug!("varint encode failed session_id={} err={e:?}", self.id);
+        if utils::write_varint(&mut buffer, limit).is_none() {
+            debug!("varint encode failed actual={limit} session_id={}", self.id);
             return None;
         }
         *last_streams_blocked_sent = Some(limit);
@@ -2196,8 +2316,11 @@ impl Session {
         }
 
         let mut buffer = BytesMut::with_capacity(8);
-        if let Err(e) = utils::write_varint(&mut buffer, new_limit) {
-            debug!("varint encode failed session_id={} err={e:?}", self.id);
+        if utils::write_varint(&mut buffer, new_limit).is_none() {
+            debug!(
+                "varint encode failed actual={new_limit} session_id={}",
+                self.id
+            );
             return None;
         }
 
@@ -2252,8 +2375,11 @@ impl Session {
         }
 
         let mut buffer = BytesMut::with_capacity(8);
-        if let Err(e) = utils::write_varint(&mut buffer, new_limit) {
-            debug!("varint encode failed session_id={} err={e:?}", self.id);
+        if utils::write_varint(&mut buffer, new_limit).is_none() {
+            debug!(
+                "varint encode failed actual={new_limit} session_id={}",
+                self.id
+            );
             return None;
         }
 

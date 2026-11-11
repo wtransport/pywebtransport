@@ -60,15 +60,15 @@ def encode_varint(*, value: int) -> bytes:
 
 
 def parse_varint(*, data: bytes) -> tuple[int, int]:
-    """Parse a QUIC variable-length integer, returning its value and encoded size."""
+    """Parse a QUIC variable-length integer, returning its value and encoded length."""
     if not data:
         raise ValueError("Empty data")
 
-    size = 1 << (data[0] >> 6)
-    if len(data) < size:
+    length = 1 << (data[0] >> 6)
+    if len(data) < length:
         raise ValueError("Truncated varint")
 
-    return int.from_bytes(bytes=bytes([data[0] & 0x3F]) + data[1:size]), size
+    return int.from_bytes(bytes=bytes([data[0] & 0x3F]) + data[1:length]), length
 
 
 class DeviousBatonTest:
@@ -253,10 +253,10 @@ class DeviousBatonTest:
                 async for stream in session.incoming_unidirectional_streams():
                     data = await stream.read_all()
                     try:
-                        padding_length, size = parse_varint(data=data)
+                        padding_length, varint_length = parse_varint(data=data)
                     except ValueError:
                         continue
-                    if padding_length > 0 and len(data) == size + padding_length + 1:
+                    if padding_length > 0 and len(data) == varint_length + padding_length + 1:
                         padding_verified.set()
 
             task = asyncio.create_task(coro=check_unidirectional_streams())

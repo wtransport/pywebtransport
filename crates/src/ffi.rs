@@ -8,7 +8,6 @@ mod config;
 mod constants;
 mod conversion;
 mod endpoint;
-mod error;
 mod tracing;
 mod types;
 mod waker;

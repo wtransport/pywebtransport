@@ -74,7 +74,7 @@ pytest-mock==3.17.0
     # via pywebtransport (pyproject.toml)
 pytokens==0.4.1
     # via black
-types-psutil==7.2.2.20260906
+types-psutil==7.2.2.20261111
     # via pywebtransport (pyproject.toml)
 typing-extensions==4.15.0
     # via mypy

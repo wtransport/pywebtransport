@@ -601,7 +601,8 @@ class TestEndpointController:
         controller = EndpointController(connection_factory=mock_connection_factory, config=mock_config, is_client=True)
         mock_read_socket = mocker.create_autospec(spec=socket.socket, instance=True)
 
-        await controller._run_waker_loop(endpoint=mock_endpoint, waker=mock_waker, read_socket=mock_read_socket)
+        with pytest.raises(expected_exception=asyncio.CancelledError):
+            await controller._run_waker_loop(endpoint=mock_endpoint, waker=mock_waker, read_socket=mock_read_socket)
 
         mock_endpoint.poll_runtime_events.assert_not_called()
 

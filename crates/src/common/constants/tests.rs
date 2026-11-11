@@ -78,6 +78,11 @@ fn test_http3_error_codes_match_specification(#[case] error_code: u64, #[case] e
     assert_eq!(error_code, expected);
 }
 
+#[test]
+fn test_http3_field_string_size_limit() {
+    assert_eq!(H3_FIELD_STRING_SIZE_LIMIT, usize::from(u16::MAX));
+}
+
 #[rstest]
 #[case(H3_FRAME_TYPE_CANCEL_PUSH, 0x3)]
 #[case(H3_FRAME_TYPE_DATA, 0x0)]

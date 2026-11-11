@@ -52,7 +52,7 @@ impl PyEndpoint {
             let quic_endpoint = QuicEndpoint::new(endpoint_config, None, false, None);
 
             let transport_endpoint =
-                TransportEndpoint::new_client(quic_endpoint, config.base, client_config)?;
+                TransportEndpoint::new_client(quic_endpoint, config.base, client_config);
 
             let mut sockets = Vec::new();
 
@@ -80,7 +80,7 @@ impl PyEndpoint {
                 QuicEndpoint::new(endpoint_config, Some(Arc::new(server_config)), false, None);
 
             let transport_endpoint =
-                TransportEndpoint::new_server(quic_endpoint, config.base.clone(), config)?;
+                TransportEndpoint::new_server(quic_endpoint, config.base.clone(), config);
 
             let mut sockets = Vec::new();
             let mut bound_v4 = false;

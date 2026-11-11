@@ -10,8 +10,9 @@ use tracing::debug;
 use crate::common::constants::{
     ERR_APP_NO_ERROR, ERR_H3_REQUEST_REJECTED, ERR_LIB_CONNECTION_STATE_ERROR,
     ERR_LIB_INTERNAL_ERROR, ERR_LIB_SESSION_STATE_ERROR, ERR_LIB_STREAM_STATE_ERROR,
-    ERR_WT_ALPN_ERROR, ERR_WT_BUFFERED_STREAM_REJECTED, QUIC_STREAM_TYPE_COUNT, QUIC_VARINT_LIMIT,
-    WT_AVAILABLE_PROTOCOLS, WT_PROTOCOL, WT_UPGRADE_TOKEN,
+    ERR_WT_ALPN_ERROR, ERR_WT_BUFFERED_STREAM_REJECTED, H3_FIELD_STRING_SIZE_LIMIT,
+    QUIC_STREAM_TYPE_COUNT, QUIC_VARINT_LIMIT, WT_AVAILABLE_PROTOCOLS, WT_PROTOCOL,
+    WT_UPGRADE_TOKEN,
 };
 use crate::common::types::{
     ConnectionHandle, ConnectionState, ErrorCode, ErrorSource, EventType, Headers, RequestId,
@@ -37,6 +38,7 @@ pub(crate) struct ConnectionDiagnostics {
     pub(crate) peer_initial_max_streams_bidi: u64,
     pub(crate) peer_initial_max_streams_uni: u64,
     pub(crate) peer_max_datagram_frame_size: Option<u64>,
+    pub(crate) peer_max_field_section_size: Option<u64>,
     pub(crate) peer_settings_received: bool,
     pub(crate) state: ConnectionState,
 }
@@ -47,6 +49,7 @@ pub(super) struct Connection {
     close_reason: Option<String>,
     closed_at: Option<f64>,
     connected_at: Option<f64>,
+    earliest_early_event_at: Option<f64>,
     early_event_buffer: FxHashMap<SessionId, Vec<(f64, ProtocolEvent)>>,
     early_event_count: usize,
     early_event_ttl: f64,
@@ -69,6 +72,7 @@ pub(super) struct Connection {
     peer_initial_max_streams_bidi: u64,
     peer_initial_max_streams_uni: u64,
     peer_max_datagram_frame_size: Option<u64>,
+    peer_max_field_section_size: Option<u64>,
     peer_settings_received: bool,
     pending_session_requests: FxHashMap<StreamId, RequestId>,
     request_id: Option<RequestId>,
@@ -92,6 +96,7 @@ impl Connection {
             close_reason: None,
             closed_at: None,
             connected_at: None,
+            earliest_early_event_at: None,
             early_event_buffer: FxHashMap::default(),
             early_event_count: 0,
             early_event_ttl: parameters.early_event_ttl,
@@ -114,6 +119,7 @@ impl Connection {
             peer_initial_max_streams_bidi: 0,
             peer_initial_max_streams_uni: 0,
             peer_max_datagram_frame_size: None,
+            peer_max_field_section_size: None,
             peer_settings_received: false,
             pending_session_requests: FxHashMap::default(),
             request_id,
@@ -134,7 +140,13 @@ impl Connection {
         now: f64,
     ) -> Vec<Effect> {
         if let Some(session) = self.sessions.get_mut(&session_id) {
-            return session.accept(request_id, headers, wt_protocol, now);
+            return session.accept(
+                request_id,
+                headers,
+                wt_protocol,
+                self.peer_max_field_section_size,
+                now,
+            );
         }
         debug!(
             "wt_session resolve failed connection_handle={} request_id={request_id} session_id={session_id}",
@@ -153,12 +165,39 @@ impl Connection {
         stream_id: StreamId,
         request_id: RequestId,
     ) -> Vec<Effect> {
-        self.pending_session_requests.insert(stream_id, request_id);
+        let Some(session_request) = self.session_requests.get(&request_id) else {
+            return Vec::new();
+        };
 
-        let is_optimistic = self
-            .session_requests
-            .get(&request_id)
-            .is_some_and(|session_request| session_request.optimistic);
+        let mut headers: Headers = vec![
+            (
+                Bytes::from_static(b":method"),
+                Bytes::from_static(b"CONNECT"),
+            ),
+            (Bytes::from_static(b":scheme"), Bytes::from_static(b"https")),
+            (
+                Bytes::from_static(b":authority"),
+                Bytes::from(session_request.authority.clone()),
+            ),
+            (
+                Bytes::from_static(b":path"),
+                Bytes::from(session_request.path.clone()),
+            ),
+            (
+                Bytes::from_static(b":protocol"),
+                Bytes::from_static(WT_UPGRADE_TOKEN),
+            ),
+        ];
+        headers.extend_from_slice(&session_request.headers);
+        let is_optimistic = session_request.optimistic;
+
+        let mut effects = vec![Effect::SendH3Headers {
+            stream_id,
+            headers,
+            end_stream: false,
+        }];
+
+        self.pending_session_requests.insert(stream_id, request_id);
 
         if is_optimistic && let Some(session_request) = self.session_requests.remove(&request_id) {
             let session = Session::new(
@@ -185,31 +224,29 @@ impl Connection {
             );
             self.sessions.insert(stream_id, session);
 
-            return vec![
-                Effect::EmitSessionEvent {
-                    session_id: stream_id,
-                    event_type: EventType::SessionPending,
-                    path: Some(session_request.path),
-                    headers: Some(session_request.headers),
-                    wt_available_protocols: None,
-                    wt_protocol: None,
-                    data: None,
-                    is_unidirectional: None,
-                    max_data: None,
-                    max_streams: None,
-                    ready_at: None,
-                    status_code: None,
-                    error_code: None,
-                    reason: None,
-                },
-                Effect::NotifyRequestDone {
-                    request_id,
-                    result: RequestResult::SessionId(stream_id),
-                },
-            ];
+            effects.push(Effect::EmitSessionEvent {
+                session_id: stream_id,
+                event_type: EventType::SessionPending,
+                path: Some(session_request.path),
+                headers: Some(session_request.headers),
+                wt_available_protocols: None,
+                wt_protocol: None,
+                data: None,
+                is_unidirectional: None,
+                max_data: None,
+                max_streams: None,
+                ready_at: None,
+                status_code: None,
+                error_code: None,
+                reason: None,
+            });
+            effects.push(Effect::NotifyRequestDone {
+                request_id,
+                result: RequestResult::SessionId(stream_id),
+            });
         }
 
-        Vec::new()
+        effects
     }
 
     pub(super) fn bind_stream(
@@ -417,9 +454,14 @@ impl Connection {
             1
         };
 
-        let current_total = (self.sessions.len() + self.session_requests.len()) as u64;
+        let current_total = (self
+            .sessions
+            .values()
+            .filter(|session| !session.is_terminated())
+            .count()
+            + self.session_requests.len()) as u64;
 
-        if active_limit > 0 && current_total >= active_limit {
+        if current_total >= active_limit {
             debug!(
                 "wt_session validate exceeded actual={current_total} connection_handle={} limit={active_limit} request_id={request_id}",
                 self.handle
@@ -467,15 +509,65 @@ impl Connection {
             }
         }
 
-        self.session_requests
-            .insert(request_id, session_request.clone());
+        let mut request_headers: Headers = vec![
+            (
+                Bytes::from_static(b":method"),
+                Bytes::from_static(b"CONNECT"),
+            ),
+            (Bytes::from_static(b":scheme"), Bytes::from_static(b"https")),
+            (
+                Bytes::from_static(b":authority"),
+                Bytes::from(session_request.authority.clone()),
+            ),
+            (
+                Bytes::from_static(b":path"),
+                Bytes::from(session_request.path.clone()),
+            ),
+            (
+                Bytes::from_static(b":protocol"),
+                Bytes::from_static(WT_UPGRADE_TOKEN),
+            ),
+        ];
+        request_headers.extend_from_slice(&session_request.headers);
 
-        vec![Effect::CreateH3ConnectStream {
-            request_id,
-            authority: session_request.authority,
-            path: session_request.path,
-            headers: session_request.headers,
-        }]
+        if request_headers.iter().any(|(key, value)| {
+            key.len() > H3_FIELD_STRING_SIZE_LIMIT || value.len() > H3_FIELD_STRING_SIZE_LIMIT
+        }) {
+            debug!(
+                "h3_headers validate exceeded connection_handle={} expected=h3_field_string_size_limit request_id={request_id}",
+                self.handle
+            );
+            return vec![Effect::NotifyRequestFailed {
+                request_id,
+                source: ErrorSource::Connection,
+                error_code: None,
+                reason: "h3_headers validate exceeded".into(),
+            }];
+        }
+
+        let field_section_size: u64 = request_headers
+            .iter()
+            .map(|(key, value)| utils::field_size(key, value))
+            .sum();
+
+        if let Some(peer_max_field_section_size) = self.peer_max_field_section_size
+            && field_section_size > peer_max_field_section_size
+        {
+            debug!(
+                "h3_field_section validate exceeded actual={field_section_size} connection_handle={} limit={peer_max_field_section_size} request_id={request_id}",
+                self.handle
+            );
+            return vec![Effect::NotifyRequestFailed {
+                request_id,
+                source: ErrorSource::Connection,
+                error_code: None,
+                reason: "h3_field_section validate exceeded".into(),
+            }];
+        }
+
+        self.session_requests.insert(request_id, session_request);
+
+        vec![Effect::CreateH3ConnectStream { request_id }]
     }
 
     pub(super) fn create_stream(
@@ -500,6 +592,20 @@ impl Connection {
     }
 
     pub(super) fn defer_session(&mut self, request_id: RequestId) -> Vec<Effect> {
+        if self.peer_goaway_received {
+            debug!(
+                "wt_connection validate failed actual={} connection_handle={} expected=false request_id={request_id}",
+                self.peer_goaway_received, self.handle
+            );
+            self.session_requests.remove(&request_id);
+            return vec![Effect::NotifyRequestFailed {
+                request_id,
+                source: ErrorSource::Connection,
+                error_code: Some(ERR_LIB_CONNECTION_STATE_ERROR),
+                reason: "wt_connection validate failed".into(),
+            }];
+        }
+
         self.blocked_session_requests.push_back(request_id);
 
         Vec::new()
@@ -600,26 +706,6 @@ impl Connection {
         }]
     }
 
-    pub(super) fn fail_session(
-        &mut self,
-        request_id: RequestId,
-        error_code: Option<ErrorCode>,
-        reason: Cow<'static, str>,
-    ) -> Vec<Effect> {
-        debug!(
-            "wt_session create failed connection_handle={} request_id={request_id} err={reason}",
-            self.handle
-        );
-        self.session_requests.remove(&request_id);
-
-        vec![Effect::NotifyRequestFailed {
-            request_id,
-            source: ErrorSource::Session,
-            error_code,
-            reason,
-        }]
-    }
-
     pub(super) fn handle_handshake_completed(&mut self, now: f64) -> Vec<Effect> {
         if self.state == ConnectionState::Idle {
             self.state = ConnectionState::Connecting;
@@ -676,13 +762,13 @@ impl Connection {
             stream_id,
         };
 
+        let mut effects = self.prune_early_events(now);
+
         if !self.buffer_early_event(session_id, event, now) {
             debug!(
                 "wt_stream abort connection_handle={} stream_id={stream_id}",
                 self.handle
             );
-            let mut effects = Vec::new();
-
             if utils::is_unidirectional_stream(stream_id) {
                 effects.push(Effect::StopQuicStream {
                     stream_id,
@@ -698,11 +784,9 @@ impl Connection {
                     error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
                 });
             }
-
-            return effects;
         }
 
-        Vec::new()
+        effects
     }
 
     pub(super) fn handle_terminated(
@@ -756,7 +840,11 @@ impl Connection {
 
         for session_id in session_ids {
             if let Some(session) = self.sessions.get_mut(&session_id) {
-                effects.extend(session.receive_connect_close(error_code, reason.clone(), now));
+                effects.extend(session.receive_connect_stream_close(
+                    error_code,
+                    reason.clone(),
+                    now,
+                ));
             }
         }
 
@@ -787,6 +875,11 @@ impl Connection {
         self.is_client
     }
 
+    pub(super) fn is_connect_stream(&self, stream_id: StreamId) -> bool {
+        self.sessions.contains_key(&stream_id)
+            || self.pending_session_requests.contains_key(&stream_id)
+    }
+
     pub(super) fn is_connected(&self) -> bool {
         self.state == ConnectionState::Connected
     }
@@ -804,16 +897,20 @@ impl Connection {
             .is_some_and(Session::is_closed)
     }
 
-    pub(super) fn is_session_stream(&self, stream_id: StreamId) -> bool {
-        self.sessions.contains_key(&stream_id)
-    }
-
     pub(super) fn peer_max_datagram_frame_size(&self) -> Option<u64> {
         self.peer_max_datagram_frame_size
     }
 
     pub(super) fn prune_early_events(&mut self, now: f64) -> Vec<Effect> {
         let mut effects = Vec::new();
+
+        if self
+            .earliest_early_event_at
+            .is_none_or(|timestamp| now - timestamp < self.early_event_ttl)
+        {
+            return effects;
+        }
+
         let mut session_ids_to_remove = Vec::new();
 
         let mut session_ids: Vec<SessionId> = self.early_event_buffer.keys().copied().collect();
@@ -864,6 +961,13 @@ impl Connection {
         for session_id in session_ids_to_remove {
             self.early_event_buffer.remove(&session_id);
         }
+
+        self.earliest_early_event_at = self
+            .early_event_buffer
+            .values()
+            .filter_map(|session_buffer| session_buffer.first())
+            .map(|(timestamp, _)| *timestamp)
+            .reduce(f64::min);
 
         effects
     }
@@ -941,22 +1045,88 @@ impl Connection {
 
     pub(super) fn receive_capsule(
         &mut self,
-        session_id: SessionId,
+        stream_id: StreamId,
         capsule_type: u64,
         capsule_value: &[u8],
         now: f64,
     ) -> Vec<Effect> {
-        if let Some(session) = self.sessions.get_mut(&session_id) {
+        if let Some(session) = self.sessions.get_mut(&stream_id) {
             return session.receive_capsule(capsule_type, capsule_value, now);
         }
         Vec::new()
     }
 
-    pub(super) fn receive_connect_close(&mut self, session_id: SessionId, now: f64) -> Vec<Effect> {
-        if let Some(session) = self.sessions.get_mut(&session_id) {
-            return session.receive_connect_close(ERR_APP_NO_ERROR, "".into(), now);
+    pub(super) fn receive_connect_stream_close(
+        &mut self,
+        stream_id: StreamId,
+        error_code: Option<ErrorCode>,
+        now: f64,
+    ) -> Vec<Effect> {
+        if let Some(session) = self.sessions.get_mut(&stream_id) {
+            self.pending_session_requests.remove(&stream_id);
+            return match error_code {
+                Some(error_code) => {
+                    session.receive_connect_stream_close(error_code, "wt_session abort".into(), now)
+                }
+                None => session.receive_connect_stream_close(ERR_APP_NO_ERROR, "".into(), now),
+            };
+        }
+        if let Some(request_id) = self.pending_session_requests.remove(&stream_id) {
+            debug!(
+                "wt_session abort connection_handle={} request_id={request_id} stream_id={stream_id}",
+                self.handle
+            );
+            self.session_requests.remove(&request_id);
+
+            let mut effects = vec![Effect::NotifyRequestFailed {
+                request_id,
+                source: ErrorSource::Session,
+                error_code,
+                reason: "wt_session abort".into(),
+            }];
+            effects.extend(self.replay_early_events(stream_id, now));
+
+            return effects;
         }
         Vec::new()
+    }
+
+    pub(super) fn receive_connect_stream_rejection(
+        &mut self,
+        stream_id: StreamId,
+        now: f64,
+    ) -> Vec<Effect> {
+        let Some(request_id) = self.pending_session_requests.remove(&stream_id) else {
+            debug!(
+                "wt_stream resolve failed connection_handle={} stream_id={stream_id}",
+                self.handle
+            );
+            return Vec::new();
+        };
+
+        let mut effects = if let Some(session) = self.sessions.get_mut(&stream_id) {
+            session.receive_connect_stream_close(
+                ERR_H3_REQUEST_REJECTED,
+                "wt_session abort".into(),
+                now,
+            )
+        } else {
+            debug!(
+                "wt_session abort connection_handle={} request_id={request_id} stream_id={stream_id}",
+                self.handle
+            );
+            self.session_requests.remove(&request_id);
+            vec![Effect::NotifyRequestFailed {
+                request_id,
+                source: ErrorSource::Session,
+                error_code: Some(ERR_H3_REQUEST_REJECTED),
+                reason: "wt_session abort".into(),
+            }]
+        };
+
+        effects.extend(self.replay_early_events(stream_id, now));
+
+        effects
     }
 
     pub(super) fn receive_datagram(
@@ -971,9 +1141,11 @@ impl Connection {
 
         let event = ProtocolEvent::H3DatagramReceived { session_id, data };
 
+        let effects = self.prune_early_events(now);
+
         self.buffer_early_event(session_id, event, now);
 
-        Vec::new()
+        effects
     }
 
     pub(super) fn receive_goaway(&mut self) -> Vec<Effect> {
@@ -1049,9 +1221,9 @@ impl Connection {
             };
 
             let status = utils::find_header(&headers, b":status");
-            let status_ok = status.is_some_and(|status| status == b"200".as_slice());
+            let is_successful_status = status.is_some_and(|status| status.starts_with(b"2"));
 
-            if status_ok {
+            if is_successful_status {
                 let wt_protocol = utils::combine_header(&headers, WT_PROTOCOL)
                     .and_then(|value| utils::parse_wt_protocol_string(&value));
 
@@ -1143,7 +1315,7 @@ impl Connection {
                 self.session_requests.remove(&request_id);
 
                 if let Some(session) = self.sessions.get_mut(&stream_id) {
-                    effects.extend(session.abort(
+                    effects.extend(session.receive_connect_stream_close(
                         ERR_H3_REQUEST_REJECTED,
                         "wt_session abort".into(),
                         now,
@@ -1155,19 +1327,29 @@ impl Connection {
                         error_code: Some(ERR_H3_REQUEST_REJECTED),
                         reason: "wt_session abort".into(),
                     });
-                    effects.push(Effect::StopQuicStream {
-                        stream_id,
-                        error_code: ERR_H3_REQUEST_REJECTED,
-                    });
-                    effects.push(Effect::ResetQuicStream {
-                        stream_id,
-                        error_code: ERR_H3_REQUEST_REJECTED,
-                    });
                 }
 
                 effects.extend(self.replay_early_events(stream_id, now));
             }
         } else {
+            if let Some(peer_max_field_section_size) = self.peer_max_field_section_size
+                && utils::field_size(b":status", b"200") > peer_max_field_section_size
+            {
+                debug!(
+                    "h3_field_section validate exceeded connection_handle={} limit={peer_max_field_section_size} stream_id={stream_id}",
+                    self.handle
+                );
+                effects.push(Effect::ResetQuicStream {
+                    stream_id,
+                    error_code: ERR_H3_REQUEST_REJECTED,
+                });
+                effects.push(Effect::StopQuicStream {
+                    stream_id,
+                    error_code: ERR_H3_REQUEST_REJECTED,
+                });
+                return effects;
+            }
+
             if self.state != ConnectionState::Connected {
                 debug!(
                     "wt_connection validate failed actual={:?} connection_handle={} expected=connected stream_id={stream_id}",
@@ -1202,21 +1384,19 @@ impl Connection {
                 return effects;
             }
 
-            let active_limit = if self.has_flow_control() {
-                self.max_sessions
-            } else {
-                1
-            };
+            let is_connect_method = utils::find_header(&headers, b":method")
+                .is_some_and(|method| method == b"CONNECT".as_slice());
+            let is_webtransport_upgrade = utils::find_header(&headers, b":protocol")
+                .is_some_and(|protocol| protocol.eq_ignore_ascii_case(WT_UPGRADE_TOKEN));
 
-            if active_limit > 0 && self.sessions.len() as u64 >= active_limit {
+            if !is_connect_method || !is_webtransport_upgrade {
                 debug!(
-                    "wt_session validate exceeded actual={} connection_handle={} limit={active_limit} stream_id={stream_id}",
-                    self.sessions.len(),
+                    "wt_session validate invalid connection_handle={} stream_id={stream_id}",
                     self.handle
                 );
                 effects.push(Effect::SendH3Headers {
                     stream_id,
-                    headers: vec![(Bytes::from_static(b":status"), Bytes::from("429"))],
+                    headers: vec![(Bytes::from_static(b":status"), Bytes::from("501"))],
                     end_stream: true,
                 });
                 effects.push(Effect::StopQuicStream {
@@ -1226,19 +1406,46 @@ impl Connection {
                 return effects;
             }
 
-            let is_connect_method = utils::find_header(&headers, b":method")
-                .is_some_and(|method| method == b"CONNECT".as_slice());
-            let is_webtransport_upgrade = utils::find_header(&headers, b":protocol")
-                .is_some_and(|protocol| protocol == WT_UPGRADE_TOKEN);
+            let is_https_scheme = utils::find_header(&headers, b":scheme")
+                .is_some_and(|scheme| scheme.eq_ignore_ascii_case(b"https"));
 
-            if !is_connect_method || !is_webtransport_upgrade {
+            if !is_https_scheme {
                 debug!(
-                    "wt_session validate invalid connection_handle={} stream_id={stream_id}",
+                    "wt_session validate invalid connection_handle={} expected=https stream_id={stream_id}",
                     self.handle
                 );
                 effects.push(Effect::SendH3Headers {
                     stream_id,
-                    headers: vec![(Bytes::from_static(b":status"), Bytes::from("400"))],
+                    headers: vec![(Bytes::from_static(b":status"), Bytes::from("421"))],
+                    end_stream: true,
+                });
+                effects.push(Effect::StopQuicStream {
+                    stream_id,
+                    error_code: ERR_H3_REQUEST_REJECTED,
+                });
+                return effects;
+            }
+
+            let active_limit = if self.has_flow_control() {
+                self.max_sessions
+            } else {
+                1
+            };
+
+            let current_total = self
+                .sessions
+                .values()
+                .filter(|session| !session.is_terminated())
+                .count() as u64;
+
+            if current_total >= active_limit {
+                debug!(
+                    "wt_session validate exceeded actual={current_total} connection_handle={} limit={active_limit} stream_id={stream_id}",
+                    self.handle
+                );
+                effects.push(Effect::SendH3Headers {
+                    stream_id,
+                    headers: vec![(Bytes::from_static(b":status"), Bytes::from("429"))],
                     end_stream: true,
                 });
                 effects.push(Effect::StopQuicStream {
@@ -1308,13 +1515,8 @@ impl Connection {
 
         if !is_unidirectional {
             while let Some(request_id) = self.blocked_session_requests.pop_front() {
-                if let Some(session_request) = self.session_requests.get(&request_id) {
-                    effects.push(Effect::CreateH3ConnectStream {
-                        request_id,
-                        authority: session_request.authority.clone(),
-                        path: session_request.path.clone(),
-                        headers: session_request.headers.clone(),
-                    });
+                if self.session_requests.contains_key(&request_id) {
+                    effects.push(Effect::CreateH3ConnectStream { request_id });
                 }
             }
         }
@@ -1343,6 +1545,7 @@ impl Connection {
         if let Some(peer_initial_max_streams_uni) = settings.wt_initial_max_streams_uni {
             self.peer_initial_max_streams_uni = peer_initial_max_streams_uni;
         }
+        self.peer_max_field_section_size = settings.max_field_section_size;
 
         if self.state == ConnectionState::Connecting && self.handshake_completed {
             return self.open(now);
@@ -1407,7 +1610,25 @@ impl Connection {
             return effects;
         }
         if let Some(session) = self.sessions.get_mut(&stream_id) {
+            self.pending_session_requests.remove(&stream_id);
             return session.abort(error_code, "wt_session abort".into(), now);
+        }
+        if let Some(request_id) = self.pending_session_requests.remove(&stream_id) {
+            debug!(
+                "wt_session abort connection_handle={} request_id={request_id} stream_id={stream_id}",
+                self.handle
+            );
+            self.session_requests.remove(&request_id);
+
+            let mut effects = vec![Effect::NotifyRequestFailed {
+                request_id,
+                source: ErrorSource::Session,
+                error_code: Some(error_code),
+                reason: "wt_session abort".into(),
+            }];
+            effects.extend(self.replay_early_events(stream_id, now));
+
+            return effects;
         }
         Vec::new()
     }
@@ -1434,7 +1655,13 @@ impl Connection {
         now: f64,
     ) -> Vec<Effect> {
         if let Some(session) = self.sessions.get_mut(&session_id) {
-            return session.reject(request_id, headers, status_code, now);
+            return session.reject(
+                request_id,
+                headers,
+                status_code,
+                self.peer_max_field_section_size,
+                now,
+            );
         }
         debug!(
             "wt_session resolve failed connection_handle={} request_id={request_id} session_id={session_id}",
@@ -1581,6 +1808,7 @@ impl Connection {
 
         session_buffer.push((now, event));
         self.early_event_count += 1;
+        self.earliest_early_event_at.get_or_insert(now);
 
         true
     }
@@ -1600,6 +1828,7 @@ impl Connection {
             peer_initial_max_streams_bidi: self.peer_initial_max_streams_bidi,
             peer_initial_max_streams_uni: self.peer_initial_max_streams_uni,
             peer_max_datagram_frame_size: self.peer_max_datagram_frame_size,
+            peer_max_field_section_size: self.peer_max_field_section_size,
             peer_settings_received: self.peer_settings_received,
             state: self.state,
         }
@@ -1642,12 +1871,18 @@ impl Connection {
     }
 
     fn replay_early_events(&mut self, session_id: SessionId, now: f64) -> Vec<Effect> {
-        let mut effects = Vec::new();
+        let mut effects = self.prune_early_events(now);
 
         let Some(events) = self.early_event_buffer.remove(&session_id) else {
             return effects;
         };
         self.early_event_count -= events.len();
+        self.earliest_early_event_at = self
+            .early_event_buffer
+            .values()
+            .filter_map(|session_buffer| session_buffer.first())
+            .map(|(timestamp, _)| *timestamp)
+            .reduce(f64::min);
 
         let is_session_present = self.sessions.contains_key(&session_id);
 

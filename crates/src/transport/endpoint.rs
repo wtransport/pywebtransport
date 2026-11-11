@@ -18,7 +18,6 @@ use crate::common::constants::{
     ERR_LIB_CONNECTION_LIMIT_EXCEEDED, ERR_LIB_CONNECTION_STATE_ERROR, ERR_LIB_INTERNAL_ERROR,
     QUIC_UDP_PAYLOAD_SIZE_LIMIT, UDP_TRANSMIT_BATCH_CAPACITY,
 };
-use crate::common::error::WebTransportError;
 use crate::common::types::{ErrorCode, RequestId};
 use crate::protocol::engine::{EngineParameters, WebTransportEngine};
 use crate::protocol::events::{Effect, ProtocolEvent};
@@ -39,18 +38,12 @@ impl TransportEndpoint {
         endpoint: QuicEndpoint,
         base_config: RustBaseConfig,
         client_config: QuicClientConfig,
-    ) -> Result<Self, WebTransportError> {
+    ) -> Self {
         let workspace_capacity = usize::try_from(QUIC_UDP_PAYLOAD_SIZE_LIMIT)
-            .map_err(|e| {
-                debug!("quic_udp_payload_size_limit convert failed expected=usize err={e:?}");
-                WebTransportError::Unknown(
-                    Some(ERR_LIB_INTERNAL_ERROR),
-                    "quic_udp_payload_size_limit convert failed".into(),
-                )
-            })?
+            .unwrap_or(usize::MAX)
             .saturating_mul(UDP_TRANSMIT_BATCH_CAPACITY);
 
-        Ok(Self {
+        Self {
             base_config,
             client_config: Some(client_config),
             connections: FxHashMap::default(),
@@ -58,25 +51,19 @@ impl TransportEndpoint {
             handles_workspace: Vec::new(),
             server_config: None,
             transmit_workspace: Vec::with_capacity(workspace_capacity),
-        })
+        }
     }
 
     pub(crate) fn new_server(
         endpoint: QuicEndpoint,
         base_config: RustBaseConfig,
         server_config: RustServerConfig,
-    ) -> Result<Self, WebTransportError> {
+    ) -> Self {
         let workspace_capacity = usize::try_from(QUIC_UDP_PAYLOAD_SIZE_LIMIT)
-            .map_err(|e| {
-                debug!("quic_udp_payload_size_limit convert failed expected=usize err={e:?}");
-                WebTransportError::Unknown(
-                    Some(ERR_LIB_INTERNAL_ERROR),
-                    "quic_udp_payload_size_limit convert failed".into(),
-                )
-            })?
+            .unwrap_or(usize::MAX)
             .saturating_mul(UDP_TRANSMIT_BATCH_CAPACITY);
 
-        Ok(Self {
+        Self {
             base_config,
             client_config: None,
             connections: FxHashMap::default(),
@@ -84,7 +71,7 @@ impl TransportEndpoint {
             handles_workspace: Vec::new(),
             server_config: Some(server_config),
             transmit_workspace: Vec::with_capacity(workspace_capacity),
-        })
+        }
     }
 
     pub(crate) fn connect(

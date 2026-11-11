@@ -41,7 +41,7 @@ SERVER_HOST: Final[str] = "::"
 SERVER_PORT: Final[int] = 4433
 
 BATON_TIMEOUT: Final[float] = 10.0
-MAX_PADDING: Final[int] = 65536
+MAX_PADDING_SIZE: Final[int] = 65536
 
 ERR_BORED: Final[int] = 0x04
 ERR_BRUH: Final[int] = 0x02
@@ -171,12 +171,12 @@ def is_valid_baton_datagram(*, data: bytes) -> bool:
     if not data:
         return False
 
-    length_size = 1 << (data[0] >> 6)
-    if len(data) < length_size:
+    varint_length = 1 << (data[0] >> 6)
+    if len(data) < varint_length:
         return False
 
-    padding_length = int.from_bytes(bytes=bytes([data[0] & 0x3F]) + data[1:length_size])
-    return len(data) == length_size + padding_length + 1
+    padding_length = int.from_bytes(bytes=bytes([data[0] & 0x3F]) + data[1:varint_length])
+    return len(data) == varint_length + padding_length + 1
 
 
 async def pass_batons(*, session: WebTransportSession, count: int, baton: int) -> None:
@@ -233,7 +233,7 @@ async def process_baton_message(
     """Process an incoming Baton message, per Devious Baton Section 4.2."""
     try:
         padding_length, length_encoded = await read_varint(stream=stream)
-        if padding_length > MAX_PADDING:
+        if padding_length > MAX_PADDING_SIZE:
             await session.close(error_code=ERR_SUS, reason="padding too large")
             return
 
@@ -328,8 +328,8 @@ async def process_unidirectional_baton_messages(*, session: WebTransportSession,
 async def read_varint(*, stream: WebTransportBidirectionalStream | WebTransportReceiveStream) -> tuple[int, bytes]:
     """Read a QUIC variable-length integer, returning its value and encoded bytes."""
     first = await stream.readexactly(size=1)
-    size = 1 << (first[0] >> 6)
-    encoded = first + await stream.readexactly(size=size - 1)
+    length = 1 << (first[0] >> 6)
+    encoded = first + await stream.readexactly(size=length - 1)
     return int.from_bytes(bytes=bytes([first[0] & 0x3F]) + encoded[1:]), encoded
 
 

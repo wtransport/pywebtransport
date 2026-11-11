@@ -334,15 +334,15 @@ async def test_server_datagram_overflow_drop() -> bool:
     logger.info("Test 10I: Server Datagram Overflow Drop")
     logger.info("-" * 50)
 
-    burst_size = 150
+    burst_count = 150
     config = ClientConfig(verify_mode=ssl.CERT_NONE)
 
     try:
         async with WebTransportClient(config=config) as client:
             async with await client.connect_optimistic(url=SERVER_URL + "acceptance-delay") as session:
-                logger.info("Sending a burst of %d datagrams before the server accepts...", burst_size)
+                logger.info("Sending a burst of %d datagrams before the server accepts...", burst_count)
 
-                tasks = [session.send_datagram(data=f"Overflow {index}".encode()) for index in range(burst_size)]
+                tasks = [session.send_datagram(data=f"Overflow {index}".encode()) for index in range(burst_count)]
                 await asyncio.gather(*tasks)
 
                 try:
@@ -364,13 +364,13 @@ async def test_server_datagram_overflow_drop() -> bool:
                     logger.error("FAILURE: Session was unexpectedly closed after the overflow burst")
                     return False
 
-                if 0 < len(received_datagrams) < burst_size:
+                if 0 < len(received_datagrams) < burst_count:
                     logger.info("SUCCESS: Session correctly survived the datagram buffer overflow")
-                    logger.info("   - Datagrams echoed: %d/%d", len(received_datagrams), burst_size)
+                    logger.info("   - Datagrams echoed: %d/%d", len(received_datagrams), burst_count)
                     return True
                 else:
                     logger.error("FAILURE: Overflow did not drop some but not all datagrams")
-                    logger.error("   - Echoed: %d/%d", len(received_datagrams), burst_size)
+                    logger.error("   - Echoed: %d/%d", len(received_datagrams), burst_count)
                     return False
     except Exception as e:
         logger.error("FAILURE: An unexpected error occurred: %s", e, exc_info=True)

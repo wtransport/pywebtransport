@@ -7,9 +7,7 @@ use bytes::{Buf, Bytes, BytesMut};
 use rstest::rstest;
 
 use super::*;
-use crate::common::constants::{
-    ERR_H3_FRAME_ERROR, ERR_LIB_INTERNAL_ERROR, ERR_WT_APPLICATION_ERROR_FIRST,
-};
+use crate::common::constants::ERR_WT_APPLICATION_ERROR_FIRST;
 use crate::common::types::ErrorCode;
 
 fn get_reserved_http_code() -> u64 {
@@ -89,6 +87,13 @@ fn test_encode_wt_protocol_list_multiple() {
     let protocols = vec!["p1".to_owned(), "p2".to_owned(), "p3".to_owned()];
     let result = encode_wt_protocol_list(&protocols);
     assert_eq!(result, Ok(Bytes::from_static(b"\"p1\", \"p2\", \"p3\"")));
+}
+
+#[test]
+fn test_field_size_calculation() {
+    let result = field_size(b"accept", b"*/*");
+
+    assert_eq!(result, 41);
 }
 
 #[test]
@@ -372,21 +377,21 @@ fn test_read_varint_eof_errors() {
     let result_empty = read_varint(&mut Cursor::new(empty));
     let result_partial = read_varint(&mut Cursor::new(partial));
 
-    assert_eq!(result_empty, Err(ERR_H3_FRAME_ERROR));
-    assert_eq!(result_partial, Err(ERR_H3_FRAME_ERROR));
+    assert_eq!(result_empty, None);
+    assert_eq!(result_partial, None);
 }
 
 #[rstest]
 #[case(&[0x00], 0)]
 #[case(&[0x40, 0x25], 37)]
-#[case(&[0x9d, 0x7f, 0x3e, 0x7d], 494_878_333)]
-#[case(&[0xc2, 0x19, 0x7c, 0x5e, 0xff, 0x14, 0xe8, 0x8c], 151_288_809_941_952_652)]
+#[case(&[0x9D, 0x7F, 0x3E, 0x7D], 494_878_333)]
+#[case(&[0xC2, 0x19, 0x7C, 0x5E, 0xFF, 0x14, 0xE8, 0x8C], 151_288_809_941_952_652)]
 fn test_read_varint_valid_decoding(#[case] input: &[u8], #[case] expected: u64) {
     let mut cursor = Cursor::new(input);
 
     let result = read_varint(&mut cursor);
 
-    assert_eq!(result, Ok(expected));
+    assert_eq!(result, Some(expected));
     assert_eq!(cursor.remaining(), 0);
 }
 
@@ -400,8 +405,8 @@ fn test_read_varint_valid_decoding(#[case] input: &[u8], #[case] expected: u64) 
 #[case(1_073_741_824, 8)]
 #[case(4_611_686_018_427_387_903, 8)]
 #[case(u64::MAX, 8)]
-fn test_varint_size_calculation(#[case] value: u64, #[case] expected: usize) {
-    let result = varint_size(value);
+fn test_varint_length_calculation(#[case] value: u64, #[case] expected: usize) {
+    let result = varint_length(value);
 
     assert_eq!(result, expected);
 }
@@ -426,7 +431,7 @@ fn test_write_varint_too_large() {
 
     let result = write_varint(&mut buffer, value);
 
-    assert_eq!(result, Err(ERR_LIB_INTERNAL_ERROR));
+    assert_eq!(result, None);
 }
 
 #[rstest]
@@ -441,7 +446,7 @@ fn test_write_varint_valid_encoding(#[case] value: u64, #[case] expected_length:
     let mut cursor = Cursor::new(buffer.as_ref());
     let decoded = read_varint(&mut cursor);
 
-    assert_eq!(result, Ok(()));
+    assert_eq!(result, Some(()));
     assert_eq!(buffer.len(), expected_length);
-    assert_eq!(decoded, Ok(value));
+    assert_eq!(decoded, Some(value));
 }

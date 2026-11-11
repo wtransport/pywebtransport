@@ -117,13 +117,13 @@ async def test_chunked_transfer() -> bool:
                 stream = await session.create_bidirectional_stream()
                 logger.info("Sending %d bytes in %d-byte chunks...", total_size, chunk_size)
 
-                bytes_sent = 0
+                sent = 0
                 for offset in range(0, total_size, chunk_size):
                     chunk = test_data[offset : offset + chunk_size]
                     is_last_chunk = (offset + chunk_size) >= total_size
                     await stream.write(data=chunk, end_stream=is_last_chunk)
-                    bytes_sent += len(chunk)
-                logger.info("All %d bytes sent", bytes_sent)
+                    sent += len(chunk)
+                logger.info("All %d bytes sent", sent)
 
                 response_data = await stream.read_all()
                 expected = b"ECHO: " + test_data

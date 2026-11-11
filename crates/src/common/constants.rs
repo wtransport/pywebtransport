@@ -96,6 +96,7 @@ pub(crate) const ERR_WT_FLOW_CONTROL_ERROR: u64 = 0x045D_4487;
 pub(crate) const ERR_WT_REQUIREMENTS_NOT_MET: u64 = 0x212C_0D48;
 pub(crate) const ERR_WT_SESSION_GONE: u64 = 0x170D_7B68;
 pub(crate) const ALPN_PROTOCOLS: &[&str] = &["h3"];
+pub(crate) const H3_FIELD_STRING_SIZE_LIMIT: usize = 65535;
 pub(crate) const H3_FRAME_TYPE_CANCEL_PUSH: u64 = 0x03;
 pub(crate) const H3_FRAME_TYPE_DATA: u64 = 0x00;
 pub(crate) const H3_FRAME_TYPE_GOAWAY: u64 = 0x07;

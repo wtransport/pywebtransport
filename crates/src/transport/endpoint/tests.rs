@@ -153,13 +153,7 @@ fn create_test_client_endpoint() -> TransportEndpoint {
     let base_config = mock_base_config();
     let client_config = create_dummy_client_config();
 
-    let Ok(endpoint) = TransportEndpoint::new_client(quic_endpoint, base_config, client_config)
-    else {
-        assert_eq!("ok", "err");
-        unreachable!()
-    };
-
-    endpoint
+    TransportEndpoint::new_client(quic_endpoint, base_config, client_config)
 }
 
 fn create_test_server_endpoint() -> TransportEndpoint {
@@ -168,13 +162,7 @@ fn create_test_server_endpoint() -> TransportEndpoint {
     let base_config = mock_base_config();
     let server_config = create_dummy_rust_server_config();
 
-    let Ok(endpoint) = TransportEndpoint::new_server(quic_endpoint, base_config, server_config)
-    else {
-        assert_eq!("ok", "err");
-        unreachable!()
-    };
-
-    endpoint
+    TransportEndpoint::new_server(quic_endpoint, base_config, server_config)
 }
 
 fn deliver_transmits(
@@ -321,14 +309,11 @@ fn test_connect_with_invalid_server_name_returns_error() {
 #[test]
 fn test_handle_datagram_accepts_new_connection() {
     let mut client = create_test_client_endpoint();
-    let Ok(mut server) = TransportEndpoint::new_server(
+    let mut server = TransportEndpoint::new_server(
         create_quic_server_endpoint(),
         mock_base_config(),
         create_dummy_rust_server_config(),
-    ) else {
-        assert_eq!("ok", "err");
-        unreachable!()
-    };
+    );
     let client_address = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 50000);
     let server_address = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 443);
     let now = Instant::now();
@@ -368,14 +353,11 @@ fn test_handle_datagram_exceeding_max_connections_refuses() {
     let mut client = create_test_client_endpoint();
     let mut base_config = mock_base_config();
     base_config.max_connections = 0;
-    let Ok(mut server) = TransportEndpoint::new_server(
+    let mut server = TransportEndpoint::new_server(
         create_quic_server_endpoint(),
         base_config,
         create_dummy_rust_server_config(),
-    ) else {
-        assert_eq!("ok", "err");
-        unreachable!()
-    };
+    );
     let client_address = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 50000);
     let server_address = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 443);
     let now = Instant::now();
@@ -393,14 +375,11 @@ fn test_handle_datagram_exceeding_max_connections_refuses() {
 #[test]
 fn test_handle_datagram_on_client_endpoint_refuses_incoming_connection() {
     let mut client = create_test_client_endpoint();
-    let Ok(mut peer) = TransportEndpoint::new_client(
+    let mut peer = TransportEndpoint::new_client(
         create_quic_server_endpoint(),
         mock_base_config(),
         create_dummy_client_config(),
-    ) else {
-        assert_eq!("ok", "err");
-        unreachable!()
-    };
+    );
     let client_address = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 50000);
     let server_address = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 443);
     let now = Instant::now();
@@ -418,14 +397,11 @@ fn test_handle_datagram_on_client_endpoint_refuses_incoming_connection() {
 #[test]
 fn test_handle_datagram_unknown_connection_returns_consumed() {
     let mut client = create_test_client_endpoint();
-    let Ok(mut server) = TransportEndpoint::new_server(
+    let mut server = TransportEndpoint::new_server(
         create_quic_server_endpoint(),
         mock_base_config(),
         create_dummy_rust_server_config(),
-    ) else {
-        assert_eq!("ok", "err");
-        unreachable!()
-    };
+    );
     let client_address = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 50000);
     let server_address = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 443);
     let now = Instant::now();
@@ -446,14 +422,11 @@ fn test_handle_datagram_unknown_connection_returns_consumed() {
 
 #[test]
 fn test_handle_datagram_unsupported_version_returns_transmit() {
-    let Ok(mut server) = TransportEndpoint::new_server(
+    let mut server = TransportEndpoint::new_server(
         create_quic_server_endpoint(),
         mock_base_config(),
         create_dummy_rust_server_config(),
-    ) else {
-        assert_eq!("ok", "err");
-        unreachable!()
-    };
+    );
     let client_address = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 50000);
     let mut data = BytesMut::new();
     data.extend_from_slice(&[0xC0, 0x1A, 0x2A, 0x3A, 0x4A, 0x08]);
@@ -557,14 +530,11 @@ fn test_handle_timeout_removes_drained_connection() {
 #[test]
 fn test_handle_timeout_reports_connection_effects() {
     let mut client = create_test_client_endpoint();
-    let Ok(mut server) = TransportEndpoint::new_server(
+    let mut server = TransportEndpoint::new_server(
         create_quic_server_endpoint(),
         mock_base_config(),
         create_dummy_rust_server_config(),
-    ) else {
-        assert_eq!("ok", "err");
-        unreachable!()
-    };
+    );
     let client_address = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 50000);
     let server_address = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), 443);
     let now = Instant::now();

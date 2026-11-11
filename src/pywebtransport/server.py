@@ -21,7 +21,7 @@ _logger = logging.getLogger(name=__name__)
 
 
 class WebTransportServer:
-    """Manage WebTransport connections and sessions."""
+    """Manage WebTransport connections."""
 
     def __init__(self, *, config: ServerConfig) -> None:
         """Initialize the instance."""
@@ -31,7 +31,6 @@ class WebTransportServer:
         self._closing = False
         self._incoming_connections: asyncio.Queue[WebTransportConnection | None] = asyncio.Queue()
         self._serving = False
-        self._shutdown_event = asyncio.Event()
 
         self._close_task: asyncio.Task[None] | None = None
         self._controller: EndpointController | None = None
@@ -117,18 +116,6 @@ class WebTransportServer:
         except Exception as e:
             raise ServerError.from_cause(message="app_server open failed", cause=e) from e
 
-    async def serve_forever(self) -> None:
-        """Run the server indefinitely until interrupted."""
-        if not self._serving:
-            raise ServerError(message="app_server validate failed")
-
-        try:
-            await self._shutdown_event.wait()
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            raise ServerError.from_cause(message="rt_event resolve failed", cause=e) from e
-
     async def _close(self) -> None:
         self._serving = False
         self._closing = True
@@ -139,7 +126,6 @@ class WebTransportServer:
                 self._controller = None
         finally:
             self._incoming_connections.put_nowait(item=None)
-            self._shutdown_event.set()
             self._closing = False
             self._closed = True
 

@@ -358,19 +358,19 @@ class WebTransportReceiveStream(WebTransportStream):
         read_timeout = connection.config.read_timeout
 
         chunks: list[bytes] = []
-        bytes_read = 0
+        data_length = 0
 
         try:
             async with asyncio.timeout(delay=read_timeout):
-                while bytes_read < size:
-                    needed = size - bytes_read
-                    chunk = await self.read(max_size=needed)
+                while data_length < size:
+                    remaining_size = size - data_length
+                    chunk = await self.read(max_size=remaining_size)
                     if not chunk:
                         partial = b"".join(chunks)
                         raise asyncio.IncompleteReadError(partial, size)
 
                     chunks.append(chunk)
-                    bytes_read += len(chunk)
+                    data_length += len(chunk)
         except asyncio.TimeoutError:
             raise TimeoutError(message=f"wt_stream receive failed stream_id={self.stream_id}") from None
 

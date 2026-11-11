@@ -18,12 +18,34 @@ fn create_dummy_headers(count: usize) -> Headers {
 }
 
 #[test]
+fn test_decode_field_section_size_limit() {
+    let mut encoder = Encoder::new();
+    let mut decoder = Decoder::new();
+    let stream_id = 10;
+    let headers = create_dummy_headers(3);
+
+    let Ok(header_block) = encoder.encode(stream_id, &headers) else {
+        assert_eq!("ok", "err");
+        unreachable!()
+    };
+
+    let result_at_limit = decoder.decode(stream_id, &header_block, 189);
+    let result_exceeded = decoder.decode(stream_id, &header_block, 188);
+
+    assert!(matches!(result_at_limit, Ok(decoded_headers) if decoded_headers == headers));
+    assert!(matches!(
+        result_exceeded,
+        Err(QpackError::FieldSectionTooLarge)
+    ));
+}
+
+#[test]
 fn test_decode_field_too_long_failure() {
     let mut decoder = Decoder::new();
     let mut header_block = vec![0x00, 0x00, 0x21, b'a', 0xFF, 0xE7, 0xD4, 0x02];
     header_block.resize(header_block.len() + 43_750, 0x00);
 
-    let result = decoder.decode(10, &header_block);
+    let result = decoder.decode(10, &header_block, u64::MAX);
 
     assert!(matches!(result, Err(QpackError::HeaderTooLong)));
 }
@@ -33,7 +55,7 @@ fn test_decode_malformed_data() {
     let mut decoder = Decoder::new();
     let malformed_data = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
 
-    let result = decoder.decode(10, &malformed_data);
+    let result = decoder.decode(10, &malformed_data, u64::MAX);
 
     assert!(matches!(result, Err(QpackError::DecoderError)));
 }
@@ -166,7 +188,7 @@ fn test_round_trip_simple_flow() {
         unreachable!()
     };
 
-    let result = decoder.decode(stream_id, &header_block);
+    let result = decoder.decode(stream_id, &header_block, u64::MAX);
 
     let Ok(decoded_headers) = result else {
         assert_eq!("ok", "err");

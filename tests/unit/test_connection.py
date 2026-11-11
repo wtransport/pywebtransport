@@ -50,6 +50,7 @@ class TestConnectionDiagnostics:
             peer_initial_max_streams_bidi=10,
             peer_initial_max_streams_uni=10,
             peer_max_datagram_frame_size=1350,
+            peer_max_field_section_size=65536,
             peer_settings_received=True,
             state=ConnectionState.CONNECTED,
         )
@@ -67,6 +68,7 @@ class TestConnectionDiagnostics:
         assert diagnostics.peer_initial_max_streams_bidi == 10
         assert diagnostics.peer_initial_max_streams_uni == 10
         assert diagnostics.peer_max_datagram_frame_size == 1350
+        assert diagnostics.peer_max_field_section_size == 65536
         assert diagnostics.peer_settings_received is True
         assert diagnostics.state == ConnectionState.CONNECTED
 
@@ -499,6 +501,7 @@ class TestWebTransportConnection:
             "peer_initial_max_streams_bidi": 10,
             "peer_initial_max_streams_uni": 10,
             "peer_max_datagram_frame_size": 1350,
+            "peer_max_field_section_size": 65536,
             "peer_settings_received": True,
             "state": ConnectionState.CONNECTED,
         }

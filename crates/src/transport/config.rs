@@ -1,5 +1,6 @@
 //! QUIC configuration.
 
+use std::io::{self, Error, ErrorKind};
 use std::sync::{Arc, LazyLock};
 
 use quinn_proto::congestion::{
@@ -22,10 +23,9 @@ use webpki_roots::TLS_SERVER_ROOTS;
 
 use crate::common::config::{RustBaseConfig, RustClientConfig, RustServerConfig};
 use crate::common::constants::ALPN_PROTOCOLS;
-use crate::common::error::WebTransportError;
 use crate::tls::certificate::{self, NoCertificateVerification};
 
-const DATAGRAM_QUEUE_CAPACITY: usize = 64;
+const DATAGRAM_QUEUE_CAPACITY: u64 = 64;
 
 static NATIVE_ROOT_CERTS: LazyLock<RootCertStore> = LazyLock::new(|| {
     let mut store = RootCertStore::empty();
@@ -45,18 +45,15 @@ static NATIVE_ROOT_CERTS: LazyLock<RootCertStore> = LazyLock::new(|| {
     store
 });
 
-pub(crate) fn build_client_config(
-    config: &RustClientConfig,
-) -> Result<QuicClientConfig, WebTransportError> {
+pub(crate) fn build_client_config(config: &RustClientConfig) -> io::Result<QuicClientConfig> {
     let root_store = if let Some(ca_path) = &config.ca_certs {
         let mut store = RootCertStore::empty();
-        let certs = certificate::load_certs(ca_path)
-            .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
+        let certs = certificate::load_certs(ca_path)?;
 
         for cert in certs {
             store
                 .add(cert)
-                .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
+                .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
         }
 
         store
@@ -67,19 +64,17 @@ pub(crate) fn build_client_config(
     let provider = Arc::new(ring::default_provider());
     let builder = ClientConfig::builder_with_provider(Arc::clone(&provider))
         .with_protocol_versions(&[&TLS13])
-        .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?
+        .map_err(|e| Error::new(ErrorKind::Unsupported, e))?
         .with_root_certificates(root_store);
 
     let mut crypto = if let (Some(cert_path), Some(key_path)) = (&config.certfile, &config.keyfile)
     {
-        let certs = certificate::load_certs(cert_path)
-            .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
-        let key = certificate::load_private_key(key_path)
-            .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
+        let certs = certificate::load_certs(cert_path)?;
+        let key = certificate::load_private_key(key_path)?;
 
         builder
             .with_client_auth_cert(certs, key)
-            .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?
+            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?
     } else {
         builder.with_no_client_auth()
     };
@@ -96,7 +91,7 @@ pub(crate) fn build_client_config(
     }
 
     let crypto = QuicCryptoClientConfig::try_from(crypto)
-        .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
+        .map_err(|e| Error::new(ErrorKind::Unsupported, e))?;
     let mut client_config = QuicClientConfig::new(Arc::new(crypto));
     let transport_config = build_transport_config(&config.base)?;
 
@@ -105,61 +100,54 @@ pub(crate) fn build_client_config(
     Ok(client_config)
 }
 
-pub(crate) fn build_endpoint_config(
-    config: &RustBaseConfig,
-) -> Result<QuicEndpointConfig, WebTransportError> {
+pub(crate) fn build_endpoint_config(config: &RustBaseConfig) -> io::Result<QuicEndpointConfig> {
     let mut endpoint_config = QuicEndpointConfig::default();
 
     let max_udp_payload_size = u16::try_from(config.max_udp_payload_size)
-        .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
+        .map_err(|e| Error::new(ErrorKind::InvalidInput, e))?;
 
     endpoint_config
         .max_udp_payload_size(max_udp_payload_size)
-        .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
+        .map_err(|e| Error::new(ErrorKind::InvalidInput, e))?;
 
     Ok(endpoint_config)
 }
 
-pub(crate) fn build_server_config(
-    config: &RustServerConfig,
-) -> Result<QuicServerConfig, WebTransportError> {
-    let certs = certificate::load_certs(&config.certfile)
-        .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
-    let key = certificate::load_private_key(&config.keyfile)
-        .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
+pub(crate) fn build_server_config(config: &RustServerConfig) -> io::Result<QuicServerConfig> {
+    let certs = certificate::load_certs(&config.certfile)?;
+    let key = certificate::load_private_key(&config.keyfile)?;
 
     let provider = Arc::new(ring::default_provider());
     let builder = ServerConfig::builder_with_provider(Arc::clone(&provider))
         .with_protocol_versions(&[&TLS13])
-        .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
+        .map_err(|e| Error::new(ErrorKind::Unsupported, e))?;
 
     let mut crypto = if config.require_client_auth {
         let mut root_store = RootCertStore::empty();
 
         if let Some(ca_path) = &config.ca_certs {
-            let ca_certs = certificate::load_certs(ca_path)
-                .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
+            let ca_certs = certificate::load_certs(ca_path)?;
 
             for cert in ca_certs {
                 root_store
                     .add(cert)
-                    .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
+                    .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
             }
         }
 
         let verifier = WebPkiClientVerifier::builder_with_provider(Arc::new(root_store), provider)
             .build()
-            .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
+            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
         builder
             .with_client_cert_verifier(verifier)
             .with_single_cert(certs, key)
-            .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?
+            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?
     } else {
         builder
             .with_no_client_auth()
             .with_single_cert(certs, key)
-            .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?
+            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?
     };
 
     crypto.alpn_protocols = ALPN_PROTOCOLS
@@ -168,7 +156,7 @@ pub(crate) fn build_server_config(
         .collect();
 
     let crypto = QuicCryptoServerConfig::try_from(crypto)
-        .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
+        .map_err(|e| Error::new(ErrorKind::Unsupported, e))?;
     let mut server_config = QuicServerConfig::with_crypto(Arc::new(crypto));
     let transport_config = build_transport_config(&config.base)?;
 
@@ -177,9 +165,7 @@ pub(crate) fn build_server_config(
     Ok(server_config)
 }
 
-fn build_transport_config(
-    base_config: &RustBaseConfig,
-) -> Result<QuicTransportConfig, WebTransportError> {
+fn build_transport_config(base_config: &RustBaseConfig) -> io::Result<QuicTransportConfig> {
     let mut config = QuicTransportConfig::default();
 
     match base_config.congestion_control_algorithm.as_str() {
@@ -194,21 +180,23 @@ fn build_transport_config(
         }
         unknown => {
             debug!("cfg_congestion_control_algorithm validate invalid actual={unknown}");
-            return Err(WebTransportError::Configuration(
-                None,
-                "cfg_congestion_control_algorithm validate invalid".into(),
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "cfg_congestion_control_algorithm validate invalid",
             ));
         }
     }
 
     if base_config.max_datagram_size > 0 {
-        let total_size = base_config
-            .max_datagram_size
-            .saturating_mul(DATAGRAM_QUEUE_CAPACITY as u64);
-        let buffer_capacity = usize::try_from(total_size).unwrap_or(usize::MAX);
+        let buffer_size = usize::try_from(
+            base_config
+                .max_datagram_size
+                .saturating_mul(DATAGRAM_QUEUE_CAPACITY),
+        )
+        .unwrap_or(usize::MAX);
 
-        config.datagram_receive_buffer_size(Some(buffer_capacity));
-        config.datagram_send_buffer_size(buffer_capacity);
+        config.datagram_receive_buffer_size(Some(buffer_size));
+        config.datagram_send_buffer_size(buffer_size);
     } else {
         config.datagram_receive_buffer_size(None);
         config.datagram_send_buffer_size(0);
@@ -217,25 +205,25 @@ fn build_transport_config(
     config.keep_alive_interval(base_config.keep_alive_interval);
 
     let max_streams_bidi = QuicVarInt::try_from(base_config.max_streams_bidi)
-        .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
+        .map_err(|e| Error::new(ErrorKind::InvalidInput, e))?;
     config.max_concurrent_bidi_streams(max_streams_bidi);
 
     let max_streams_uni = QuicVarInt::try_from(base_config.max_streams_uni)
-        .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
+        .map_err(|e| Error::new(ErrorKind::InvalidInput, e))?;
     config.max_concurrent_uni_streams(max_streams_uni);
 
     let max_idle_timeout = QuicIdleTimeout::try_from(base_config.max_idle_timeout)
-        .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
+        .map_err(|e| Error::new(ErrorKind::InvalidInput, e))?;
     config.max_idle_timeout(Some(max_idle_timeout));
 
     let connection_receive_window = QuicVarInt::try_from(base_config.connection_receive_window)
-        .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
+        .map_err(|e| Error::new(ErrorKind::InvalidInput, e))?;
     config.receive_window(connection_receive_window);
 
     config.send_window(base_config.connection_send_window);
 
     let stream_receive_window = QuicVarInt::try_from(base_config.stream_receive_window)
-        .map_err(|e| WebTransportError::Configuration(None, e.to_string().into()))?;
+        .map_err(|e| Error::new(ErrorKind::InvalidInput, e))?;
     config.stream_receive_window(stream_receive_window);
 
     Ok(config)

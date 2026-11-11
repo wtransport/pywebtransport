@@ -5,13 +5,16 @@ use rstest::{fixture, rstest};
 
 use super::*;
 use crate::common::constants::{
-    ERR_H3_REQUEST_REJECTED, ERR_LIB_CONNECTION_STATE_ERROR, ERR_LIB_INTERNAL_ERROR,
-    ERR_LIB_SESSION_STATE_ERROR, ERR_LIB_STREAM_STATE_ERROR, ERR_WT_BUFFERED_STREAM_REJECTED,
-    ERR_WT_SESSION_GONE, WT_AVAILABLE_PROTOCOLS, WT_CAPSULE_TYPE_DRAIN_SESSION, WT_PROTOCOL,
+    ERR_APP_NO_ERROR, ERR_H3_MESSAGE_ERROR, ERR_H3_REQUEST_REJECTED,
+    ERR_LIB_CONNECTION_STATE_ERROR, ERR_LIB_INTERNAL_ERROR, ERR_LIB_SESSION_STATE_ERROR,
+    ERR_LIB_STREAM_STATE_ERROR, ERR_WT_BUFFERED_STREAM_REJECTED, ERR_WT_SESSION_GONE,
+    H3_FIELD_STRING_SIZE_LIMIT, WT_AVAILABLE_PROTOCOLS, WT_CAPSULE_TYPE_DRAIN_SESSION, WT_PROTOCOL,
+    WT_UPGRADE_TOKEN,
 };
 use crate::common::types::{ConnectionState, ErrorSource, EventType, Headers};
 use crate::protocol::events::{Effect, RequestResult};
 use crate::protocol::h3::H3Settings;
+use crate::protocol::utils;
 
 fn create_session_request(
     headers: Headers,
@@ -72,6 +75,26 @@ fn fixture_headers() -> Headers {
 }
 
 #[fixture]
+fn fixture_request_headers() -> Headers {
+    vec![
+        (
+            Bytes::from_static(b":method"),
+            Bytes::from_static(b"CONNECT"),
+        ),
+        (Bytes::from_static(b":scheme"), Bytes::from_static(b"https")),
+        (
+            Bytes::from_static(b":authority"),
+            Bytes::from_static(b"example.com"),
+        ),
+        (Bytes::from_static(b":path"), Bytes::from_static(b"/")),
+        (
+            Bytes::from_static(b":protocol"),
+            Bytes::from_static(WT_UPGRADE_TOKEN),
+        ),
+    ]
+}
+
+#[fixture]
 fn fixture_server_connection() -> Connection {
     Connection::new(
         42,
@@ -112,6 +135,30 @@ fn test_accept_session_delegates(
             ..
         }
     )));
+}
+
+#[rstest]
+fn test_accept_session_field_section_exceeding_peer_limit_failure(
+    mut fixture_server_connection: Connection,
+    fixture_headers: Headers,
+) {
+    fixture_server_connection.state = ConnectionState::Connected;
+    fixture_server_connection.peer_max_field_section_size =
+        Some(utils::field_size(b":status", b"200"));
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
+    let headers = vec![(Bytes::from_static(b"server"), Bytes::from_static(b"test"))];
+
+    let effects = fixture_server_connection.accept_session(0, 100, headers, None, 2.0);
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::NotifyRequestFailed {
+            request_id: 100,
+            source: ErrorSource::Session,
+            error_code: None,
+            reason,
+        }] if reason == "h3_field_section validate exceeded"
+    ));
 }
 
 #[rstest]
@@ -176,21 +223,49 @@ fn test_accessors(mut fixture_server_connection: Connection, fixture_headers: He
     assert!(!fixture_server_connection.is_pre_connected());
     assert!(fixture_server_connection.is_connected());
 
-    assert!(!fixture_server_connection.is_session_stream(0));
+    assert!(!fixture_server_connection.is_connect_stream(0));
 
     fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
 
-    assert!(fixture_server_connection.is_session_stream(0));
+    assert!(fixture_server_connection.is_connect_stream(0));
 }
 
 #[rstest]
-fn test_bind_session(mut fixture_server_connection: Connection) {
-    let effects = fixture_server_connection.bind_session(4, 100);
+fn test_bind_session(mut fixture_client_connection: Connection, fixture_request_headers: Headers) {
+    fixture_client_connection.state = ConnectionState::Connected;
+    let headers = vec![(
+        Bytes::from_static(b"user-agent"),
+        Bytes::from_static(b"test"),
+    )];
+    let mut expected_headers = fixture_request_headers;
+    expected_headers.extend_from_slice(&headers);
+    fixture_client_connection.create_session(100, create_session_request(headers, None, false));
+
+    let effects = fixture_client_connection.bind_session(0, 100);
+
+    assert_eq!(
+        fixture_client_connection.pending_session_requests.get(&0),
+        Some(&100)
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::SendH3Headers {
+            stream_id: 0,
+            headers,
+            end_stream: false,
+        }] if *headers == expected_headers
+    ));
+}
+
+#[rstest]
+fn test_bind_session_not_found(mut fixture_client_connection: Connection) {
+    let effects = fixture_client_connection.bind_session(0, 100);
 
     assert!(effects.is_empty());
-    assert_eq!(
-        fixture_server_connection.pending_session_requests.get(&4),
-        Some(&100)
+    assert!(
+        fixture_client_connection
+            .pending_session_requests
+            .is_empty()
     );
 }
 
@@ -207,6 +282,7 @@ fn test_bind_session_optimistic_completes_via_receive_headers(
     assert!(matches!(
         bind_effects.as_slice(),
         [
+            Effect::SendH3Headers { stream_id: 0, .. },
             Effect::EmitSessionEvent {
                 event_type: EventType::SessionPending,
                 ..
@@ -296,6 +372,26 @@ fn test_bind_stream_updates_map(
 }
 
 #[rstest]
+fn test_client_create_session_limit_excludes_terminated_session(
+    mut fixture_client_connection: Connection,
+) {
+    fixture_client_connection.state = ConnectionState::Connected;
+    fixture_client_connection.peer_initial_max_data = 100;
+    fixture_client_connection.max_sessions = 1;
+    fixture_client_connection.create_session(100, create_session_request(vec![], None, true));
+    fixture_client_connection.bind_session(0, 100);
+    fixture_client_connection.close_session(0, 101, 0, None, 1.5);
+
+    let effects =
+        fixture_client_connection.create_session(102, create_session_request(vec![], None, false));
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CreateH3ConnectStream { request_id: 102 }]
+    ));
+}
+
+#[rstest]
 fn test_client_create_session_limit_reached(mut fixture_client_connection: Connection) {
     fixture_client_connection.state = ConnectionState::Connected;
     fixture_client_connection.peer_initial_max_data = 100;
@@ -374,8 +470,100 @@ fn test_client_create_session_success(mut fixture_client_connection: Connection)
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::CreateH3ConnectStream { authority, headers, .. }] if authority == "example.com" && headers.len() == 1 && headers.first().is_some_and(|(key, _)| key.as_ref() == b"user-agent")
+        [Effect::CreateH3ConnectStream { request_id: 100 }]
     ));
+}
+
+#[rstest]
+fn test_client_create_session_with_field_section_exceeding_peer_limit_failure(
+    mut fixture_client_connection: Connection,
+    fixture_request_headers: Headers,
+) {
+    fixture_client_connection.state = ConnectionState::Connected;
+    let field_section_size: u64 = fixture_request_headers
+        .iter()
+        .map(|(key, value)| utils::field_size(key, value))
+        .sum();
+    fixture_client_connection.peer_max_field_section_size = Some(field_section_size - 1);
+
+    let effects =
+        fixture_client_connection.create_session(100, create_session_request(vec![], None, false));
+
+    assert!(
+        !fixture_client_connection
+            .session_requests
+            .contains_key(&100)
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Connection,
+            error_code: None,
+            ..
+        }]
+    ));
+
+    if let [Effect::NotifyRequestFailed { reason, .. }] = effects.as_slice() {
+        assert_eq!(reason, "h3_field_section validate exceeded");
+    }
+}
+
+#[rstest]
+fn test_client_create_session_with_field_section_within_peer_limit_success(
+    mut fixture_client_connection: Connection,
+    fixture_request_headers: Headers,
+) {
+    fixture_client_connection.state = ConnectionState::Connected;
+    let field_section_size: u64 = fixture_request_headers
+        .iter()
+        .map(|(key, value)| utils::field_size(key, value))
+        .sum();
+    fixture_client_connection.peer_max_field_section_size = Some(field_section_size);
+
+    let effects =
+        fixture_client_connection.create_session(100, create_session_request(vec![], None, false));
+
+    assert!(
+        fixture_client_connection
+            .session_requests
+            .contains_key(&100)
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CreateH3ConnectStream { request_id: 100 }]
+    ));
+}
+
+#[rstest]
+fn test_client_create_session_with_headers_exceeding_size_limit_failure(
+    mut fixture_client_connection: Connection,
+) {
+    fixture_client_connection.state = ConnectionState::Connected;
+    let headers = vec![(
+        Bytes::from_static(b"user-agent"),
+        Bytes::from(vec![b'a'; H3_FIELD_STRING_SIZE_LIMIT + 1]),
+    )];
+
+    let effects =
+        fixture_client_connection.create_session(100, create_session_request(headers, None, false));
+
+    assert!(
+        !fixture_client_connection
+            .session_requests
+            .contains_key(&100)
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::NotifyRequestFailed {
+            source: ErrorSource::Connection,
+            error_code: None,
+            ..
+        }]
+    ));
+
+    if let [Effect::NotifyRequestFailed { reason, .. }] = effects.as_slice() {
+        assert_eq!(reason, "h3_headers validate exceeded");
+    }
 }
 
 #[rstest]
@@ -449,11 +637,13 @@ fn test_client_create_session_with_wt_available_protocols(
     assert!(
         fixture_client_connection
             .session_requests
-            .contains_key(&100)
+            .get(&100)
+            .and_then(|session_request| session_request.headers.last())
+            .is_some_and(|(key, _)| key.as_ref() == WT_AVAILABLE_PROTOCOLS)
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::CreateH3ConnectStream { authority, headers, .. }] if authority == "example.com" && headers.len() == 1 && headers.first().is_some_and(|(key, _)| key.as_ref() == WT_AVAILABLE_PROTOCOLS)
+        [Effect::CreateH3ConnectStream { request_id: 100 }]
     ));
 }
 
@@ -473,13 +663,18 @@ fn test_client_create_session_wrong_state(mut fixture_client_connection: Connect
 }
 
 #[rstest]
-fn test_client_receive_headers_completes_session(mut fixture_client_connection: Connection) {
+#[case(b"200")]
+#[case(b"204")]
+fn test_client_receive_headers_completes_session(
+    mut fixture_client_connection: Connection,
+    #[case] status: &'static [u8],
+) {
     fixture_client_connection.state = ConnectionState::Connected;
     fixture_client_connection
         .pending_session_requests
         .insert(0, 100);
     fixture_client_connection.create_session(100, create_session_request(vec![], None, false));
-    let response_headers = vec![(Bytes::from_static(b":status"), Bytes::from_static(b"200"))];
+    let response_headers = vec![(Bytes::from_static(b":status"), Bytes::from_static(status))];
 
     let effects = fixture_client_connection.receive_headers(0, response_headers, 2.0);
 
@@ -579,15 +774,11 @@ fn test_client_receive_headers_missing_status_rejects(mut fixture_client_connect
     );
     assert!(matches!(
         effects.as_slice(),
-        [
-            Effect::NotifyRequestFailed {
-                request_id: 100,
-                error_code: Some(ERR_H3_REQUEST_REJECTED),
-                ..
-            },
-            Effect::StopQuicStream { stream_id: 0, .. },
-            Effect::ResetQuicStream { stream_id: 0, .. }
-        ]
+        [Effect::NotifyRequestFailed {
+            request_id: 100,
+            error_code: Some(ERR_H3_REQUEST_REJECTED),
+            ..
+        }]
     ));
 }
 
@@ -628,7 +819,7 @@ fn test_client_receive_headers_negotiated_protocol_not_requested_fails(
 }
 
 #[rstest]
-fn test_client_receive_headers_non_200_aborts_existing_session(
+fn test_client_receive_headers_non_2xx_closes_existing_session(
     mut fixture_client_connection: Connection,
 ) {
     fixture_client_connection.state = ConnectionState::Connected;
@@ -639,13 +830,15 @@ fn test_client_receive_headers_non_200_aborts_existing_session(
     let response_headers = vec![(Bytes::from_static(b":status"), Bytes::from_static(b"404"))];
     let effects = fixture_client_connection.receive_headers(0, response_headers, 2.0);
 
-    assert!(effects.iter().any(|effect| matches!(
-        effect,
-        Effect::EmitSessionEvent {
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::EmitSessionEvent {
+            session_id: 0,
             event_type: EventType::SessionClosed,
+            error_code: Some(ERR_H3_REQUEST_REJECTED),
             ..
-        }
-    )));
+        }]
+    ));
 }
 
 #[rstest]
@@ -708,7 +901,7 @@ fn test_client_receive_headers_protocol_mismatch_no_session_fails_request(
 }
 
 #[rstest]
-fn test_client_receive_headers_rejects_non_200(mut fixture_client_connection: Connection) {
+fn test_client_receive_headers_rejects_non_2xx(mut fixture_client_connection: Connection) {
     fixture_client_connection.state = ConnectionState::Connected;
     fixture_client_connection
         .pending_session_requests
@@ -735,14 +928,6 @@ fn test_client_receive_headers_rejects_non_200(mut fixture_client_connection: Co
                 source: ErrorSource::Session,
                 error_code: Some(ERR_H3_REQUEST_REJECTED),
                 ..
-            },
-            Effect::StopQuicStream {
-                stream_id: 0,
-                error_code: ERR_H3_REQUEST_REJECTED,
-            },
-            Effect::ResetQuicStream {
-                stream_id: 0,
-                error_code: ERR_H3_REQUEST_REJECTED,
             },
             Effect::ResetQuicStream {
                 stream_id: 1,
@@ -1119,6 +1304,35 @@ fn test_create_stream_not_found(mut fixture_server_connection: Connection) {
 }
 
 #[rstest]
+fn test_defer_session_after_goaway_fails(mut fixture_client_connection: Connection) {
+    fixture_client_connection.state = ConnectionState::Connected;
+    fixture_client_connection.create_session(100, create_session_request(vec![], None, false));
+    fixture_client_connection.peer_goaway_received = true;
+
+    let effects = fixture_client_connection.defer_session(100);
+
+    assert!(
+        fixture_client_connection
+            .blocked_session_requests
+            .is_empty()
+    );
+    assert!(
+        !fixture_client_connection
+            .session_requests
+            .contains_key(&100)
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::NotifyRequestFailed {
+            request_id: 100,
+            source: ErrorSource::Connection,
+            error_code: Some(ERR_LIB_CONNECTION_STATE_ERROR),
+            reason,
+        }] if reason == "wt_connection validate failed"
+    ));
+}
+
+#[rstest]
 fn test_defer_stream_session_not_found(mut fixture_server_connection: Connection) {
     let effects = fixture_server_connection.defer_stream(0, 200, false);
 
@@ -1257,27 +1471,6 @@ fn test_export_keying_material_not_found(fixture_server_connection: Connection) 
     let effects =
         fixture_server_connection.export_keying_material(999, 100, "label", &[1, 2, 3], 32);
 
-    assert!(matches!(
-        effects.as_slice(),
-        [Effect::NotifyRequestFailed {
-            source: ErrorSource::Session,
-            ..
-        }]
-    ));
-}
-
-#[rstest]
-fn test_fail_session_cleans_pending(mut fixture_client_connection: Connection) {
-    fixture_client_connection.state = ConnectionState::Connected;
-    fixture_client_connection.create_session(100, create_session_request(vec![], None, false));
-
-    let effects = fixture_client_connection.fail_session(100, None, "error".into());
-
-    assert!(
-        !fixture_client_connection
-            .session_requests
-            .contains_key(&100)
-    );
     assert!(matches!(
         effects.as_slice(),
         [Effect::NotifyRequestFailed {
@@ -1660,9 +1853,9 @@ fn test_is_session_closed(mut fixture_server_connection: Connection, fixture_hea
 #[rstest]
 fn test_prune_early_events_retains_unexpired(mut fixture_server_connection: Connection) {
     fixture_server_connection.handle_stream_opened(0, 4, 1.0);
-    fixture_server_connection.handle_stream_opened(0, 8, 9.0);
+    fixture_server_connection.handle_stream_opened(0, 8, 5.0);
 
-    let effects = fixture_server_connection.prune_early_events(10.0);
+    let effects = fixture_server_connection.prune_early_events(9.0);
 
     assert_eq!(fixture_server_connection.early_event_count, 1);
     assert!(
@@ -1670,6 +1863,7 @@ fn test_prune_early_events_retains_unexpired(mut fixture_server_connection: Conn
             .early_event_buffer
             .contains_key(&0)
     );
+    assert_eq!(fixture_server_connection.earliest_early_event_at, Some(5.0));
     assert!(matches!(
         effects.as_slice(),
         [
@@ -1740,7 +1934,7 @@ fn test_prune_resources_cleans_stream_map(
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
     fixture_server_connection.handle_stream_opened(0, 4, 2.0);
     fixture_server_connection.close_session(0, 101, 0, None, 2.5);
-    fixture_server_connection.receive_connect_close(0, 3.0);
+    fixture_server_connection.receive_connect_stream_close(0, None, 3.0);
 
     fixture_server_connection.receive_headers(8, fixture_headers, 3.5);
     fixture_server_connection.accept_session(8, 102, vec![], None, 4.0);
@@ -1779,7 +1973,7 @@ fn test_prune_resources_removes_closed_sessions(
     fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
     fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
     fixture_server_connection.close_session(0, 101, 0, None, 2.0);
-    fixture_server_connection.receive_connect_close(0, 2.5);
+    fixture_server_connection.receive_connect_stream_close(0, None, 2.5);
 
     fixture_server_connection.prune_resources();
 
@@ -1907,18 +2101,180 @@ fn test_receive_capsule_not_found(mut fixture_server_connection: Connection) {
 }
 
 #[rstest]
-fn test_receive_connect_close(mut fixture_server_connection: Connection, fixture_headers: Headers) {
+fn test_receive_connect_stream_close(
+    mut fixture_server_connection: Connection,
+    fixture_headers: Headers,
+) {
     fixture_server_connection.state = ConnectionState::Connected;
     fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
 
-    let effects = fixture_server_connection.receive_connect_close(0, 2.0);
+    let effects = fixture_server_connection.receive_connect_stream_close(0, None, 2.0);
 
-    assert!(!effects.is_empty());
+    assert!(fixture_server_connection.is_session_closed(0));
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::EmitSessionEvent {
+            session_id: 0,
+            event_type: EventType::SessionClosed,
+            error_code: Some(ERR_APP_NO_ERROR),
+            ..
+        }]
+    ));
 }
 
 #[rstest]
-fn test_receive_connect_close_not_found(mut fixture_server_connection: Connection) {
-    let effects = fixture_server_connection.receive_connect_close(999, 1.0);
+fn test_receive_connect_stream_close_closes_optimistic_session(
+    mut fixture_client_connection: Connection,
+) {
+    fixture_client_connection.state = ConnectionState::Connected;
+    fixture_client_connection.create_session(100, create_session_request(vec![], None, true));
+    fixture_client_connection.bind_session(0, 100);
+
+    let effects =
+        fixture_client_connection.receive_connect_stream_close(0, Some(ERR_H3_MESSAGE_ERROR), 2.0);
+
+    assert!(
+        !fixture_client_connection
+            .pending_session_requests
+            .contains_key(&0)
+    );
+    assert!(fixture_client_connection.is_session_closed(0));
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::EmitSessionEvent {
+            session_id: 0,
+            event_type: EventType::SessionClosed,
+            error_code: Some(ERR_H3_MESSAGE_ERROR),
+            reason: Some(reason),
+            ..
+        }] if reason == "wt_session abort"
+    ));
+}
+
+#[rstest]
+fn test_receive_connect_stream_close_fails_session_request(
+    mut fixture_client_connection: Connection,
+) {
+    fixture_client_connection.state = ConnectionState::Connected;
+    fixture_client_connection.create_session(100, create_session_request(vec![], None, false));
+    fixture_client_connection.bind_session(0, 100);
+    fixture_client_connection.handle_stream_opened(0, 1, 1.5);
+
+    let effects =
+        fixture_client_connection.receive_connect_stream_close(0, Some(ERR_H3_MESSAGE_ERROR), 2.0);
+
+    assert!(
+        !fixture_client_connection
+            .pending_session_requests
+            .contains_key(&0)
+    );
+    assert!(
+        !fixture_client_connection
+            .session_requests
+            .contains_key(&100)
+    );
+    assert_eq!(fixture_client_connection.early_event_count, 0);
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            Effect::NotifyRequestFailed {
+                request_id: 100,
+                source: ErrorSource::Session,
+                error_code: Some(ERR_H3_MESSAGE_ERROR),
+                reason,
+            },
+            Effect::ResetQuicStream {
+                stream_id: 1,
+                error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
+            },
+            Effect::StopQuicStream {
+                stream_id: 1,
+                error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
+            }
+        ] if reason == "wt_session abort"
+    ));
+}
+
+#[rstest]
+fn test_receive_connect_stream_close_not_found(mut fixture_server_connection: Connection) {
+    let effects = fixture_server_connection.receive_connect_stream_close(999, None, 1.0);
+
+    assert!(effects.is_empty());
+}
+
+#[rstest]
+fn test_receive_connect_stream_rejection_closes_optimistic_session(
+    mut fixture_client_connection: Connection,
+) {
+    fixture_client_connection.state = ConnectionState::Connected;
+    fixture_client_connection.create_session(100, create_session_request(vec![], None, true));
+    fixture_client_connection.bind_session(0, 100);
+
+    let effects = fixture_client_connection.receive_connect_stream_rejection(0, 2.0);
+
+    assert!(
+        !fixture_client_connection
+            .pending_session_requests
+            .contains_key(&0)
+    );
+    assert!(fixture_client_connection.is_session_closed(0));
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::EmitSessionEvent {
+            session_id: 0,
+            event_type: EventType::SessionClosed,
+            error_code: Some(ERR_H3_REQUEST_REJECTED),
+            ..
+        }]
+    ));
+}
+
+#[rstest]
+fn test_receive_connect_stream_rejection_fails_session_request(
+    mut fixture_client_connection: Connection,
+) {
+    fixture_client_connection.state = ConnectionState::Connected;
+    fixture_client_connection.create_session(100, create_session_request(vec![], None, false));
+    fixture_client_connection.bind_session(0, 100);
+    fixture_client_connection.handle_stream_opened(0, 1, 1.5);
+
+    let effects = fixture_client_connection.receive_connect_stream_rejection(0, 2.0);
+
+    assert!(
+        !fixture_client_connection
+            .pending_session_requests
+            .contains_key(&0)
+    );
+    assert!(
+        !fixture_client_connection
+            .session_requests
+            .contains_key(&100)
+    );
+    assert_eq!(fixture_client_connection.early_event_count, 0);
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            Effect::NotifyRequestFailed {
+                request_id: 100,
+                source: ErrorSource::Session,
+                error_code: Some(ERR_H3_REQUEST_REJECTED),
+                reason,
+            },
+            Effect::ResetQuicStream {
+                stream_id: 1,
+                error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
+            },
+            Effect::StopQuicStream {
+                stream_id: 1,
+                error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
+            }
+        ] if reason == "wt_session abort"
+    ));
+}
+
+#[rstest]
+fn test_receive_connect_stream_rejection_not_found(mut fixture_client_connection: Connection) {
+    let effects = fixture_client_connection.receive_connect_stream_rejection(0, 1.0);
 
     assert!(effects.is_empty());
 }
@@ -1951,6 +2307,32 @@ fn test_receive_datagram_early_buffer_full(mut fixture_server_connection: Connec
 
     assert!(effects.is_empty());
     assert_eq!(fixture_server_connection.early_event_count, 100);
+}
+
+#[rstest]
+fn test_receive_datagram_prunes_expired_early_events(mut fixture_server_connection: Connection) {
+    fixture_server_connection.handle_stream_opened(0, 4, 1.0);
+    for _ in 1..100 {
+        fixture_server_connection.receive_datagram(0, Bytes::from_static(b"d"), 1.0);
+    }
+
+    let effects = fixture_server_connection.receive_datagram(0, Bytes::from_static(b"late"), 6.0);
+
+    assert_eq!(fixture_server_connection.early_event_count, 1);
+    assert_eq!(fixture_server_connection.earliest_early_event_at, Some(6.0));
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            Effect::ResetQuicStream {
+                stream_id: 4,
+                error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
+            },
+            Effect::StopQuicStream {
+                stream_id: 4,
+                error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
+            }
+        ]
+    ));
 }
 
 #[rstest]
@@ -2017,11 +2399,7 @@ fn test_receive_max_streams_releases_blocked_session_requests(
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::CreateH3ConnectStream {
-            request_id: 100,
-            authority,
-            ..
-        }] if authority == "example.com"
+        [Effect::CreateH3ConnectStream { request_id: 100 }]
     ));
 }
 
@@ -2054,6 +2432,7 @@ fn test_receive_settings_parses_values(mut fixture_client_connection: Connection
     fixture_client_connection.state = ConnectionState::Connecting;
     fixture_client_connection.handshake_completed = true;
     let settings = H3Settings {
+        max_field_section_size: Some(65536),
         wt_initial_max_data: Some(1024),
         wt_initial_max_streams_bidi: Some(10),
         wt_initial_max_streams_uni: Some(5),
@@ -2065,6 +2444,10 @@ fn test_receive_settings_parses_values(mut fixture_client_connection: Connection
     assert_eq!(fixture_client_connection.peer_initial_max_data, 1024);
     assert_eq!(fixture_client_connection.peer_initial_max_streams_bidi, 10);
     assert_eq!(fixture_client_connection.peer_initial_max_streams_uni, 5);
+    assert_eq!(
+        fixture_client_connection.peer_max_field_section_size,
+        Some(65536)
+    );
 }
 
 #[rstest]
@@ -2241,6 +2624,36 @@ fn test_receive_stream_data_removes_closed_stream(
 }
 
 #[rstest]
+fn test_receive_stream_reset_aborts_optimistic_session(mut fixture_client_connection: Connection) {
+    fixture_client_connection.state = ConnectionState::Connected;
+    fixture_client_connection.create_session(100, create_session_request(vec![], None, true));
+    fixture_client_connection.bind_session(0, 100);
+
+    let effects = fixture_client_connection.receive_stream_reset(0, ERR_H3_REQUEST_REJECTED, 2.0);
+
+    assert!(
+        !fixture_client_connection
+            .pending_session_requests
+            .contains_key(&0)
+    );
+    assert!(fixture_client_connection.is_session_closed(0));
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            Effect::ResetQuicStream {
+                stream_id: 0,
+                error_code: ERR_H3_REQUEST_REJECTED,
+            },
+            Effect::EmitSessionEvent {
+                event_type: EventType::SessionClosed,
+                error_code: Some(ERR_H3_REQUEST_REJECTED),
+                ..
+            }
+        ]
+    ));
+}
+
+#[rstest]
 fn test_receive_stream_reset_aborts_session(
     mut fixture_server_connection: Connection,
     fixture_headers: Headers,
@@ -2288,6 +2701,44 @@ fn test_receive_stream_reset_delegates(
             event_type: EventType::StreamResetReceived,
             ..
         }]
+    ));
+}
+
+#[rstest]
+fn test_receive_stream_reset_fails_session_request(mut fixture_client_connection: Connection) {
+    fixture_client_connection.state = ConnectionState::Connected;
+    fixture_client_connection.create_session(100, create_session_request(vec![], None, false));
+    fixture_client_connection.bind_session(0, 100);
+    fixture_client_connection.handle_stream_opened(0, 1, 1.5);
+    assert!(fixture_client_connection.is_connect_stream(0));
+
+    let effects = fixture_client_connection.receive_stream_reset(0, ERR_H3_REQUEST_REJECTED, 2.0);
+
+    assert!(!fixture_client_connection.is_connect_stream(0));
+    assert!(
+        !fixture_client_connection
+            .session_requests
+            .contains_key(&100)
+    );
+    assert_eq!(fixture_client_connection.early_event_count, 0);
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            Effect::NotifyRequestFailed {
+                request_id: 100,
+                source: ErrorSource::Session,
+                error_code: Some(ERR_H3_REQUEST_REJECTED),
+                reason,
+            },
+            Effect::ResetQuicStream {
+                stream_id: 1,
+                error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
+            },
+            Effect::StopQuicStream {
+                stream_id: 1,
+                error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
+            }
+        ] if reason == "wt_session abort"
     ));
 }
 
@@ -2367,6 +2818,30 @@ fn test_reject_session_delegates(
     let effects = fixture_server_connection.reject_session(0, 100, vec![], 403, 2.0);
 
     assert!(!effects.is_empty());
+}
+
+#[rstest]
+fn test_reject_session_field_section_exceeding_peer_limit_failure(
+    mut fixture_server_connection: Connection,
+    fixture_headers: Headers,
+) {
+    fixture_server_connection.state = ConnectionState::Connected;
+    fixture_server_connection.peer_max_field_section_size =
+        Some(utils::field_size(b":status", b"403"));
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
+    let headers = vec![(Bytes::from_static(b"server"), Bytes::from_static(b"test"))];
+
+    let effects = fixture_server_connection.reject_session(0, 100, headers, 403, 2.0);
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::NotifyRequestFailed {
+            request_id: 100,
+            source: ErrorSource::Session,
+            error_code: None,
+            reason,
+        }] if reason == "h3_field_section validate exceeded"
+    ));
 }
 
 #[rstest]
@@ -2483,6 +2958,40 @@ fn test_send_datagram_not_found(mut fixture_server_connection: Connection) {
 }
 
 #[rstest]
+fn test_server_receive_headers_accepts_uppercase_scheme_and_protocol(
+    mut fixture_server_connection: Connection,
+) {
+    fixture_server_connection.state = ConnectionState::Connected;
+    let headers = vec![
+        (
+            Bytes::from_static(b":method"),
+            Bytes::from_static(b"CONNECT"),
+        ),
+        (
+            Bytes::from_static(b":protocol"),
+            Bytes::from_static(b"WebTransport-H3"),
+        ),
+        (Bytes::from_static(b":scheme"), Bytes::from_static(b"HTTPS")),
+        (Bytes::from_static(b":path"), Bytes::from_static(b"/wt")),
+        (
+            Bytes::from_static(b":authority"),
+            Bytes::from_static(b"example.com"),
+        ),
+    ];
+
+    let effects = fixture_server_connection.receive_headers(0, headers, 1.0);
+
+    assert!(fixture_server_connection.sessions.contains_key(&0));
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::EmitSessionEvent {
+            event_type: EventType::SessionRequestReceived,
+            ..
+        }]
+    ));
+}
+
+#[rstest]
 fn test_server_receive_headers_combines_wt_available_protocols(
     mut fixture_server_connection: Connection,
     fixture_headers: Headers,
@@ -2547,6 +3056,7 @@ fn test_server_receive_headers_defaults_path(mut fixture_server_connection: Conn
             Bytes::from_static(b":protocol"),
             Bytes::from_static(b"webtransport-h3"),
         ),
+        (Bytes::from_static(b":scheme"), Bytes::from_static(b"https")),
     ];
 
     let effects = fixture_server_connection.receive_headers(0, headers, 1.0);
@@ -2585,6 +3095,31 @@ fn test_server_receive_headers_local_goaway_rejects(
 }
 
 #[rstest]
+fn test_server_receive_headers_max_sessions_excludes_terminated_session(
+    mut fixture_server_connection: Connection,
+    fixture_headers: Headers,
+) {
+    fixture_server_connection.state = ConnectionState::Connected;
+    fixture_server_connection.peer_initial_max_data = 100;
+    fixture_server_connection.max_sessions = 1;
+    fixture_server_connection.receive_headers(0, fixture_headers.clone(), 1.0);
+    fixture_server_connection.accept_session(0, 100, vec![], None, 1.5);
+    fixture_server_connection.close_session(0, 101, 0, None, 2.0);
+
+    let effects = fixture_server_connection.receive_headers(4, fixture_headers, 2.5);
+
+    assert!(fixture_server_connection.sessions.contains_key(&4));
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::EmitSessionEvent {
+            session_id: 4,
+            event_type: EventType::SessionRequestReceived,
+            ..
+        }]
+    ));
+}
+
+#[rstest]
 fn test_server_receive_headers_no_flow_control_limit_reached(
     mut fixture_server_connection: Connection,
     fixture_headers: Headers,
@@ -2619,6 +3154,7 @@ fn test_server_receive_headers_non_utf8_path_defaults_path(
             Bytes::from_static(b":protocol"),
             Bytes::from_static(b"webtransport-h3"),
         ),
+        (Bytes::from_static(b":scheme"), Bytes::from_static(b"https")),
         (Bytes::from_static(b":path"), Bytes::from_static(b"/\xff")),
     ];
 
@@ -2635,16 +3171,69 @@ fn test_server_receive_headers_non_utf8_path_defaults_path(
 }
 
 #[rstest]
-fn test_server_receive_headers_rejects_invalid_protocol(mut fixture_server_connection: Connection) {
+fn test_server_receive_headers_rejects_expired_early_events(
+    mut fixture_server_connection: Connection,
+    fixture_headers: Headers,
+) {
     fixture_server_connection.state = ConnectionState::Connected;
-    let headers = vec![(Bytes::from_static(b":method"), Bytes::from_static(b"POST"))];
+    fixture_server_connection.receive_datagram(0, Bytes::from_static(b"early"), 1.0);
+    fixture_server_connection.handle_stream_opened(0, 4, 1.0);
+    fixture_server_connection.handle_stream_opened(0, 8, 5.0);
 
-    let effects = fixture_server_connection.receive_headers(0, headers, 1.0);
+    let effects = fixture_server_connection.receive_headers(0, fixture_headers, 8.0);
+
+    assert_eq!(fixture_server_connection.early_event_count, 0);
+    assert_eq!(fixture_server_connection.earliest_early_event_at, None);
+    assert_eq!(fixture_server_connection.stream_map.get(&8), Some(&0));
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            Effect::EmitSessionEvent {
+                event_type: EventType::SessionRequestReceived,
+                ..
+            },
+            Effect::ResetQuicStream {
+                stream_id: 4,
+                error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
+            },
+            Effect::StopQuicStream {
+                stream_id: 4,
+                error_code: ERR_WT_BUFFERED_STREAM_REJECTED,
+            }
+        ]
+    ));
+
+    fixture_server_connection.accept_session(0, 100, vec![], None, 8.5);
+
+    let read_effects = fixture_server_connection.read_datagram(0, 101);
+
+    assert!(read_effects.is_empty());
+}
+
+#[rstest]
+fn test_server_receive_headers_rejects_insufficient_peer_field_section_limit(
+    mut fixture_server_connection: Connection,
+    fixture_headers: Headers,
+) {
+    fixture_server_connection.state = ConnectionState::Connected;
+    fixture_server_connection.peer_max_field_section_size =
+        Some(utils::field_size(b":status", b"200") - 1);
+
+    let effects = fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
 
     assert!(!fixture_server_connection.sessions.contains_key(&0));
     assert!(matches!(
         effects.as_slice(),
-        [Effect::SendH3Headers { .. }, Effect::StopQuicStream { .. }]
+        [
+            Effect::ResetQuicStream {
+                stream_id: 0,
+                error_code: ERR_H3_REQUEST_REJECTED,
+            },
+            Effect::StopQuicStream {
+                stream_id: 0,
+                error_code: ERR_H3_REQUEST_REJECTED,
+            }
+        ]
     ));
 }
 
@@ -2664,6 +3253,110 @@ fn test_server_receive_headers_rejects_max_sessions(
     assert!(matches!(
         effects.as_slice(),
         [Effect::SendH3Headers { .. }, Effect::StopQuicStream { .. }]
+    ));
+}
+
+#[rstest]
+fn test_server_receive_headers_rejects_non_https_scheme_before_session_limit(
+    mut fixture_server_connection: Connection,
+    fixture_headers: Headers,
+) {
+    fixture_server_connection.state = ConnectionState::Connected;
+    fixture_server_connection.receive_headers(0, fixture_headers, 1.0);
+    let headers = vec![
+        (
+            Bytes::from_static(b":method"),
+            Bytes::from_static(b"CONNECT"),
+        ),
+        (
+            Bytes::from_static(b":protocol"),
+            Bytes::from_static(b"webtransport-h3"),
+        ),
+        (Bytes::from_static(b":scheme"), Bytes::from_static(b"http")),
+        (Bytes::from_static(b":path"), Bytes::from_static(b"/wt")),
+        (
+            Bytes::from_static(b":authority"),
+            Bytes::from_static(b"example.com"),
+        ),
+    ];
+
+    let effects = fixture_server_connection.receive_headers(4, headers, 1.0);
+
+    assert_eq!(fixture_server_connection.sessions.len(), 1);
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            Effect::SendH3Headers {
+                stream_id: 4,
+                headers,
+                end_stream: true,
+            },
+            Effect::StopQuicStream {
+                stream_id: 4,
+                error_code: ERR_H3_REQUEST_REJECTED,
+            }
+        ] if headers.as_slice() == [(Bytes::from_static(b":status"), Bytes::from_static(b"421"))]
+    ));
+}
+
+#[rstest]
+#[case(vec![
+    (
+        Bytes::from_static(b":method"),
+        Bytes::from_static(b"CONNECT"),
+    ),
+    (
+        Bytes::from_static(b":authority"),
+        Bytes::from_static(b"example.com"),
+    ),
+])]
+#[case(vec![
+    (
+        Bytes::from_static(b":method"),
+        Bytes::from_static(b"CONNECT"),
+    ),
+    (
+        Bytes::from_static(b":protocol"),
+        Bytes::from_static(b"websocket"),
+    ),
+    (Bytes::from_static(b":scheme"), Bytes::from_static(b"https")),
+    (Bytes::from_static(b":path"), Bytes::from_static(b"/wt")),
+    (
+        Bytes::from_static(b":authority"),
+        Bytes::from_static(b"example.com"),
+    ),
+])]
+#[case(vec![
+    (Bytes::from_static(b":method"), Bytes::from_static(b"GET")),
+    (Bytes::from_static(b":scheme"), Bytes::from_static(b"https")),
+    (Bytes::from_static(b":path"), Bytes::from_static(b"/wt")),
+    (
+        Bytes::from_static(b":authority"),
+        Bytes::from_static(b"example.com"),
+    ),
+])]
+fn test_server_receive_headers_rejects_unsupported_request(
+    mut fixture_server_connection: Connection,
+    #[case] headers: Headers,
+) {
+    fixture_server_connection.state = ConnectionState::Connected;
+
+    let effects = fixture_server_connection.receive_headers(0, headers, 1.0);
+
+    assert!(!fixture_server_connection.sessions.contains_key(&0));
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            Effect::SendH3Headers {
+                stream_id: 0,
+                headers,
+                end_stream: true,
+            },
+            Effect::StopQuicStream {
+                stream_id: 0,
+                error_code: ERR_H3_REQUEST_REJECTED,
+            }
+        ] if headers.as_slice() == [(Bytes::from_static(b":status"), Bytes::from_static(b"501"))]
     ));
 }
 

@@ -432,7 +432,7 @@ fn test_flush_stream_blocked_resumes_on_writable() {
     assert!(event_queue.is_empty());
     assert!(pair.client.send_buffers.contains_key(&stream_id));
 
-    let mut received_size = 0;
+    let mut received = 0;
     let mut is_finished = false;
     while !is_finished {
         pair.drive();
@@ -443,7 +443,7 @@ fn test_flush_stream_blocked_resumes_on_writable() {
         };
         loop {
             match chunks.next(usize::MAX) {
-                Ok(Some(chunk)) => received_size += chunk.bytes.len(),
+                Ok(Some(chunk)) => received += chunk.bytes.len(),
                 Ok(None) => {
                     is_finished = true;
                     break;
@@ -455,7 +455,7 @@ fn test_flush_stream_blocked_resumes_on_writable() {
     }
     pair.drive();
 
-    assert_eq!(received_size, 4 * 1024 * 1024);
+    assert_eq!(received, 4 * 1024 * 1024);
     assert!(!pair.client.send_buffers.contains_key(&stream_id));
 }
 
@@ -742,55 +742,14 @@ fn test_process_effects_close_quic_connection_with_reason_reports_termination(
 }
 
 #[test]
-fn test_process_effects_create_h3_connect_stream_encode_failure_fails_request() {
-    let mut pair = create_connected_pair(QuicTransportConfig::default());
-    let mut event_queue = VecDeque::new();
-    let effects = vec![Effect::CreateH3ConnectStream {
-        request_id: 1,
-        authority: "localhost".to_owned(),
-        path: "/".to_owned(),
-        headers: vec![(
-            Bytes::from_static(b"x-large"),
-            Bytes::from(vec![b'a'; 70000]),
-        )],
-    }];
-
-    pair.client
-        .process_effects(effects, &mut event_queue, pair.now);
-
-    assert!(matches!(
-        event_queue.pop_front(),
-        Some(ProtocolEvent::InternalFailH3ConnectStream {
-            request_id: 1,
-            error_code: None,
-            ..
-        })
-    ));
-    assert!(event_queue.is_empty());
-}
-
-#[test]
 fn test_process_effects_create_h3_connect_stream_opens_stream() {
     let mut pair = create_connected_pair(QuicTransportConfig::default());
     let mut event_queue = VecDeque::new();
-    let effects = vec![Effect::CreateH3ConnectStream {
-        request_id: 1,
-        authority: "localhost".to_owned(),
-        path: "/".to_owned(),
-        headers: vec![],
-    }];
+    let effects = vec![Effect::CreateH3ConnectStream { request_id: 1 }];
 
     pair.client
         .process_effects(effects, &mut event_queue, pair.now);
 
-    assert!(matches!(
-        event_queue.pop_front(),
-        Some(ProtocolEvent::InternalCompleteQuicData { stream_id: 0 })
-    ));
-    assert!(matches!(
-        event_queue.pop_front(),
-        Some(ProtocolEvent::InternalCompleteQuicData { stream_id: 0 })
-    ));
     assert!(matches!(
         event_queue.pop_front(),
         Some(ProtocolEvent::InternalBindH3ConnectStream {
@@ -820,12 +779,7 @@ fn test_process_effects_create_h3_local_streams_unconnected_fails() {
 fn test_process_effects_create_h3_session_unconnected_defers_request() {
     let mut connection = create_test_connection();
     let mut event_queue = VecDeque::new();
-    let effects = vec![Effect::CreateH3ConnectStream {
-        request_id: 1,
-        authority: "localhost".to_owned(),
-        path: "/".to_owned(),
-        headers: vec![],
-    }];
+    let effects = vec![Effect::CreateH3ConnectStream { request_id: 1 }];
 
     connection.process_effects(effects, &mut event_queue, Instant::now());
 
@@ -877,10 +831,6 @@ fn test_process_effects_create_quic_stream_opens_stream(
     pair.client
         .process_effects(effects, &mut event_queue, pair.now);
 
-    assert!(matches!(
-        event_queue.pop_front(),
-        Some(ProtocolEvent::InternalCompleteQuicData { stream_id }) if stream_id == expected_stream_id
-    ));
     assert!(matches!(
         event_queue.pop_front(),
         Some(ProtocolEvent::InternalBindQuicStream {
@@ -1164,127 +1114,6 @@ fn test_process_effects_reset_quic_stream_removes_send_buffer() {
 }
 
 #[test]
-fn test_process_effects_send_h3_capsule_processes_safely() {
-    let mut connection = create_test_connection();
-    let mut event_queue = VecDeque::new();
-    let effects = vec![Effect::SendH3Capsule {
-        stream_id: 1,
-        capsule_type: 0,
-        capsule_value: Bytes::from_static(b"test"),
-        end_stream: false,
-    }];
-
-    connection.process_effects(effects, &mut event_queue, Instant::now());
-
-    assert!(connection.pending_effects.is_empty());
-}
-
-#[test]
-fn test_process_effects_send_h3_capsule_writes_connect_stream() {
-    let mut pair = create_connected_pair(QuicTransportConfig::default());
-    let Some(stream_id) = pair.client.connection.streams().open(QuicDir::Bi) else {
-        assert_eq!("some", "none");
-        unreachable!()
-    };
-    let mut event_queue = VecDeque::new();
-    let effects = vec![Effect::SendH3Capsule {
-        stream_id: u64::from(stream_id),
-        capsule_type: 0,
-        capsule_value: Bytes::from_static(b"test"),
-        end_stream: false,
-    }];
-
-    pair.client
-        .process_effects(effects, &mut event_queue, pair.now);
-
-    assert_eq!(event_queue.len(), 3);
-    assert!(event_queue.iter().all(|event| matches!(
-        event,
-        ProtocolEvent::InternalCompleteQuicData { stream_id: 0 }
-    )));
-    assert!(pair.client.send_buffers.is_empty());
-}
-
-#[test]
-fn test_process_effects_send_h3_datagram_processes_safely() {
-    let mut connection = create_test_connection();
-    let mut event_queue = VecDeque::new();
-    let effects = vec![Effect::SendH3Datagram {
-        session_id: 1,
-        data: Bytes::from_static(b"test"),
-    }];
-
-    connection.process_effects(effects, &mut event_queue, Instant::now());
-
-    assert!(connection.pending_effects.is_empty());
-}
-
-#[test]
-fn test_process_effects_send_h3_datagram_transmits_datagram() {
-    let mut pair = create_connected_pair(QuicTransportConfig::default());
-    let mut event_queue = VecDeque::new();
-    let effects = vec![Effect::SendH3Datagram {
-        session_id: 0,
-        data: Bytes::from_static(b"datagram"),
-    }];
-
-    pair.client
-        .process_effects(effects, &mut event_queue, pair.now);
-    pair.drive();
-
-    assert!(event_queue.is_empty());
-    assert!(drain_effects(&mut pair.client).is_empty());
-    assert_eq!(pair.client.connection.stats().frame_tx.datagram, 1);
-    assert_eq!(pair.server.connection.stats().frame_rx.datagram, 1);
-}
-
-#[test]
-fn test_process_effects_send_h3_goaway_processes_safely() {
-    let mut connection = create_test_connection();
-    let mut event_queue = VecDeque::new();
-    let effects = vec![Effect::SendH3Goaway { identifier: 0 }];
-
-    connection.process_effects(effects, &mut event_queue, Instant::now());
-
-    assert!(connection.pending_effects.is_empty());
-}
-
-#[test]
-fn test_process_effects_send_h3_headers_encode_failure_skipped() {
-    let mut connection = create_test_connection();
-    let mut event_queue = VecDeque::new();
-    let effects = vec![Effect::SendH3Headers {
-        stream_id: 0,
-        headers: vec![(
-            Bytes::from_static(b"x-large"),
-            Bytes::from(vec![b'a'; 70000]),
-        )],
-        end_stream: false,
-    }];
-
-    connection.process_effects(effects, &mut event_queue, Instant::now());
-
-    assert!(event_queue.is_empty());
-    assert!(connection.pending_effects.is_empty());
-    assert!(connection.send_buffers.is_empty());
-}
-
-#[test]
-fn test_process_effects_send_h3_headers_processes_safely() {
-    let mut connection = create_test_connection();
-    let mut event_queue = VecDeque::new();
-    let effects = vec![Effect::SendH3Headers {
-        stream_id: 1,
-        headers: vec![(Bytes::from_static(b":status"), Bytes::from_static(b"200"))],
-        end_stream: false,
-    }];
-
-    connection.process_effects(effects, &mut event_queue, Instant::now());
-
-    assert!(connection.pending_effects.is_empty());
-}
-
-#[test]
 fn test_process_effects_send_quic_data_appends_to_send_buffer() {
     let mut connection = create_test_connection();
     let mut event_queue = VecDeque::new();
@@ -1308,6 +1137,31 @@ fn test_process_effects_send_quic_data_appends_to_send_buffer() {
 }
 
 #[test]
+fn test_process_effects_send_quic_data_writes_stream() {
+    let mut pair = create_connected_pair(QuicTransportConfig::default());
+    let Some(stream_id) = pair.client.connection.streams().open(QuicDir::Bi) else {
+        assert_eq!("some", "none");
+        unreachable!()
+    };
+    let mut event_queue = VecDeque::new();
+    let effects = vec![Effect::SendQuicData {
+        stream_id: u64::from(stream_id),
+        data: Bytes::from_static(b"test"),
+        end_stream: false,
+    }];
+
+    pair.client
+        .process_effects(effects, &mut event_queue, pair.now);
+
+    assert!(matches!(
+        event_queue.pop_front(),
+        Some(ProtocolEvent::InternalCompleteQuicData { stream_id: 0 })
+    ));
+    assert!(event_queue.is_empty());
+    assert!(pair.client.send_buffers.is_empty());
+}
+
+#[test]
 fn test_process_effects_send_quic_datagram_processes_safely() {
     let mut connection = create_test_connection();
     let mut event_queue = VecDeque::new();
@@ -1319,6 +1173,25 @@ fn test_process_effects_send_quic_datagram_processes_safely() {
     connection.process_effects(effects, &mut event_queue, Instant::now());
 
     assert!(connection.pending_effects.is_empty());
+}
+
+#[test]
+fn test_process_effects_send_quic_datagram_transmits_datagram() {
+    let mut pair = create_connected_pair(QuicTransportConfig::default());
+    let mut event_queue = VecDeque::new();
+    let effects = vec![Effect::SendQuicDatagram {
+        header: Bytes::from_static(&[0x00]),
+        payload: Bytes::from_static(b"datagram"),
+    }];
+
+    pair.client
+        .process_effects(effects, &mut event_queue, pair.now);
+    pair.drive();
+
+    assert!(event_queue.is_empty());
+    assert!(drain_effects(&mut pair.client).is_empty());
+    assert_eq!(pair.client.connection.stats().frame_tx.datagram, 1);
+    assert_eq!(pair.server.connection.stats().frame_rx.datagram, 1);
 }
 
 #[test]

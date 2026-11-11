@@ -1,6 +1,8 @@
 //! Unit tests for the `crate::transport::config` module.
 
 use std::env;
+use std::fs;
+use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -64,6 +66,32 @@ fn mock_server_config() -> RustServerConfig {
 }
 
 #[rstest]
+fn test_build_client_config_fails_with_invalid_ca_certificate() {
+    let output_dir = env::temp_dir().join("pywebtransport_test_client_invalid_ca");
+    let ca_path = output_dir.join("ca.pem");
+    assert!(fs::create_dir_all(&output_dir).is_ok(), "should succeed");
+    assert!(
+        fs::write(
+            &ca_path,
+            "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"
+        )
+        .is_ok(),
+        "should succeed"
+    );
+
+    let mut config = mock_client_config();
+    config.ca_certs = Some(ca_path);
+
+    let result = build_client_config(&config);
+
+    let Err(e) = result else {
+        assert_eq!("err", "ok");
+        unreachable!()
+    };
+    assert_eq!(e.kind(), ErrorKind::InvalidData);
+}
+
+#[rstest]
 #[case(
     None,
     Some(PathBuf::from("/non/existent/cert.pem")),
@@ -82,10 +110,34 @@ fn test_build_client_config_fails_with_invalid_paths(
 
     let result = build_client_config(&config);
 
-    let Err(_) = result else {
+    let Err(e) = result else {
         assert_eq!("err", "ok");
         unreachable!()
     };
+    assert_eq!(e.kind(), ErrorKind::NotFound);
+}
+
+#[rstest]
+fn test_build_client_config_fails_with_mismatched_client_auth_key() {
+    let output_dir = env::temp_dir().join("pywebtransport_test_client_mismatched_key");
+    let Ok((ca_path, _cert_path, key_path)) =
+        certificate::generate_self_signed_cert("localhost", &output_dir, 1)
+    else {
+        assert_eq!("ok", "err");
+        unreachable!()
+    };
+
+    let mut config = mock_client_config();
+    config.certfile = Some(PathBuf::from(ca_path));
+    config.keyfile = Some(PathBuf::from(key_path));
+
+    let result = build_client_config(&config);
+
+    let Err(e) = result else {
+        assert_eq!("err", "ok");
+        unreachable!()
+    };
+    assert_eq!(e.kind(), ErrorKind::InvalidData);
 }
 
 #[rstest]
@@ -164,10 +216,11 @@ fn test_build_endpoint_config_fails_with_oversized_max_udp_payload_size() {
 
     let result = build_endpoint_config(&config);
 
-    let Err(_) = result else {
+    let Err(e) = result else {
         assert_eq!("err", "ok");
         unreachable!()
     };
+    assert_eq!(e.kind(), ErrorKind::InvalidInput);
 }
 
 #[rstest]
@@ -177,10 +230,11 @@ fn test_build_endpoint_config_fails_with_undersized_max_udp_payload_size() {
 
     let result = build_endpoint_config(&config);
 
-    let Err(_) = result else {
+    let Err(e) = result else {
         assert_eq!("err", "ok");
         unreachable!()
     };
+    assert_eq!(e.kind(), ErrorKind::InvalidInput);
 }
 
 #[rstest]
@@ -193,6 +247,40 @@ fn test_build_endpoint_config_with_default_succeeds() {
         assert_eq!("ok", "err");
         unreachable!()
     };
+}
+
+#[rstest]
+fn test_build_server_config_fails_with_invalid_ca_certificate() {
+    let output_dir = env::temp_dir().join("pywebtransport_test_server_invalid_ca");
+    let Ok((_ca_path, cert_path, key_path)) =
+        certificate::generate_self_signed_cert("localhost", &output_dir, 1)
+    else {
+        assert_eq!("ok", "err");
+        unreachable!()
+    };
+    let ca_path = output_dir.join("invalid_ca.pem");
+    assert!(
+        fs::write(
+            &ca_path,
+            "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"
+        )
+        .is_ok(),
+        "should succeed"
+    );
+
+    let mut config = mock_server_config();
+    config.certfile = PathBuf::from(cert_path);
+    config.keyfile = PathBuf::from(key_path);
+    config.require_client_auth = true;
+    config.ca_certs = Some(ca_path);
+
+    let result = build_server_config(&config);
+
+    let Err(e) = result else {
+        assert_eq!("err", "ok");
+        unreachable!()
+    };
+    assert_eq!(e.kind(), ErrorKind::InvalidData);
 }
 
 #[rstest]
@@ -211,10 +299,40 @@ fn test_build_server_config_fails_with_invalid_cert_paths(
 
     let result = build_server_config(&config);
 
-    let Err(_) = result else {
+    let Err(e) = result else {
         assert_eq!("err", "ok");
         unreachable!()
     };
+    assert_eq!(e.kind(), ErrorKind::NotFound);
+}
+
+#[rstest]
+#[case(false)]
+#[case(true)]
+fn test_build_server_config_fails_with_mismatched_key(#[case] require_client_auth: bool) {
+    let output_dir = env::temp_dir().join(format!(
+        "pywebtransport_test_server_mismatched_key_{require_client_auth}"
+    ));
+    let Ok((ca_path, _cert_path, key_path)) =
+        certificate::generate_self_signed_cert("localhost", &output_dir, 1)
+    else {
+        assert_eq!("ok", "err");
+        unreachable!()
+    };
+
+    let mut config = mock_server_config();
+    config.certfile = PathBuf::from(&ca_path);
+    config.keyfile = PathBuf::from(key_path);
+    config.require_client_auth = require_client_auth;
+    config.ca_certs = Some(PathBuf::from(ca_path));
+
+    let result = build_server_config(&config);
+
+    let Err(e) = result else {
+        assert_eq!("err", "ok");
+        unreachable!()
+    };
+    assert_eq!(e.kind(), ErrorKind::InvalidData);
 }
 
 #[rstest]
@@ -259,10 +377,11 @@ fn test_build_server_config_with_client_auth_without_ca_fails() {
 
     let result = build_server_config(&config);
 
-    let Err(WebTransportError::Configuration(None, _)) = result else {
+    let Err(e) = result else {
         assert_eq!("err", "ok");
         unreachable!()
     };
+    assert_eq!(e.kind(), ErrorKind::InvalidData);
 }
 
 #[rstest]
@@ -295,10 +414,11 @@ fn test_build_transport_config_fails_with_invalid_bidirectional_streams() {
 
     let result = build_transport_config(&config);
 
-    let Err(_) = result else {
+    let Err(e) = result else {
         assert_eq!("err", "ok");
         unreachable!()
     };
+    assert_eq!(e.kind(), ErrorKind::InvalidInput);
 }
 
 #[rstest]
@@ -308,10 +428,11 @@ fn test_build_transport_config_fails_with_invalid_connection_receive_window() {
 
     let result = build_transport_config(&config);
 
-    let Err(_) = result else {
+    let Err(e) = result else {
         assert_eq!("err", "ok");
         unreachable!()
     };
+    assert_eq!(e.kind(), ErrorKind::InvalidInput);
 }
 
 #[rstest]
@@ -321,10 +442,11 @@ fn test_build_transport_config_fails_with_invalid_idle_timeout() {
 
     let result = build_transport_config(&config);
 
-    let Err(_) = result else {
+    let Err(e) = result else {
         assert_eq!("err", "ok");
         unreachable!()
     };
+    assert_eq!(e.kind(), ErrorKind::InvalidInput);
 }
 
 #[rstest]
@@ -334,10 +456,11 @@ fn test_build_transport_config_fails_with_invalid_stream_receive_window() {
 
     let result = build_transport_config(&config);
 
-    let Err(_) = result else {
+    let Err(e) = result else {
         assert_eq!("err", "ok");
         unreachable!()
     };
+    assert_eq!(e.kind(), ErrorKind::InvalidInput);
 }
 
 #[rstest]
@@ -347,10 +470,11 @@ fn test_build_transport_config_fails_with_invalid_unidirectional_streams() {
 
     let result = build_transport_config(&config);
 
-    let Err(_) = result else {
+    let Err(e) = result else {
         assert_eq!("err", "ok");
         unreachable!()
     };
+    assert_eq!(e.kind(), ErrorKind::InvalidInput);
 }
 
 #[rstest]
@@ -372,10 +496,11 @@ fn test_build_transport_config_with_invalid_congestion_control_fails() {
 
     let result = build_transport_config(&config);
 
-    let Err(_) = result else {
+    let Err(e) = result else {
         assert_eq!("err", "ok");
         unreachable!()
     };
+    assert_eq!(e.kind(), ErrorKind::InvalidInput);
 }
 
 #[rstest]

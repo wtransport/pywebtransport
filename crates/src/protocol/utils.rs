@@ -7,14 +7,14 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use tracing::debug;
 
 use crate::common::constants::{
-    ERR_H3_FRAME_ERROR, ERR_LIB_INTERNAL_ERROR, ERR_WT_APPLICATION_ERROR_FIRST,
-    ERR_WT_APPLICATION_ERROR_LAST, QUIC_STREAM_DIRECTION_MASK, QUIC_STREAM_INITIATOR_MASK,
-    WT_AVAILABLE_PROTOCOLS, WT_PROTOCOL,
+    ERR_WT_APPLICATION_ERROR_FIRST, ERR_WT_APPLICATION_ERROR_LAST, QUIC_STREAM_DIRECTION_MASK,
+    QUIC_STREAM_INITIATOR_MASK, QUIC_VARINT_LIMIT, WT_AVAILABLE_PROTOCOLS, WT_PROTOCOL,
 };
 use crate::common::types::{ErrorCode, Headers, SessionId, StreamId};
 
 const H3_ERROR_RESERVED_MODULO: u64 = 0x1F;
 const H3_ERROR_RESERVED_OFFSET: u64 = 0x21;
+const H3_FIELD_OVERHEAD_SIZE: u64 = 32;
 const WT_ERROR_MAP_DIVISOR: u64 = 0x1E;
 
 pub(super) fn combine_header<'a>(headers: &'a Headers, key: &[u8]) -> Option<Cow<'a, [u8]>> {
@@ -53,6 +53,10 @@ pub(super) fn encode_wt_protocol_list(protocols: &[String]) -> Result<Bytes, Cow
     }
 
     Ok(buffer.freeze())
+}
+
+pub(super) fn field_size(key: &[u8], value: &[u8]) -> u64 {
+    key.len() as u64 + value.len() as u64 + H3_FIELD_OVERHEAD_SIZE
 }
 
 pub(super) fn find_header<'a>(headers: &'a Headers, key: &[u8]) -> Option<&'a Bytes> {
@@ -216,32 +220,22 @@ pub(super) fn parse_wt_protocol_string(header: &[u8]) -> Option<String> {
     (!cursor.has_remaining()).then_some(protocol)
 }
 
-pub(super) fn read_varint(buffer: &mut Cursor<&[u8]>) -> Result<u64, ErrorCode> {
-    if !buffer.has_remaining() {
-        return Err(ERR_H3_FRAME_ERROR);
-    }
-
-    let chunk = buffer.chunk();
-    let first = *chunk.first().ok_or(ERR_H3_FRAME_ERROR)?;
-    let prefix = first >> 6;
-    let length = 1 << prefix;
+pub(super) fn read_varint(buffer: &mut Cursor<&[u8]>) -> Option<u64> {
+    let length = 1 << (buffer.chunk().first()? >> 6);
 
     if buffer.remaining() < length {
-        return Err(ERR_H3_FRAME_ERROR);
+        return None;
     }
 
-    let value = match length {
-        1 => u64::from(buffer.get_u8() & 0x3f),
-        2 => u64::from(buffer.get_u16() & 0x3fff),
-        4 => u64::from(buffer.get_u32() & 0x3fff_ffff),
-        8 => buffer.get_u64() & 0x3fff_ffff_ffff_ffff,
-        _ => return Err(ERR_H3_FRAME_ERROR),
-    };
-
-    Ok(value)
+    Some(match length {
+        1 => u64::from(buffer.get_u8() & 0x3F),
+        2 => u64::from(buffer.get_u16() & 0x3FFF),
+        4 => u64::from(buffer.get_u32() & 0x3FFF_FFFF),
+        _ => buffer.get_u64() & 0x3FFF_FFFF_FFFF_FFFF,
+    })
 }
 
-pub(super) fn varint_size(value: u64) -> usize {
+pub(super) fn varint_length(value: u64) -> usize {
     if value <= 63 {
         1
     } else if value <= 16383 {
@@ -264,20 +258,19 @@ pub(super) fn webtransport_code_to_http_code(application_error_code: u32) -> Err
     shifted + offset
 }
 
-pub(super) fn write_varint(buffer: &mut BytesMut, value: u64) -> Result<(), ErrorCode> {
-    if value <= 63 {
-        buffer.put_u8(u8::try_from(value).map_err(|_e| ERR_LIB_INTERNAL_ERROR)?);
-    } else if value <= 16383 {
-        buffer.put_u16(u16::try_from(value).map_err(|_e| ERR_LIB_INTERNAL_ERROR)? | 0x4000);
-    } else if value <= 1_073_741_823 {
-        buffer.put_u32(u32::try_from(value).map_err(|_e| ERR_LIB_INTERNAL_ERROR)? | 0x8000_0000);
-    } else if value <= 4_611_686_018_427_387_903 {
-        buffer.put_u64(value | 0xC000_0000_0000_0000);
-    } else {
-        return Err(ERR_LIB_INTERNAL_ERROR);
+pub(super) fn write_varint(buffer: &mut BytesMut, value: u64) -> Option<()> {
+    if value > QUIC_VARINT_LIMIT {
+        return None;
     }
 
-    Ok(())
+    match varint_length(value) {
+        1 => buffer.put_slice(&value.to_be_bytes()[7..]),
+        2 => buffer.put_slice(&(value | 0x4000).to_be_bytes()[6..]),
+        4 => buffer.put_slice(&(value | 0x8000_0000).to_be_bytes()[4..]),
+        _ => buffer.put_slice(&(value | 0xC000_0000_0000_0000).to_be_bytes()),
+    }
+
+    Some(())
 }
 
 fn discard_number(cursor: &mut Cursor<&[u8]>) -> Option<bool> {

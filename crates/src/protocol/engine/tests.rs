@@ -5,26 +5,36 @@ use rstest::{fixture, rstest};
 
 use super::*;
 use crate::common::constants::{
-    ERR_H3_GENERAL_PROTOCOL_ERROR, ERR_H3_NO_ERROR, ERR_H3_REQUEST_REJECTED,
-    ERR_LIB_CONNECTION_STATE_ERROR, ERR_LIB_SESSION_STATE_ERROR, ERR_LIB_STREAM_STATE_ERROR,
-    ERR_WT_BUFFERED_STREAM_REJECTED, ERR_WT_SESSION_GONE, H3_FRAME_TYPE_SETTINGS,
-    H3_STREAM_TYPE_CONTROL, SETTINGS_WT_ENABLED, WT_CAPSULE_TYPE_CLOSE_SESSION,
+    ERR_H3_GENERAL_PROTOCOL_ERROR, ERR_H3_MESSAGE_ERROR, ERR_H3_NO_ERROR, ERR_H3_REQUEST_CANCELLED,
+    ERR_H3_REQUEST_REJECTED, ERR_LIB_CONNECTION_STATE_ERROR, ERR_LIB_SESSION_STATE_ERROR,
+    ERR_LIB_STREAM_STATE_ERROR, ERR_WT_BUFFERED_STREAM_REJECTED, ERR_WT_SESSION_GONE,
+    H3_FRAME_TYPE_SETTINGS, H3_STREAM_TYPE_CONTROL, SETTINGS_WT_ENABLED,
+    WT_CAPSULE_TYPE_CLOSE_SESSION,
 };
 use crate::common::types::{ErrorSource, EventType};
 use crate::protocol::events::{Effect, ProtocolEvent, RequestResult};
-use crate::protocol::h3::H3Settings;
+use crate::protocol::h3::{H3, H3Settings};
 use crate::protocol::utils;
 
 fn accept_session(engine: &mut WebTransportEngine) {
     let mut client_engine = create_test_engine(true);
-    let request_effects =
-        match client_engine.encode_connect_request(0, "localhost".into(), "/".into(), &vec![]) {
-            Ok(effects) => effects,
-            Err(e) => {
-                assert_eq!(format!("{e:?}"), "");
-                unreachable!()
-            }
-        };
+    let headers = vec![
+        (
+            Bytes::from_static(b":method"),
+            Bytes::from_static(b"CONNECT"),
+        ),
+        (Bytes::from_static(b":scheme"), Bytes::from_static(b"https")),
+        (
+            Bytes::from_static(b":authority"),
+            Bytes::from_static(b"localhost"),
+        ),
+        (Bytes::from_static(b":path"), Bytes::from_static(b"/")),
+        (
+            Bytes::from_static(b":protocol"),
+            Bytes::from_static(b"webtransport-h3"),
+        ),
+    ];
+    let request_effects = client_engine.h3.encode_headers(0, &headers, false);
     let mut request = BytesMut::new();
     for effect in request_effects {
         if let Effect::SendQuicData { data, .. } = effect {
@@ -231,25 +241,27 @@ fn test_client_receives_settings_via_raw_data(mut fixture_engine_client: WebTran
     bind_local_streams(&mut fixture_engine_client);
 
     let mut payload = BytesMut::new();
-    if let Err(e) = utils::write_varint(&mut payload, SETTINGS_WT_ENABLED) {
-        assert_eq!(format!("{e:?}"), "");
-    }
-    if let Err(e) = utils::write_varint(&mut payload, 1) {
-        assert_eq!(format!("{e:?}"), "");
-    }
+    assert_eq!(
+        utils::write_varint(&mut payload, SETTINGS_WT_ENABLED),
+        Some(())
+    );
+    assert_eq!(utils::write_varint(&mut payload, 1), Some(()));
     let mut frame = BytesMut::new();
-    if let Err(e) = utils::write_varint(&mut frame, H3_FRAME_TYPE_SETTINGS) {
-        assert_eq!(format!("{e:?}"), "");
-    }
-    if let Err(e) = utils::write_varint(&mut frame, payload.len() as u64) {
-        assert_eq!(format!("{e:?}"), "");
-    }
+    assert_eq!(
+        utils::write_varint(&mut frame, H3_FRAME_TYPE_SETTINGS),
+        Some(())
+    );
+    assert_eq!(
+        utils::write_varint(&mut frame, payload.len() as u64),
+        Some(())
+    );
     frame.extend_from_slice(&payload);
 
     let mut stream_type = BytesMut::new();
-    if let Err(e) = utils::write_varint(&mut stream_type, H3_STREAM_TYPE_CONTROL) {
-        assert_eq!(format!("{e:?}"), "");
-    }
+    assert_eq!(
+        utils::write_varint(&mut stream_type, H3_STREAM_TYPE_CONTROL),
+        Some(())
+    );
     fixture_engine_client.handle_event(
         ProtocolEvent::TransportStreamDataReceived {
             stream_id: 3,
@@ -378,145 +390,6 @@ fn test_connection_close_event_fails_pending_user_events(
 }
 
 #[rstest]
-fn test_encode_capsule() {
-    let data = Bytes::from_static(b"cap");
-    let result = WebTransportEngine::encode_capsule(0, 0x1, data, false);
-
-    let effects = match result {
-        Ok(effects) => effects,
-        Err(e) => {
-            assert_eq!(format!("{e:?}"), "");
-            return;
-        }
-    };
-
-    assert_eq!(effects.len(), 3);
-    assert!(
-        effects
-            .iter()
-            .all(|effect| matches!(effect, Effect::SendQuicData { .. }))
-    );
-}
-
-#[rstest]
-fn test_encode_connect_request(mut fixture_engine_client: WebTransportEngine) {
-    let headers = vec![(
-        Bytes::from_static(b"user-agent"),
-        Bytes::from_static(b"rust-test"),
-    )];
-    let result = fixture_engine_client.encode_connect_request(
-        0,
-        "localhost".into(),
-        "/test".into(),
-        &headers,
-    );
-
-    let effects = match result {
-        Ok(effects) => effects,
-        Err(e) => {
-            assert_eq!(format!("{e:?}"), "");
-            return;
-        }
-    };
-
-    assert!(matches!(
-        effects.as_slice(),
-        [
-            Effect::SendQuicData { stream_id: 0, .. },
-            Effect::SendQuicData {
-                stream_id: 0,
-                end_stream: false,
-                ..
-            }
-        ]
-    ));
-}
-
-#[rstest]
-fn test_encode_datagram() {
-    let data = Bytes::from_static(b"payload");
-    let result = WebTransportEngine::encode_datagram(0, data.clone());
-
-    let effects = match result {
-        Ok(effects) => effects,
-        Err(e) => {
-            assert_eq!(format!("{e:?}"), "");
-            return;
-        }
-    };
-
-    assert!(matches!(
-        effects.as_slice(),
-        [Effect::SendQuicDatagram { header: _, payload }] if payload == &data
-    ));
-}
-
-#[rstest]
-fn test_encode_goaway(mut fixture_engine_server: WebTransportEngine) {
-    bind_local_streams(&mut fixture_engine_server);
-
-    let effects = fixture_engine_server.encode_goaway(0);
-
-    assert!(!effects.is_empty());
-    assert!(matches!(effects.as_slice(), [Effect::SendQuicData { .. }]));
-}
-
-#[rstest]
-fn test_encode_goaway_identifier_exceeds_varint_limit(
-    mut fixture_engine_server: WebTransportEngine,
-) {
-    bind_local_streams(&mut fixture_engine_server);
-
-    let effects = fixture_engine_server.encode_goaway(u64::MAX);
-
-    assert!(effects.is_empty());
-}
-
-#[rstest]
-fn test_encode_goaway_no_control_stream(mut fixture_engine_server: WebTransportEngine) {
-    let effects = fixture_engine_server.encode_goaway(0);
-
-    assert!(effects.is_empty());
-}
-
-#[rstest]
-fn test_encode_headers(mut fixture_engine_server: WebTransportEngine) {
-    bind_local_streams(&mut fixture_engine_server);
-
-    let headers = vec![];
-    let result = fixture_engine_server.encode_headers(100, &headers, true);
-
-    let effects = match result {
-        Ok(effects) => effects,
-        Err(e) => {
-            assert_eq!(format!("{e:?}"), "");
-            return;
-        }
-    };
-
-    assert!(!effects.is_empty());
-    assert!(
-        effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::SendQuicData { .. }))
-    );
-}
-
-#[rstest]
-fn test_encode_stream_header() {
-    let effects = WebTransportEngine::encode_stream_header(15, 0, true);
-
-    assert!(matches!(
-        effects.as_slice(),
-        [Effect::SendQuicData {
-            stream_id: 15,
-            data,
-            end_stream: false,
-        }] if data.as_ref() == [0x40, 0x54, 0x00]
-    ));
-}
-
-#[rstest]
 fn test_fail_pending_user_events_on_termination(mut fixture_engine_client: WebTransportEngine) {
     let create_event = ProtocolEvent::UserCreateSession {
         request_id: 100,
@@ -591,18 +464,12 @@ fn test_handle_transport_capsule_close_session_stops_connect_stream(
     accept_session(&mut fixture_engine_server);
     let mut capsule_value = BytesMut::new();
     capsule_value.put_u32(0);
-    let capsule_effects = match WebTransportEngine::encode_capsule(
+    let capsule_effects = H3::encode_capsule(
         0,
         WT_CAPSULE_TYPE_CLOSE_SESSION,
         capsule_value.freeze(),
         false,
-    ) {
-        Ok(effects) => effects,
-        Err(e) => {
-            assert_eq!(format!("{e:?}"), "");
-            unreachable!()
-        }
-    };
+    );
     let mut data = BytesMut::new();
     for effect in capsule_effects {
         if let Effect::SendQuicData { data: chunk, .. } = effect {
@@ -622,7 +489,6 @@ fn test_handle_transport_capsule_close_session_stops_connect_stream(
     assert!(matches!(
         effects.as_slice(),
         [
-            Effect::ReceiveQuicData { stream_id: 0, .. },
             Effect::SendQuicData {
                 stream_id: 0,
                 end_stream: true,
@@ -635,6 +501,124 @@ fn test_handle_transport_capsule_close_session_stops_connect_stream(
             Effect::StopQuicStream {
                 stream_id: 0,
                 error_code: ERR_WT_SESSION_GONE,
+            },
+            Effect::ReceiveQuicData { stream_id: 0, .. }
+        ]
+    ));
+}
+
+#[rstest]
+fn test_handle_transport_connect_stream_fin_fails_session_request(
+    mut fixture_engine_client: WebTransportEngine,
+) {
+    fixture_engine_client.handle_event(ProtocolEvent::TransportHandshakeCompleted, 0.0);
+    fixture_engine_client.handle_event(
+        ProtocolEvent::H3SettingsReceived {
+            settings: Default::default(),
+        },
+        0.0,
+    );
+    fixture_engine_client.handle_event(
+        ProtocolEvent::UserCreateSession {
+            request_id: 100,
+            authority: "localhost".into(),
+            path: "/".into(),
+            headers: vec![],
+            wt_available_protocols: None,
+        },
+        0.0,
+    );
+    fixture_engine_client.handle_event(
+        ProtocolEvent::InternalBindH3ConnectStream {
+            request_id: 100,
+            stream_id: 0,
+        },
+        0.0,
+    );
+
+    let effects = fixture_engine_client.handle_event(
+        ProtocolEvent::TransportStreamDataReceived {
+            stream_id: 0,
+            data: Bytes::new(),
+            end_stream: true,
+        },
+        1.0,
+    );
+
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            Effect::NotifyRequestFailed {
+                request_id: 100,
+                source: ErrorSource::Session,
+                error_code: Some(ERR_H3_MESSAGE_ERROR),
+                ..
+            },
+            Effect::ResetQuicStream {
+                stream_id: 0,
+                error_code: ERR_H3_MESSAGE_ERROR,
+            },
+            Effect::StopQuicStream {
+                stream_id: 0,
+                error_code: ERR_H3_MESSAGE_ERROR,
+            }
+        ]
+    ));
+}
+
+#[rstest]
+fn test_handle_transport_connect_stream_reset_fails_session_request(
+    mut fixture_engine_client: WebTransportEngine,
+) {
+    fixture_engine_client.handle_event(ProtocolEvent::TransportHandshakeCompleted, 0.0);
+    fixture_engine_client.handle_event(
+        ProtocolEvent::H3SettingsReceived {
+            settings: Default::default(),
+        },
+        0.0,
+    );
+    fixture_engine_client.handle_event(
+        ProtocolEvent::UserCreateSession {
+            request_id: 100,
+            authority: "localhost".into(),
+            path: "/".into(),
+            headers: vec![],
+            wt_available_protocols: None,
+        },
+        0.0,
+    );
+    fixture_engine_client.handle_event(
+        ProtocolEvent::InternalBindH3ConnectStream {
+            request_id: 100,
+            stream_id: 0,
+        },
+        0.0,
+    );
+
+    let effects = fixture_engine_client.handle_event(
+        ProtocolEvent::TransportResetStreamReceived {
+            stream_id: 0,
+            error_code: ERR_H3_REQUEST_REJECTED,
+        },
+        1.0,
+    );
+
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            Effect::NotifyRequestFailed {
+                request_id: 100,
+                source: ErrorSource::Session,
+                error_code: Some(ERR_H3_REQUEST_REJECTED),
+                ..
+            },
+            Effect::ResetQuicStream {
+                stream_id: 0,
+                error_code: ERR_H3_REQUEST_CANCELLED,
+            },
+            Effect::StopQuicStream {
+                stream_id: 0,
+                error_code: ERR_H3_REQUEST_CANCELLED,
             }
         ]
     ));
@@ -646,7 +630,10 @@ fn test_handle_transport_capsule_close_session_stops_connect_stream(
     capsule_type: 0,
     capsule_value: Bytes::new(),
 })]
-#[case::connect_stream_closed(ProtocolEvent::H3ConnectStreamClosed { stream_id: 0 })]
+#[case::connect_stream_closed(ProtocolEvent::H3ConnectStreamClosed {
+    stream_id: 0,
+    error_code: None,
+})]
 #[case::datagram_received(ProtocolEvent::H3DatagramReceived {
     session_id: 0,
     data: Bytes::from_static(b"datagram"),
@@ -691,7 +678,12 @@ fn test_handle_transport_headers_rejected_when_not_connected(
     assert!(matches!(
         effects.as_slice(),
         [
-            Effect::SendH3Headers {
+            Effect::SendQuicData {
+                stream_id: 0,
+                end_stream: false,
+                ..
+            },
+            Effect::SendQuicData {
                 stream_id: 0,
                 end_stream: true,
                 ..
@@ -905,6 +897,43 @@ fn test_handle_transport_stream_opened_delivers_data(
 }
 
 #[rstest]
+fn test_handle_user_close_connection_gracefully_encodes_h3_frames(
+    mut fixture_engine_server: WebTransportEngine,
+) {
+    bind_local_streams(&mut fixture_engine_server);
+    accept_session(&mut fixture_engine_server);
+
+    let effects = fixture_engine_server.handle_event(
+        ProtocolEvent::UserCloseConnectionGracefully { request_id: 2 },
+        1.0,
+    );
+
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            Effect::SendQuicData {
+                stream_id: 3,
+                data: goaway_frame,
+                end_stream: false,
+            },
+            Effect::SendQuicData { stream_id: 0, .. },
+            Effect::SendQuicData {
+                stream_id: 0,
+                data: capsule_header,
+                ..
+            },
+            Effect::SendQuicData { stream_id: 0, .. },
+            Effect::EmitSessionEvent {
+                event_type: EventType::SessionDraining,
+                ..
+            },
+            Effect::NotifyRequestDone { request_id: 2, .. }
+        ] if goaway_frame.as_ref() == [0x07, 0x01, 0x04]
+            && capsule_header.as_ref() == [0x80, 0x00, 0x78, 0xAE, 0x00]
+    ));
+}
+
+#[rstest]
 fn test_handle_user_passthrough_events(mut fixture_engine_server: WebTransportEngine) {
     let events = vec![
         ProtocolEvent::UserAcceptSession {
@@ -999,6 +1028,34 @@ fn test_handle_user_passthrough_events(mut fixture_engine_server: WebTransportEn
 }
 
 #[rstest]
+fn test_handle_user_send_datagram_encodes_datagram(mut fixture_engine_server: WebTransportEngine) {
+    accept_session(&mut fixture_engine_server);
+    fixture_engine_server.handle_event(
+        ProtocolEvent::TransportQuicParametersReceived {
+            peer_max_datagram_frame_size: 1350,
+        },
+        1.0,
+    );
+
+    let effects = fixture_engine_server.handle_event(
+        ProtocolEvent::UserSendDatagram {
+            request_id: 2,
+            session_id: 0,
+            data: Bytes::from_static(b"datagram"),
+        },
+        1.0,
+    );
+
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            Effect::SendQuicDatagram { header, payload },
+            Effect::NotifyRequestDone { request_id: 2, .. }
+        ] if header.as_ref() == [0x00] && payload.as_ref() == b"datagram"
+    ));
+}
+
+#[rstest]
 fn test_initialization(fixture_engine_client: WebTransportEngine) {
     assert!(fixture_engine_client.connection.is_client());
     assert!(fixture_engine_client.pending_user_events.is_empty());
@@ -1017,8 +1074,112 @@ fn test_internal_bind_connect_stream(mut fixture_engine_client: WebTransportEngi
         effects.as_slice(),
         [Effect::ReceiveQuicData {
             stream_id: 0,
-            max_size: u64::MAX,
+            max_size: 1,
         }]
+    ));
+}
+
+#[rstest]
+fn test_internal_bind_connect_stream_rejected_after_goaway(
+    mut fixture_engine_client: WebTransportEngine,
+) {
+    let mut server_engine = create_test_engine(false);
+    let Some(Effect::SendQuicData {
+        data: control_data, ..
+    }) = server_engine
+        .handle_event(
+            ProtocolEvent::InternalBindH3LocalStreams {
+                control_stream_id: 3,
+                encoder_stream_id: 7,
+                decoder_stream_id: 11,
+            },
+            0.0,
+        )
+        .into_iter()
+        .next()
+    else {
+        assert_eq!("some", "none");
+        unreachable!()
+    };
+    let Some(Effect::SendQuicData {
+        data: goaway_frame, ..
+    }) = server_engine.h3.encode_goaway(0).into_iter().next()
+    else {
+        assert_eq!("some", "none");
+        unreachable!()
+    };
+    fixture_engine_client.handle_event(ProtocolEvent::TransportHandshakeCompleted, 0.0);
+    fixture_engine_client.handle_event(
+        ProtocolEvent::TransportQuicParametersReceived {
+            peer_max_datagram_frame_size: 1350,
+        },
+        0.0,
+    );
+    for data in [control_data.slice(..1), control_data.slice(1..)] {
+        fixture_engine_client.handle_event(
+            ProtocolEvent::TransportStreamDataReceived {
+                stream_id: 3,
+                data,
+                end_stream: false,
+            },
+            0.0,
+        );
+    }
+    fixture_engine_client.handle_event(
+        ProtocolEvent::UserCreateSession {
+            request_id: 100,
+            authority: "localhost".into(),
+            path: "/".into(),
+            headers: vec![],
+            wt_available_protocols: None,
+        },
+        0.0,
+    );
+    fixture_engine_client.handle_event(
+        ProtocolEvent::TransportStreamDataReceived {
+            stream_id: 3,
+            data: goaway_frame,
+            end_stream: false,
+        },
+        0.0,
+    );
+
+    let effects = fixture_engine_client.handle_event(
+        ProtocolEvent::InternalBindH3ConnectStream {
+            request_id: 100,
+            stream_id: 0,
+        },
+        1.0,
+    );
+
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            Effect::SendQuicData {
+                stream_id: 0,
+                end_stream: false,
+                ..
+            },
+            Effect::SendQuicData {
+                stream_id: 0,
+                end_stream: false,
+                ..
+            },
+            Effect::NotifyRequestFailed {
+                request_id: 100,
+                source: ErrorSource::Session,
+                error_code: Some(ERR_H3_REQUEST_REJECTED),
+                ..
+            },
+            Effect::ResetQuicStream {
+                stream_id: 0,
+                error_code: ERR_H3_REQUEST_CANCELLED,
+            },
+            Effect::StopQuicStream {
+                stream_id: 0,
+                error_code: ERR_H3_REQUEST_CANCELLED,
+            }
+        ]
     ));
 }
 
@@ -1055,11 +1216,18 @@ fn test_internal_bind_stream_session_not_found(mut fixture_engine_server: WebTra
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::NotifyRequestFailed {
-            request_id: 100,
-            error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
-            ..
-        }]
+        [
+            Effect::SendQuicData {
+                stream_id: 4,
+                data,
+                end_stream: false,
+            },
+            Effect::NotifyRequestFailed {
+                request_id: 100,
+                error_code: Some(ERR_LIB_SESSION_STATE_ERROR),
+                ..
+            }
+        ] if data.as_ref() == [0x40, 0x41, 0x00]
     ));
 }
 
@@ -1135,7 +1303,13 @@ fn test_internal_cleanup_resources_prunes_closed_sessions(
         },
         0.0,
     );
-    fixture_engine_server.handle_event(ProtocolEvent::H3ConnectStreamClosed { stream_id: 0 }, 0.0);
+    fixture_engine_server.handle_event(
+        ProtocolEvent::H3ConnectStreamClosed {
+            stream_id: 0,
+            error_code: None,
+        },
+        0.0,
+    );
     let diagnose_session = |request_id| ProtocolEvent::UserDiagnoseSession {
         request_id,
         session_id: 0,
@@ -1312,26 +1486,6 @@ fn test_internal_fail_local_streams(mut fixture_engine_client: WebTransportEngin
             error_code: ERR_H3_GENERAL_PROTOCOL_ERROR,
             ..
         }]
-    ));
-}
-
-#[rstest]
-fn test_internal_fail_session(mut fixture_engine_server: WebTransportEngine) {
-    let event = ProtocolEvent::InternalFailH3ConnectStream {
-        request_id: 100,
-        error_code: None,
-        reason: "fail".into(),
-    };
-
-    let effects = fixture_engine_server.handle_event(event, 0.0);
-
-    assert!(matches!(
-        effects.as_slice(),
-        [Effect::NotifyRequestFailed {
-            request_id: 100,
-            reason,
-            ..
-        }] if reason == "fail"
     ));
 }
 

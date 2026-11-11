@@ -21,9 +21,6 @@ pub(crate) enum Effect {
     },
     CreateH3ConnectStream {
         request_id: RequestId,
-        authority: String,
-        path: String,
-        headers: Headers,
     },
     CreateH3LocalStreams,
     CreateQuicStream {
@@ -127,6 +124,10 @@ pub(crate) enum ProtocolEvent {
     },
     H3ConnectStreamClosed {
         stream_id: StreamId,
+        error_code: Option<ErrorCode>,
+    },
+    H3ConnectStreamRejected {
+        stream_id: StreamId,
     },
     H3DatagramReceived {
         session_id: SessionId,
@@ -172,11 +173,6 @@ pub(crate) enum ProtocolEvent {
         request_id: RequestId,
         session_id: SessionId,
         is_unidirectional: bool,
-    },
-    InternalFailH3ConnectStream {
-        request_id: RequestId,
-        error_code: Option<ErrorCode>,
-        reason: Cow<'static, str>,
     },
     InternalFailH3LocalStreams,
     TransportConnectionTerminated {
